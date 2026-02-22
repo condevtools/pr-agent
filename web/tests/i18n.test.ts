@@ -20,6 +20,7 @@ const { routing } = routingModule as {
   routing: {
     locales: readonly [string, string];
     defaultLocale: string;
+    localeDetection?: boolean;
   };
 };
 
@@ -47,4 +48,8 @@ test("lib/i18n derives locales from i18n/routing (single source of truth)", () =
 test("next-intl routing config exposes locales and default locale", () => {
   assert.deepEqual([...routing.locales], ["en", "zh"]);
   assert.equal(routing.defaultLocale, "en");
+});
+
+test("next-intl locale detection is disabled to always default to english", () => {
+  assert.equal(routing.localeDetection, false);
 });

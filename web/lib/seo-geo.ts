@@ -233,7 +233,7 @@ export function buildLlmsTxt(): string {
 }
 
 // Default export for Node.js test runner compatibility (tsx CJS interop)
-export default {
+const seoGeoExports = {
   SITE_URL,
   SITE_NAME,
   SITE_TITLE,
@@ -248,3 +248,5 @@ export default {
   buildJsonLdGraphForLocale,
   buildLlmsTxt,
 };
+
+export default seoGeoExports;

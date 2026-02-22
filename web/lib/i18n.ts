@@ -19,9 +19,11 @@ export function getLocalePath(locale: SupportedLocale): "/en" | "/zh" {
 }
 
 // Default export for Node.js test runner compatibility (tsx CJS interop)
-export default {
+const i18nExports = {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
   isSupportedLocale,
   getLocalePath,
 };
+
+export default i18nExports;
