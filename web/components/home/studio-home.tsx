@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { InteractiveGrid } from "./interactive-grid";
 import { MermaidArchitecture } from "./mermaid-architecture";
+import { NavKeyboardShortcuts } from "./nav-keyboard-shortcuts";
 import styles from "./studio-home.module.css";
 
 type SectionId =
@@ -219,6 +220,7 @@ export function StudioHome({ locale = DEFAULT_LOCALE }: StudioHomeProps) {
 
   return (
     <div className={styles.home}>
+      <NavKeyboardShortcuts />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
@@ -234,18 +236,11 @@ export function StudioHome({ locale = DEFAULT_LOCALE }: StudioHomeProps) {
         ))}
         <div className={styles.navLocaleDivider} />
         <Link
-          className={`${styles.navLink} ${locale === "en" ? styles.navLinkActive : ""}`}
-          href="/en"
-          aria-current={locale === "en" ? "page" : undefined}
+          className={styles.navLink}
+          href={locale === "en" ? "/zh" : "/en"}
+          aria-label={t("language.switch")}
         >
-          {t("language.en")}
-        </Link>
-        <Link
-          className={`${styles.navLink} ${locale === "zh" ? styles.navLinkActive : ""}`}
-          href="/zh"
-          aria-current={locale === "zh" ? "page" : undefined}
-        >
-          {t("language.zh")}
+          {locale === "en" ? t("language.zh") : t("language.en")}
         </Link>
       </nav>
 

@@ -157,19 +157,7 @@
   color: #ffffff;
 }
 
-.navLinkActive {
-  background: #000000;
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.navLinkActive:hover,
-.navLinkActive:focus-visible {
-  cursor: default;
-}
-
 .navLocaleDivider {
-  border-top: 2px solid #000000;
   height: 0;
 }
 

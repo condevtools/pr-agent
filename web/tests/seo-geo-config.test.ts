@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import seoGeo from "../web/lib/seo-geo.ts";
+import seoGeo from "../lib/seo-geo.ts";
 
 type JsonLdNode = Record<string, unknown>;
 type SeoGeoModule = {

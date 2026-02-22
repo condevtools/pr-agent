@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import i18n from "../web/lib/i18n.ts";
-import routingModule from "../web/i18n/routing.ts";
+import i18n from "../lib/i18n.ts";
+import routingModule from "../i18n/routing.ts";
 
 const {
   DEFAULT_LOCALE,
