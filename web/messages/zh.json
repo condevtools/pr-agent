@@ -1,0 +1,124 @@
+{
+  "Home": {
+    "nav": {
+      "overview": "总览 [A]",
+      "capabilities": "能力 [B]",
+      "commands": "命令 [C]",
+      "mermaid": "架构图 [D]",
+      "operations": "运维 [E]",
+      "contact": "联系 [F]"
+    },
+    "hero": {
+      "tag": "MR AGENT // TYPESCRIPT + NESTJS",
+      "title": "面向 GitHub 与 GitLab PR/MR 流程的 AI 代码评审服务。",
+      "body": "PR Agent 可自动生成评审评论与总结报告，按行解析 diff，执行仓库策略检查，并提供健康检查与指标端点以支持生产环境运维。"
+    },
+    "language": {
+      "switch": "语言切换",
+      "en": "EN",
+      "zh": "中文"
+    },
+    "metaStats": {
+      "platforms": "平台",
+      "platformsValue": "GitHub + GitLab",
+      "providers": "AI 提供商",
+      "providersValue": "OpenAI / 兼容接口 / Claude / Gemini",
+      "tests": "测试",
+      "testsValue": "24 个 Node 测试文件",
+      "runtime": "运行时",
+      "runtimeValue": "Node.js 22 + NestJS 11"
+    },
+    "architecture": {
+      "meta": "架构 // 执行层",
+      "title": "流水线概览",
+      "headers": ["层", "功能说明", "主要来源"],
+      "ingress": ["入口层", "NestJS 控制器接收并校验 Webhook 请求，随后路由至平台服务。"],
+      "integration": ["集成层", "GitHub/GitLab 适配器拉取 diff、解析策略并分发评审或命令流程。"],
+      "reviewEngine": ["评审引擎", "补丁解析器、风险评分、结构化 AI 输出验证与 Markdown 渲染。"]
+    },
+    "runtimeHighlights": {
+      "title": "运行时亮点",
+      "items": [
+        "去重与增量评审状态可减少重复的 AI 调用。",
+        "命令速率限制与 Webhook 载荷上限保护运行时稳定性。",
+        "结构化错误 JSON 与指标端点支持故障排查。",
+        "回放端点允许在启用事件存储模式时进行调试重处理。"
+      ]
+    },
+    "capabilities": {
+      "meta": "能力 // 评审 + 策略",
+      "title": "PR Agent 的功能",
+      "subtitle": "评审自动化、流程检查、安全提示与工作流感知反馈。",
+      "headers": ["能力", "详情", "来源"],
+      "autoReview": ["自动 PR/MR 评审", "在 opened/edited/synchronize/merged 事件时运行，支持评论或报告模式。", "README 功能 + 评审触发"],
+      "policyGuardrails": ["策略护栏", "检查 Issue/PR 模板完整性，通过 .mr-agent.yml 支持提醒/强制策略模式。", "README 仓库策略"],
+      "securitySignals": ["安全 + 质量信号", "密钥模式扫描、去重保护、反馈学习信号与自动标签。"],
+      "processReview": ["流程感知评审", "检测 workflows/templates/CODEOWNERS/CONTRIBUTING 的变更，并生成流程相关反馈。"]
+    },
+    "triggers": {
+      "meta": "触发器 // 事件矩阵",
+      "title": "自动 + 手动触发",
+      "headers": ["触发器", "行为", "去重 / 备注"],
+      "prOpened": ["PR opened / edited / synchronize", "基于仓库策略，以评论或报告模式自动评审。", "5 分钟去重窗口"],
+      "prMerged": ["PR merged", "始终以报告模式输出合并总结。", "24 小时去重窗口（可配置）"],
+      "commentCommands": ["评论命令", "通过 /ai-review 及专用命令面板手动触发。", "5 分钟去重窗口"],
+      "policyChecks": ["Issue/PR 策略检查", "对 Issue 和 Pull Request 事件进行模板/流程合规预检。", "GitHub 策略流程"]
+    },
+    "commands": {
+      "meta": "命令 // 评论接口",
+      "title": "交互式命令面板",
+      "subtitle": "运维人员可直接在 PR/MR 讨论中执行评审、提问、生成文档/测试，并提供质量反馈信号。",
+      "headers": ["命令", "用途", "备注"],
+      "aiReview": ["手动触发评审", "主命令"],
+      "ask": ["对变更进行多轮问答", "上下文感知"],
+      "checks": ["诊断 CI/检查失败", "故障分诊"],
+      "generateTests": ["生成测试计划和测试代码草稿", "按文件路径"],
+      "describe": ["生成或应用 PR/MR 描述", "策略控制的应用"],
+      "changelog": ["生成或应用变更日志条目", "策略控制的应用"],
+      "improve": ["仅改进的评审模式", "高影响修复"],
+      "addDoc": ["仅文档的评审建议", "文档字符串/注释聚焦"],
+      "reflect": ["生成需求澄清问题", "依赖 ask"],
+      "similarIssue": ["查找同一仓库中的相关 Issue", "Issue 搜索"],
+      "feedback": ["记录评审者偏好信号", "未来自适应"]
+    },
+    "mermaid": {
+      "meta": "架构图 // 拓扑视图",
+      "title": "运行时拓扑图",
+      "subtitle": "事件入口、服务分发、评审引擎与平台 API 输出路径。"
+    },
+    "operations": {
+      "meta": "运维 // 部署 + 监控",
+      "title": "运行、部署与监控",
+      "subtitle": "包含健康检查、Prometheus 指标、回放工具和可配置的运行时后端。",
+      "quickStart": "快速开始",
+      "primaryEndpoints": "主要端点",
+      "endpointHeaders": ["端点", "用途", "备注"],
+      "endpoints": {
+        "health": ["存活与深度探针入口", "支持 ?deep=true"],
+        "metrics": ["Prometheus 文本指标导出", "mr_agent_* 系列"],
+        "githubHealth": ["GitHub Webhook 配置状态", "密钥就绪"],
+        "gitlabHealth": ["GitLab Webhook 配置状态", "密钥就绪"],
+        "githubTrigger": ["标准 GitHub Webhook 端点", "x-github-event"],
+        "gitlabTrigger": ["GitLab Webhook 端点", "x-gitlab-event"],
+        "webhookEvents": ["列出已存储事件（调试）", "需要回放令牌"],
+        "githubReplay": ["回放已存储的 GitHub 事件", "仅调试模式"],
+        "gitlabReplay": ["回放已存储的 GitLab 事件", "仅调试模式"]
+      },
+      "deploymentBaseline": "部署基线",
+      "deploymentChecklist": [
+        "选择平台模式：GitHub App（推荐）、标准 GitHub Webhook、可选 GitLab Webhook。",
+        "配置 AI 提供商和模型（openai/openai-compatible/anthropic/gemini）。",
+        "使用持久化运行时状态后端（单实例生产环境推荐 sqlite）。",
+        "配置 Webhook URL 和密钥，然后验证 /health 和平台健康端点。",
+        "在真实 PR/MR 评论线程中运行测试命令流程，再投入生产。"
+      ],
+      "prometheusMetrics": "Prometheus 指标"
+    },
+    "contact": {
+      "meta": "联系 // 社区入口",
+      "title": "联系我们",
+      "github": "代码仓库主页",
+      "issue": "Bug 反馈与功能需求"
+    }
+  }
+}

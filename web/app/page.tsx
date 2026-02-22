@@ -1,5 +1,6 @@
-import { StudioHome } from "@/components/home/studio-home";
+import { redirect } from "next/navigation";
+import { DEFAULT_LOCALE } from "@/lib/i18n";
 
 export default function Home() {
-  return <StudioHome />;
+  redirect(`/${DEFAULT_LOCALE}`);
 }
