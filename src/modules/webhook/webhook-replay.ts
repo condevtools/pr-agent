@@ -1,15 +1,18 @@
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, resolve } from "node:path";
 
-import { BadWebhookRequestError, WebhookAuthError, readNumberEnv } from "#core";
-import { incrementMetricCounter } from "./metrics.js";
+import {
+  BadWebhookRequestError,
+  WebhookAuthError,
+  logCore,
+  nowMs,
+  parseBooleanEnv,
+  readNumberEnv,
+  readOptionalStringEnv,
+} from "#core";
+import { incrementMetricCounter } from "./metrics-runtime.js";
+import { readHeaderValue, safeJsonStringify } from "./webhook.utils.js";
 
 export type ReplayPlatform = "github" | "gitlab";
 
@@ -32,66 +35,128 @@ export interface StoredWebhookEventSummary {
   payloadSizeBytes: number;
 }
 
-const DEFAULT_WEBHOOK_EVENT_STORE_FILE = ".mr-agent-webhook-events.ndjson";
-const DEFAULT_WEBHOOK_EVENT_STORE_MAX_ENTRIES = 2_000;
-const DEFAULT_WEBHOOK_EVENT_STORE_MAX_BODY_BYTES = 512 * 1024;
-const DEFAULT_WEBHOOK_EVENT_LIST_LIMIT = 20;
-const MAX_WEBHOOK_EVENT_LIST_LIMIT = 200;
-const TRIM_STORE_INTERVAL_WRITES = 20;
-
-let writesSinceLastTrim = 0;
-
-export function recordWebhookEvent(params: {
+interface RecordWebhookEventParams {
   platform: ReplayPlatform;
   eventName: string;
   headers: Record<string, string | string[] | undefined>;
   payload?: unknown;
   rawBody?: string;
-}): string | undefined {
-  if (!isWebhookEventStoreEnabled()) {
+}
+
+const DEFAULT_WEBHOOK_EVENT_STORE_FILE = ".mr-agent-webhook-events.ndjson";
+const DEFAULT_WEBHOOK_EVENT_STORE_MAX_ENTRIES = 2_000;
+const DEFAULT_WEBHOOK_EVENT_STORE_MAX_BODY_BYTES = 512 * 1024;
+const DEFAULT_WEBHOOK_EVENT_STORE_SAMPLE_RATE = 1;
+const DEFAULT_WEBHOOK_EVENT_LIST_LIMIT = 20;
+const MAX_WEBHOOK_EVENT_LIST_LIMIT = 200;
+const TRIM_STORE_INTERVAL_WRITES = 20;
+
+interface WebhookStoreWriteState {
+  writesSinceLastTrim: number;
+  queue: Promise<void>;
+}
+
+const writeState: WebhookStoreWriteState = {
+  writesSinceLastTrim: 0,
+  queue: Promise.resolve(),
+};
+
+export function recordWebhookEvent(params: RecordWebhookEventParams): string | undefined {
+  if (!shouldStoreWebhookEvent()) {
     return undefined;
   }
 
+  const stored = buildStoredWebhookEvent(params);
+  enqueueStoredWebhookWrite(stored);
+  return stored.id;
+}
+
+export function scheduleWebhookEventRecord(params: RecordWebhookEventParams): void {
+  if (!shouldStoreWebhookEvent()) {
+    return;
+  }
+
+  const stored = buildStoredWebhookEvent(params);
+  enqueueStoredWebhookWrite(stored);
+}
+
+export async function flushWebhookStoreWrites(): Promise<void> {
+  await writeState.queue;
+}
+
+function enqueueStoredWebhookWrite(event: StoredWebhookEvent): void {
+  writeState.queue = writeState.queue
+    .then(async () => {
+      await persistStoredWebhookEventBestEffortAsync(event);
+    })
+    .catch((err) => {
+      logCore("error", "webhook_replay.store_write_error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
+function buildStoredWebhookEvent(params: RecordWebhookEventParams): StoredWebhookEvent {
   const id = buildStoredWebhookEventId(params.platform);
   const rawBody = buildStoredRawBody(params.rawBody, params.payload);
-  const stored: StoredWebhookEvent = {
+  return {
     id,
     platform: params.platform,
     eventName: params.eventName.trim().toLowerCase() || "unknown",
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date(nowMs()).toISOString(),
     headers: sanitizeHeaders(params.headers),
     payload: params.payload,
     rawBody,
   };
+}
 
+async function persistStoredWebhookEventBestEffortAsync(event: StoredWebhookEvent): Promise<void> {
   try {
-    persistStoredWebhookEvent(stored);
+    await persistStoredWebhookEventAsync(event);
     incrementMetricCounter("mr_agent_webhook_store_writes_total", {
-      platform: params.platform,
+      platform: event.platform,
     });
 
-    writesSinceLastTrim += 1;
-    if (writesSinceLastTrim >= TRIM_STORE_INTERVAL_WRITES) {
-      writesSinceLastTrim = 0;
-      trimStoredWebhookEvents();
+    writeState.writesSinceLastTrim += 1;
+    if (writeState.writesSinceLastTrim >= TRIM_STORE_INTERVAL_WRITES) {
+      writeState.writesSinceLastTrim = 0;
+      await trimStoredWebhookEventsAsync();
     }
   } catch {
     // Best-effort debug storage. Runtime behavior should never fail on replay storage errors.
   }
-
-  return id;
 }
 
-export function listStoredWebhookEvents(params?: {
+function shouldStoreWebhookEvent(): boolean {
+  if (!isWebhookEventStoreEnabled()) {
+    return false;
+  }
+
+  const parsed = Number(readOptionalStringEnv("WEBHOOK_EVENT_STORE_SAMPLE_RATE"));
+  const sampleRate = Number.isFinite(parsed)
+    ? Math.min(1, Math.max(0, parsed))
+    : DEFAULT_WEBHOOK_EVENT_STORE_SAMPLE_RATE;
+  if (sampleRate <= 0) {
+    return false;
+  }
+  if (sampleRate >= 1) {
+    return true;
+  }
+
+  return Math.random() < sampleRate;
+}
+
+export async function listStoredWebhookEvents(params?: {
   platform?: ReplayPlatform;
   limit?: number;
-}): StoredWebhookEventSummary[] {
+}): Promise<StoredWebhookEventSummary[]> {
   if (!isWebhookEventStoreEnabled()) {
     return [];
   }
 
+  await writeState.queue;
   const limit = resolveWebhookEventListLimit(params?.limit);
-  const events = readStoredWebhookEvents();
+  const events = await readStoredWebhookEvents();
   const selected: StoredWebhookEventSummary[] = [];
 
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -127,10 +192,10 @@ export function listStoredWebhookEvents(params?: {
   return selected;
 }
 
-export function getStoredWebhookEventById(params: {
+export async function getStoredWebhookEventById(params: {
   id: string;
   platform?: ReplayPlatform;
-}): StoredWebhookEvent | undefined {
+}): Promise<StoredWebhookEvent | undefined> {
   if (!isWebhookEventStoreEnabled()) {
     return undefined;
   }
@@ -140,7 +205,8 @@ export function getStoredWebhookEventById(params: {
     return undefined;
   }
 
-  const events = readStoredWebhookEvents();
+  await writeState.queue;
+  const events = await readStoredWebhookEvents();
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const item = events[index];
     if (!item || item.id !== targetId) {
@@ -172,7 +238,7 @@ export function resolveStoredWebhookReplayPayload(event: StoredWebhookEvent): un
 }
 
 export function isWebhookReplayEnabled(
-  rawValue: string | undefined = process.env.WEBHOOK_REPLAY_ENABLED,
+  rawValue: string | undefined = readOptionalStringEnv("WEBHOOK_REPLAY_ENABLED"),
 ): boolean {
   return parseBooleanEnv(rawValue);
 }
@@ -186,7 +252,7 @@ export function assertWebhookReplayAuthorized(
     );
   }
 
-  const expected = process.env.WEBHOOK_REPLAY_TOKEN?.trim();
+  const expected = readOptionalStringEnv("WEBHOOK_REPLAY_TOKEN");
   if (!expected) {
     throw new BadWebhookRequestError(
       "WEBHOOK_REPLAY_TOKEN must be configured when WEBHOOK_REPLAY_ENABLED=true",
@@ -220,24 +286,14 @@ export function resolveWebhookEventListLimit(rawLimit: number | string | undefin
 }
 
 function isWebhookEventStoreEnabled(
-  rawValue: string | undefined = process.env.WEBHOOK_EVENT_STORE_ENABLED,
+  rawValue: string | undefined = readOptionalStringEnv("WEBHOOK_EVENT_STORE_ENABLED"),
 ): boolean {
   return parseBooleanEnv(rawValue);
 }
 
-function parseBooleanEnv(rawValue: string | undefined): boolean {
-  const normalized = (rawValue ?? "").trim().toLowerCase();
-  return (
-    normalized === "1" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "on"
-  );
-}
-
 function buildStoredWebhookEventId(platform: ReplayPlatform): string {
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).slice(2, 10);
+  const timestamp = nowMs().toString(36);
+  const random = randomUUID().slice(0, 8);
   return `${platform}-${timestamp}-${random}`;
 }
 
@@ -271,7 +327,9 @@ function buildStoredRawBody(rawBody: string | undefined, payload: unknown): stri
 function sanitizeHeaders(
   headers: Record<string, string | string[] | undefined>,
 ): Record<string, string> {
-  const includeSensitive = parseBooleanEnv(process.env.WEBHOOK_EVENT_STORE_INCLUDE_SENSITIVE_HEADERS);
+  const includeSensitive = parseBooleanEnv(
+    readOptionalStringEnv("WEBHOOK_EVENT_STORE_INCLUDE_SENSITIVE_HEADERS"),
+  );
   const sanitized: Record<string, string> = {};
   const allowedKeys = new Set([
     "x-github-event",
@@ -308,14 +366,14 @@ function sanitizeHeaders(
   return sanitized;
 }
 
-function persistStoredWebhookEvent(event: StoredWebhookEvent): void {
+async function persistStoredWebhookEventAsync(event: StoredWebhookEvent): Promise<void> {
   const filePath = resolveWebhookEventStoreFile();
-  mkdirSync(dirname(filePath), { recursive: true });
-  appendFileSync(filePath, `${safeJsonStringify(event)}\n`, "utf8");
+  await mkdir(dirname(filePath), { recursive: true });
+  await appendFile(filePath, `${safeJsonStringify(event)}\n`, "utf8");
 }
 
-function trimStoredWebhookEvents(): void {
-  const events = readStoredWebhookEvents();
+async function trimStoredWebhookEventsAsync(): Promise<void> {
+  const events = await readStoredWebhookEvents();
   const maxEntries = Math.max(
     1,
     readNumberEnv(
@@ -330,41 +388,40 @@ function trimStoredWebhookEvents(): void {
 
   const kept = events.slice(events.length - maxEntries);
   const filePath = resolveWebhookEventStoreFile();
-  writeFileSync(
-    filePath,
-    `${kept.map((event) => safeJsonStringify(event)).join("\n")}\n`,
-    "utf8",
-  );
+  await mkdir(dirname(filePath), { recursive: true });
+  const tempFilePath = `${filePath}.tmp-${nowMs()}-${randomUUID().slice(0, 8)}`;
+  await writeFile(tempFilePath, `${kept.map((event) => safeJsonStringify(event)).join("\n")}\n`, "utf8");
+  await rename(tempFilePath, filePath);
   incrementMetricCounter("mr_agent_webhook_store_trim_total", {
     result: "trimmed",
   });
 }
 
-function readStoredWebhookEvents(): StoredWebhookEvent[] {
+async function readStoredWebhookEvents(): Promise<StoredWebhookEvent[]> {
   const filePath = resolveWebhookEventStoreFile();
-  if (!existsSync(filePath)) {
-    return [];
-  }
-
   try {
-    const raw = readFileSync(filePath, "utf8");
-    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
-    const events: StoredWebhookEvent[] = [];
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line) as unknown;
-        const normalized = normalizeStoredWebhookEvent(parsed);
-        if (normalized) {
-          events.push(normalized);
-        }
-      } catch {
-        continue;
-      }
-    }
-    return events;
+    const raw = await readFile(filePath, "utf8");
+    return parseStoredWebhookEventsText(raw);
   } catch {
     return [];
   }
+}
+
+function parseStoredWebhookEventsText(raw: string): StoredWebhookEvent[] {
+  const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+  const events: StoredWebhookEvent[] = [];
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      const normalized = normalizeStoredWebhookEvent(parsed);
+      if (normalized) {
+        events.push(normalized);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return events;
 }
 
 function normalizeStoredWebhookEvent(input: unknown): StoredWebhookEvent | undefined {
@@ -411,45 +468,9 @@ function normalizeStoredWebhookEvent(input: unknown): StoredWebhookEvent | undef
 }
 
 function resolveWebhookEventStoreFile(): string {
-  const raw = process.env.WEBHOOK_EVENT_STORE_FILE?.trim();
+  const raw = readOptionalStringEnv("WEBHOOK_EVENT_STORE_FILE");
   if (!raw) {
     return resolve(process.cwd(), DEFAULT_WEBHOOK_EVENT_STORE_FILE);
   }
   return resolve(raw);
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "null";
-  }
-}
-
-function readHeaderValue(
-  headers: Record<string, string | string[] | undefined>,
-  key: string,
-): string | undefined {
-  const direct = headers[key];
-  if (typeof direct === "string") {
-    return direct;
-  }
-  if (Array.isArray(direct)) {
-    return direct[0];
-  }
-
-  const target = key.toLowerCase();
-  for (const [headerKey, headerValue] of Object.entries(headers)) {
-    if (headerKey.toLowerCase() !== target) {
-      continue;
-    }
-    if (typeof headerValue === "string") {
-      return headerValue;
-    }
-    if (Array.isArray(headerValue)) {
-      return headerValue[0];
-    }
-  }
-
-  return undefined;
 }

@@ -1,9 +1,9 @@
 import {
-  clearRuntimeStateScope,
   deleteRuntimeStateValue,
   loadRuntimeStateValue,
   saveRuntimeStateValue,
 } from "./runtime-state.js";
+import { nowMs } from "./clock.js";
 
 interface DedupeStateRecord {
   timestamp: number;
@@ -24,7 +24,7 @@ export function isDuplicateRequest(
   }
 
   const safeTtlMs = Math.max(1, Math.floor(ttlMs));
-  const now = Date.now();
+  const now = nowMs();
   const expiresAt = now + safeTtlMs;
 
   const persisted = loadRuntimeStateValue<DedupeStateRecord>(
@@ -60,8 +60,4 @@ export function clearDuplicateRecord(key: string): void {
 
 function normalizeDedupeKey(key: string): string {
   return key.trim().slice(0, 240);
-}
-
-export function __clearDuplicateRequestStateForTests(): void {
-  clearRuntimeStateScope(DEDUPE_STATE_SCOPE);
 }

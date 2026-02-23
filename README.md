@@ -261,25 +261,47 @@ mr-agent/
 │   │
 │   ├── core/                       # Shared infrastructure
 │   │   ├── cache.ts                #   TTL-based in-memory cache
+│   │   ├── clock.ts                #   Clock abstraction (testable time)
 │   │   ├── dedupe.ts               #   FNV hash request deduplication
 │   │   ├── env.ts                  #   Environment variable helpers
 │   │   ├── errors.ts               #   Typed error classes (4xx/5xx)
 │   │   ├── http.ts                 #   HTTP client with retry & backoff
 │   │   ├── i18n.ts                 #   Locale detection (zh/en)
+│   │   ├── logger.ts               #   Core structured logging
 │   │   ├── rate-limit.ts           #   Per-scope rate limiting
 │   │   ├── runtime-state.ts        #   Pluggable state backend
 │   │   └── secret-patterns.ts      #   Regex-based secret detection
 │   │
 │   ├── review/                     # AI review domain
 │   │   ├── ai-reviewer.ts          #   Multi-provider AI abstraction
+│   │   ├── ai-prompts.ts           #   System & user prompt builders
+│   │   ├── ai-concurrency.ts       #   Concurrent request limiter
+│   │   ├── ai-client-cache.ts      #   OpenAI client instance cache
+│   │   ├── ai-provider-anthropic.ts #  Anthropic provider adapter
+│   │   ├── ai-provider-gemini.ts   #   Gemini provider adapter
 │   │   ├── patch.ts                #   Git diff parsing & line mapping
 │   │   ├── report-renderer.ts      #   Markdown report formatting
-│   │   ├── review-policy.ts        #   Zod schemas & policy config
+│   │   ├── review-policy.ts        #   Code file detection & line mapping
 │   │   └── review-types.ts         #   Data models
 │   │
 │   ├── integrations/
 │   │   ├── github/                 #   GitHub review, policy, content
+│   │   │   ├── github-review.ts    #     Review orchestration
+│   │   │   ├── github-review-types.ts #  Interfaces & type definitions
+│   │   │   ├── github-policy.ts    #     Policy checks & validation
+│   │   │   ├── github-policy-config.ts # Policy YAML parsing & caching
+│   │   │   ├── github-policy-templates.ts # Template discovery & sections
+│   │   │   ├── github-webhook.ts   #     Webhook event dispatching
+│   │   │   └── github-lifecycle.ts #     PR/Issue lifecycle workflows
 │   │   ├── gitlab/                 #   GitLab review & command handling
+│   │   ├── shared/                 #   Cross-platform shared utilities
+│   │   │   ├── managed-comments.ts #     Comment upsert & dedup markers
+│   │   │   ├── review-triggers.ts  #     Trigger classification & TTL
+│   │   │   ├── feedback-signals.ts #     Review feedback learning
+│   │   │   ├── secret-scan.ts      #     Secret leak scanning
+│   │   │   ├── auto-labels.ts      #     Auto-labeling inference
+│   │   │   ├── similar-issue.ts    #     Similar issue search
+│   │   │   └── process-guidelines.ts #   Guideline file loading
 │   │   └── notify/                 #   Webhook notifications
 │   │
 │   ├── modules/
@@ -299,7 +321,8 @@ mr-agent/
 ├── docker-compose.yml              # Docker Compose setup
 ├── .env.example                    # Full env var reference
 ├── .env.github-app.min.example     # Minimal GitHub App config
-└── .env.github-webhook.min.example # Minimal GitHub Webhook config
+├── .env.github-webhook.min.example # Minimal GitHub Webhook config
+└── .env.gitlab.min.example         # Minimal GitLab Webhook config
 ```
 
 ### Path Aliases
@@ -360,6 +383,7 @@ Copy `.env.example` and fill in the required values. Minimal configs are also av
 
 - `.env.github-app.min.example` — GitHub App minimum
 - `.env.github-webhook.min.example` — Plain GitHub Webhook minimum
+- `.env.gitlab.min.example` — GitLab Webhook minimum
 
 ### AI Provider
 
@@ -425,6 +449,23 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 ```
 
 ### Key Tuning Parameters
+
+**AI provider tuning**
+
+| Variable | Default | Description |
+|---|---|---|
+| `AI_HTTP_TIMEOUT_MS` | `30000` (30s) | HTTP timeout for AI review requests |
+| `AI_ASK_HTTP_TIMEOUT_MS` | `60000` (60s) | HTTP timeout for `/ask` command (longer for multi-turn Q&A) |
+| `AI_HTTP_RETRIES` | `2` | Number of retries on transient AI provider failures |
+| `AI_HTTP_RETRY_BACKOFF_MS` | `400` | Retry backoff base delay for AI provider requests (ms) |
+| `AI_MAX_CONCURRENCY` | `4` | Max concurrent AI requests |
+| `AI_MAX_QUEUE_SIZE` | `200` | Max queued AI requests before rejecting new work |
+| `AI_SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000` (15s) | Graceful shutdown drain timeout for in-flight AI tasks |
+| `AI_DEBUG_LOGS` | `false` | Log AI request/response payloads for debugging |
+| `HEALTHCHECK_AI_TIMEOUT_MS` | `5000` (5s) | Timeout for deep health check AI probe |
+| `HEALTHCHECK_AI_LIVE_PROBE` | `false` | Perform actual API call for `GET /health?deep=true` instead of config-only check |
+
+`AI_CONCURRENCY_LIMIT` is no longer used. Use `AI_MAX_CONCURRENCY` and `AI_MAX_QUEUE_SIZE` instead.
 
 **Global runtime and command limits**
 
@@ -558,7 +599,8 @@ This is a compact deployment path for Render/Railway/Fly.io/Docker/K8s.
 
 ```env
 APP_ID=123456
-PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
+# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
 WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
@@ -570,6 +612,16 @@ OPENAI_MODEL=gpt-4.1-mini
 ```env
 GITHUB_WEBHOOK_SECRET=replace-with-webhook-secret
 GITHUB_WEBHOOK_TOKEN=replace-with-github-token
+AI_PROVIDER=openai
+OPENAI_API_KEY=replace-with-openai-key
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+**GitLab Webhook minimum (`.env.gitlab.min.example`)**
+
+```env
+GITLAB_TOKEN=replace-with-gitlab-token
+# GITLAB_WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
@@ -672,9 +724,14 @@ server {
 
 ```env
 APP_ID=123456
-PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
+# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
 WEBHOOK_SECRET=your-webhook-secret
 ```
+
+- GitHub App enablement condition (see `src/modules/github-app/github-app.bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
+- `docker-compose.yml` mounts the private key at `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`. If `secrets/` or the PEM file is missing, `docker compose up` will fail.
+- Recommended local prep: `mkdir -p secrets data`. Docker usually auto-creates `data`, but pre-creating it is more predictable.
 
 > If `APP_ID` + `PRIVATE_KEY` (+ `WEBHOOK_SECRET`) are not configured, GitHub App mode is automatically disabled; plain webhook mode remains available.
 

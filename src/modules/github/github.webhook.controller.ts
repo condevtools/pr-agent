@@ -9,20 +9,21 @@ import {
 } from "@nestjs/common";
 import type { Request } from "express";
 
-import { BadWebhookRequestError } from "#core";
+import { BadWebhookRequestError, readOptionalStringEnv } from "#core";
 import { GithubWebhookService } from "./github.webhook.service.js";
 import {
   buildHealthStatus,
   isDeepHealthQuery,
   type HealthStatus,
 } from "../webhook/health.js";
-import { incrementMetricCounter } from "../webhook/metrics.js";
+import { incrementMetricCounter } from "../webhook/metrics-runtime.js";
 import {
   assertWebhookReplayAuthorized,
   getStoredWebhookEventById,
-  recordWebhookEvent,
+  scheduleWebhookEventRecord,
   resolveStoredWebhookReplayPayload,
 } from "../webhook/webhook-replay.js";
+import { readHeaderValue, readRawBody } from "../webhook/webhook.utils.js";
 
 interface RawBodyRequest extends Request {
   rawBody?: Buffer | string;
@@ -35,7 +36,8 @@ export class GithubWebhookController {
   @Get("health")
   health(@Query("deep") deep?: string): Promise<HealthStatus> {
     const webhookConfigured = Boolean(
-      (process.env.GITHUB_WEBHOOK_SECRET ?? process.env.WEBHOOK_SECRET)?.trim(),
+      readOptionalStringEnv("GITHUB_WEBHOOK_SECRET") ??
+        readOptionalStringEnv("WEBHOOK_SECRET"),
     );
     return buildHealthStatus({
       mode: "github-webhook",
@@ -53,16 +55,10 @@ export class GithubWebhookController {
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
     const eventName = (readHeaderValue(headers, "x-github-event") ?? "unknown").toLowerCase();
+    const metricEvent = normalizeGitHubMetricEventName(eventName);
     incrementMetricCounter("mr_agent_webhook_requests_total", {
       platform: "github",
-      event: eventName,
-    });
-    recordWebhookEvent({
-      platform: "github",
-      eventName,
-      headers,
-      payload: request.body,
-      rawBody: readRawBody(request.rawBody),
+      event: metricEvent,
     });
 
     try {
@@ -74,6 +70,13 @@ export class GithubWebhookController {
       incrementMetricCounter("mr_agent_webhook_results_total", {
         platform: "github",
         result: "ok",
+      });
+      scheduleWebhookEventRecord({
+        platform: "github",
+        eventName,
+        headers,
+        payload: request.body,
+        rawBody: readRawBody(request.rawBody),
       });
       return result;
     } catch (error) {
@@ -91,7 +94,7 @@ export class GithubWebhookController {
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
     assertWebhookReplayAuthorized(headers);
-    const event = getStoredWebhookEventById({
+    const event = await getStoredWebhookEventById({
       id: eventId,
       platform: "github",
     });
@@ -129,39 +132,16 @@ export class GithubWebhookController {
   }
 }
 
-function readHeaderValue(
-  headers: Record<string, string | string[] | undefined>,
-  targetKey: string,
-): string | undefined {
-  const direct = headers[targetKey];
-  if (typeof direct === "string") {
-    return direct;
-  }
-  if (Array.isArray(direct)) {
-    return direct[0];
-  }
+const GITHUB_METRIC_EVENT_NAMES = new Set([
+  "issue_comment",
+  "issues",
+  "pull_request",
+  "pull_request_review_thread",
+]);
 
-  const target = targetKey.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== target) {
-      continue;
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value[0];
-    }
+function normalizeGitHubMetricEventName(eventName: string): string {
+  if (GITHUB_METRIC_EVENT_NAMES.has(eventName)) {
+    return eventName;
   }
-  return undefined;
-}
-
-function readRawBody(rawBody: Buffer | string | undefined): string | undefined {
-  if (typeof rawBody === "string") {
-    return rawBody;
-  }
-  if (Buffer.isBuffer(rawBody)) {
-    return rawBody.toString("utf8");
-  }
-  return undefined;
+  return "other";
 }

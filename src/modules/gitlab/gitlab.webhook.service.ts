@@ -2,7 +2,13 @@ import { Injectable, Logger } from "@nestjs/common";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
-import { BadWebhookRequestError, WebhookAuthError, readNumberEnv } from "#core";
+import {
+  BadWebhookRequestError,
+  WebhookAuthError,
+  parseBooleanEnv,
+  readNumberEnv,
+  readOptionalStringEnv,
+} from "#core";
 import {
   runGitLabWebhook,
   type GitLabWebhookBody,
@@ -63,7 +69,7 @@ export class GitlabWebhookService {
     // keep accepting x-gitlab-token as API token.
     if (
       !normalizedHeaders["x-gitlab-api-token"] &&
-      !process.env.GITLAB_WEBHOOK_SECRET &&
+      !readOptionalStringEnv("GITLAB_WEBHOOK_SECRET") &&
       normalizedHeaders["x-gitlab-token"]
     ) {
       normalizedHeaders["x-gitlab-api-token"] = normalizedHeaders["x-gitlab-token"];
@@ -131,7 +137,7 @@ function verifyGitLabWebhookToken(
   headers: Record<string, string | undefined>,
   logger?: Pick<Logger, "warn">,
 ): void {
-  const expected = process.env.GITLAB_WEBHOOK_SECRET?.trim();
+  const expected = readOptionalStringEnv("GITLAB_WEBHOOK_SECRET");
   if (!expected) {
     if (shouldRequireGitLabWebhookSecret()) {
       throw new BadWebhookRequestError(
@@ -158,15 +164,9 @@ function verifyGitLabWebhookToken(
 }
 
 export function shouldRequireGitLabWebhookSecret(
-  rawValue: string | undefined = process.env.GITLAB_REQUIRE_WEBHOOK_SECRET,
+  rawValue: string | undefined = readOptionalStringEnv("GITLAB_REQUIRE_WEBHOOK_SECRET"),
 ): boolean {
-  const normalized = (rawValue ?? "").trim().toLowerCase();
-  return (
-    normalized === "1" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "on"
-  );
+  return parseBooleanEnv(rawValue);
 }
 
 export function isGitLabWebhookTokenValid(

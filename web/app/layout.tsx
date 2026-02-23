@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { getLocale } from "next-intl/server";
 import {
   SEO_KEYWORDS,
   SITE_DESCRIPTION,
@@ -7,7 +6,7 @@ import {
   SITE_TITLE,
   SITE_URL,
 } from "@/lib/seo-geo";
-import { DEFAULT_LOCALE, type SupportedLocale } from "@/lib/i18n";
+import { DEFAULT_LOCALE } from "@/lib/i18n";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -37,15 +36,15 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
+const ROOT_HTML_LANG = DEFAULT_LOCALE === "zh" ? "zh-CN" : "en";
+
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const resolvedLocale = (await getLocale().catch(() => DEFAULT_LOCALE)) as SupportedLocale;
-
   return (
-    <html lang={resolvedLocale === "zh" ? "zh-CN" : "en"}>
+    <html lang={ROOT_HTML_LANG}>
       <body className="antialiased">{children}</body>
     </html>
   );

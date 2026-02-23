@@ -8,8 +8,13 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 
-import { BadWebhookRequestError, WebhookAuthError } from "#core";
-import { incrementMetricCounter } from "../../modules/webhook/metrics.js";
+import {
+  BadWebhookRequestError,
+  WebhookAuthError,
+  parseBooleanEnv,
+  readOptionalStringEnv,
+} from "#core";
+import { incrementMetricCounter } from "../../modules/webhook/metrics-runtime.js";
 
 interface ResolvedError {
   status: number;
@@ -128,7 +133,7 @@ export class HttpErrorFilter implements ExceptionFilter {
       name: exception.name,
       message: exception.message,
       stack:
-        (process.env.EXPOSE_ERROR_STACK ?? "").toLowerCase() === "true"
+        parseBooleanEnv(readOptionalStringEnv("EXPOSE_ERROR_STACK"))
           ? exception.stack
           : undefined,
     };

@@ -1,4 +1,5 @@
 import type { DiffFileContext, ReviewIssue } from "./review-types.js";
+import { readStringEnv } from "#core";
 
 const DEFAULT_REVIEW_CODE_EXTENSIONS =
   "ts,tsx,js,jsx,vue,py,java,go,rs,php,rb,swift,kt,scala,c,cc,cpp,cs";
@@ -154,8 +155,7 @@ export function countPatchChanges(rawPatch: string): {
 }
 
 function getCodeExtensionAllowList(): Set<string> {
-  const raw = (process.env.REVIEW_CODE_EXTENSIONS ?? DEFAULT_REVIEW_CODE_EXTENSIONS)
-    .trim()
+  const raw = readStringEnv("REVIEW_CODE_EXTENSIONS", DEFAULT_REVIEW_CODE_EXTENSIONS)
     .toLowerCase();
 
   if (raw === cachedExtensionRaw && cachedExtensionSet.size > 0) {

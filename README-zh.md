@@ -261,25 +261,47 @@ mr-agent/
 │   │
 │   ├── core/                       # 公共基础设施
 │   │   ├── cache.ts                #   TTL 内存缓存
+│   │   ├── clock.ts                #   时钟抽象（可测试时间）
 │   │   ├── dedupe.ts               #   FNV 哈希请求去重
 │   │   ├── env.ts                  #   环境变量工具
 │   │   ├── errors.ts               #   类型化错误类（4xx/5xx）
 │   │   ├── http.ts                 #   HTTP 客户端（重试 & 退避）
 │   │   ├── i18n.ts                 #   语言检测（中文/英文）
+│   │   ├── logger.ts               #   核心结构化日志
 │   │   ├── rate-limit.ts           #   按作用域限流
 │   │   ├── runtime-state.ts        #   可插拔状态后端
 │   │   └── secret-patterns.ts      #   正则密钥检测
 │   │
 │   ├── review/                     # AI 评审领域
 │   │   ├── ai-reviewer.ts          #   多 Provider AI 抽象
+│   │   ├── ai-prompts.ts           #   系统 & 用户 Prompt 构建
+│   │   ├── ai-concurrency.ts       #   并发请求限制器
+│   │   ├── ai-client-cache.ts      #   OpenAI 客户端实例缓存
+│   │   ├── ai-provider-anthropic.ts #  Anthropic 提供商适配器
+│   │   ├── ai-provider-gemini.ts   #   Gemini 提供商适配器
 │   │   ├── patch.ts                #   Git diff 解析 & 行号映射
 │   │   ├── report-renderer.ts      #   Markdown 报告格式化
-│   │   ├── review-policy.ts        #   Zod Schema & 策略配置
+│   │   ├── review-policy.ts        #   代码文件检测 & 行号解析
 │   │   └── review-types.ts         #   数据模型
 │   │
 │   ├── integrations/
 │   │   ├── github/                 #   GitHub 评审、策略、内容获取
+│   │   │   ├── github-review.ts    #     评审编排
+│   │   │   ├── github-review-types.ts #  接口 & 类型定义
+│   │   │   ├── github-policy.ts    #     策略检查 & 校验
+│   │   │   ├── github-policy-config.ts # 策略 YAML 解析 & 缓存
+│   │   │   ├── github-policy-templates.ts # 模板发现 & 段落提取
+│   │   │   ├── github-webhook.ts   #     Webhook 事件分发
+│   │   │   └── github-lifecycle.ts #     PR/Issue 生命周期工作流
 │   │   ├── gitlab/                 #   GitLab 评审 & 命令处理
+│   │   ├── shared/                 #   跨平台共享工具
+│   │   │   ├── managed-comments.ts #     评论去重 & 更新标记
+│   │   │   ├── review-triggers.ts  #     触发分类 & TTL 计算
+│   │   │   ├── feedback-signals.ts #     评审反馈学习
+│   │   │   ├── secret-scan.ts      #     密钥泄露扫描
+│   │   │   ├── auto-labels.ts      #     自动标签推断
+│   │   │   ├── similar-issue.ts    #     相似 Issue 搜索
+│   │   │   └── process-guidelines.ts #   流程规范文件加载
 │   │   └── notify/                 #   Webhook 通知推送
 │   │
 │   ├── modules/
@@ -299,7 +321,8 @@ mr-agent/
 ├── docker-compose.yml              # Docker Compose 配置
 ├── .env.example                    # 完整环境变量参考
 ├── .env.github-app.min.example     # GitHub App 最小配置
-└── .env.github-webhook.min.example # GitHub Webhook 最小配置
+├── .env.github-webhook.min.example # GitHub Webhook 最小配置
+└── .env.gitlab.min.example         # GitLab Webhook 最小配置
 ```
 
 ### 路径别名
@@ -360,6 +383,7 @@ curl http://localhost:3000/gitlab/health       # GitLab 配置状态
 
 - `.env.github-app.min.example` — GitHub App 最小配置
 - `.env.github-webhook.min.example` — 普通 GitHub Webhook 最小配置
+- `.env.gitlab.min.example` — GitLab Webhook 最小配置
 
 ### AI Provider 配置
 
@@ -425,6 +449,23 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 ```
 
 ### 关键调参
+
+**AI 提供商调参**
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `AI_HTTP_TIMEOUT_MS` | `30000`（30 秒） | AI 评审请求 HTTP 超时 |
+| `AI_ASK_HTTP_TIMEOUT_MS` | `60000`（60 秒） | `/ask` 命令 HTTP 超时（多轮问答通常需要更长时间） |
+| `AI_HTTP_RETRIES` | `2` | AI 提供商临时故障时的重试次数 |
+| `AI_HTTP_RETRY_BACKOFF_MS` | `400` | AI 请求重试基础退避时延（毫秒） |
+| `AI_MAX_CONCURRENCY` | `4` | AI 请求最大并发数 |
+| `AI_MAX_QUEUE_SIZE` | `200` | AI 等待队列上限（超限后拒绝新任务） |
+| `AI_SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000`（15 秒） | 进程关闭时等待进行中 AI 请求完成的超时时间 |
+| `AI_DEBUG_LOGS` | `false` | 记录 AI 请求/响应载荷用于调试 |
+| `HEALTHCHECK_AI_TIMEOUT_MS` | `5000`（5 秒） | 深度健康检查 AI 探测超时 |
+| `HEALTHCHECK_AI_LIVE_PROBE` | `false` | `GET /health?deep=true` 时是否实际调用 AI API（否则仅检查配置） |
+
+`AI_CONCURRENCY_LIMIT` 已废弃，不再生效。请改用 `AI_MAX_CONCURRENCY` 与 `AI_MAX_QUEUE_SIZE`。
 
 **全局运行时与命令限流**
 
@@ -558,7 +599,8 @@ graph TD
 
 ```env
 APP_ID=123456
-PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
+# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
 WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
@@ -570,6 +612,16 @@ OPENAI_MODEL=gpt-4.1-mini
 ```env
 GITHUB_WEBHOOK_SECRET=replace-with-webhook-secret
 GITHUB_WEBHOOK_TOKEN=replace-with-github-token
+AI_PROVIDER=openai
+OPENAI_API_KEY=replace-with-openai-key
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+**GitLab Webhook 最小配置（`.env.gitlab.min.example`）**
+
+```env
+GITLAB_TOKEN=replace-with-gitlab-token
+# GITLAB_WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
@@ -672,9 +724,14 @@ server {
 
 ```env
 APP_ID=123456
-PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
+# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
 WEBHOOK_SECRET=your-webhook-secret
 ```
+
+- GitHub App 启用条件（见 `src/modules/github-app/github-app.bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
+- `docker-compose.yml` 默认挂载私钥路径为 `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`。如果本地缺少 `secrets/` 目录或 PEM 文件，`docker compose up` 会失败。
+- 建议本地预先创建：`mkdir -p secrets data`。`data` 目录通常可由 Docker 自动创建，但手动创建更可控。
 
 > 若未配置 `APP_ID` + `PRIVATE_KEY`（+ `WEBHOOK_SECRET`），GitHub App 模式会自动禁用，但普通 Webhook 仍可用。
 

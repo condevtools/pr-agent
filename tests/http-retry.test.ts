@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  __resetHttpShutdownForTests,
-  beginHttpShutdown,
+  beginHttpShutdownWithRuntime,
   computeRetryDelayMs,
+  createHttpLifecycleRuntime,
   fetchWithRetry,
 } from "../src/core/http.ts";
 
@@ -22,6 +22,11 @@ test("http retry jitter stays within 0~20% of base backoff", () => {
   assert.equal(base, 1000);
   assert.ok(middle >= 1000 && middle <= 1100);
   assert.ok(nearMax >= 1000 && nearMax <= 1100);
+});
+
+test("http retry delay applies max delay cap", () => {
+  assert.equal(computeRetryDelayMs(10, 400, 0, 5_000), 5_000);
+  assert.equal(computeRetryDelayMs(2, 400, 0, 5_000), 1_600);
 });
 
 test("fetchWithRetry retries retryable status and keeps success behavior", async () => {
@@ -74,20 +79,20 @@ test("fetchWithRetry does not retry non-retryable status", async () => {
 test("fetchWithRetry aborts immediately after http shutdown starts", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("ok", { status: 200 });
+  const runtime = createHttpLifecycleRuntime();
 
   try {
-    __resetHttpShutdownForTests();
-    beginHttpShutdown();
+    beginHttpShutdownWithRuntime(runtime);
     await assert.rejects(
       () =>
         fetchWithRetry("https://example.test/shutdown", {}, {
           retries: 0,
           timeoutMs: 1000,
+          runtime,
         }),
       /http client is shutting down/i,
     );
   } finally {
-    __resetHttpShutdownForTests();
     globalThis.fetch = originalFetch;
   }
 });

@@ -2,7 +2,7 @@ import { Controller, Get, Header, Headers, Query } from "@nestjs/common";
 
 import { AppService } from "./app.service.js";
 import { isDeepHealthQuery, type HealthStatus } from "./modules/webhook/health.js";
-import { renderPrometheusMetrics } from "./modules/webhook/metrics.js";
+import { renderPrometheusMetrics } from "./modules/webhook/metrics-runtime.js";
 import {
   assertWebhookReplayAuthorized,
   listStoredWebhookEvents,
@@ -34,7 +34,7 @@ export class AppController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Query("platform") platformRaw?: string,
     @Query("limit") limitRaw?: string,
-  ): StoredWebhookEventSummary[] {
+  ): Promise<StoredWebhookEventSummary[]> {
     assertWebhookReplayAuthorized(headers);
     const platform = normalizeReplayPlatform(platformRaw);
     const limit = resolveWebhookEventListLimit(limitRaw);

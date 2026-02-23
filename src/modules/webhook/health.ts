@@ -1,6 +1,6 @@
-import { readNumberEnv } from "#core";
+import { parseBooleanEnv, readNumberEnv } from "#core";
 import { probeAiProviderConnectivity, type AiProviderProbeResult } from "#review";
-import { incrementMetricCounter } from "./metrics.js";
+import { incrementMetricCounter } from "./metrics-runtime.js";
 
 export interface WebhookHealthCheck {
   name: string;
@@ -19,13 +19,7 @@ export interface HealthStatus {
 
 export function isDeepHealthQuery(raw: string | undefined): boolean {
   const normalized = (raw ?? "").trim().toLowerCase();
-  return (
-    normalized === "1" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "on" ||
-    normalized === "deep"
-  );
+  return normalized === "deep" || parseBooleanEnv(normalized);
 }
 
 export async function buildHealthStatus(params: {

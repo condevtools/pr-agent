@@ -6,6 +6,7 @@ import {
 import { HttpAdapterHost } from "@nestjs/core";
 import type { Express, RequestHandler } from "express";
 import { createNodeMiddleware, createProbot } from "probot";
+import { readOptionalStringEnv } from "#core";
 
 import { app as githubApp } from "../../app.js";
 
@@ -52,10 +53,10 @@ export class GithubAppBootstrapService implements OnModuleInit {
 }
 
 function isGitHubAppEnabled(): boolean {
-  const appId = process.env.APP_ID?.trim();
-  const privateKey = process.env.PRIVATE_KEY?.trim();
-  const privateKeyPath = process.env.PRIVATE_KEY_PATH?.trim();
-  const webhookSecret = process.env.WEBHOOK_SECRET?.trim();
+  const appId = readOptionalStringEnv("APP_ID");
+  const privateKey = readOptionalStringEnv("PRIVATE_KEY");
+  const privateKeyPath = readOptionalStringEnv("PRIVATE_KEY_PATH");
+  const webhookSecret = readOptionalStringEnv("WEBHOOK_SECRET");
 
   return Boolean(appId && (privateKey || privateKeyPath) && webhookSecret);
 }

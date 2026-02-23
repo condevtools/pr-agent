@@ -1,26 +1,17 @@
 import {
-  clearRuntimeStateScope,
   clearDuplicateRecord,
-  compileCustomSecretPatterns,
   ensureError,
-  fnv1a32Hex,
-  getFreshCacheValue,
   isDuplicateRequest,
-  loadRuntimeStateValue,
-  loadAskConversationTurns,
   localizeText,
-  pruneExpiredCache,
   readNumberEnv,
-  rememberAskConversationTurn,
+  readOptionalStringEnv,
+  readStringEnv,
   resolveUiLocale,
-  saveRuntimeStateValue,
-  trimCache,
-  type ExpiringCacheEntry,
+  type UiLocale,
 } from "#core";
 import { publishNotification } from "#integrations/notify";
 import {
   analyzePullRequest,
-  answerPullRequestQuestion,
   buildIssueCommentMarkdown,
   buildReportCommentMarkdown,
   findFileForReview,
@@ -28,8 +19,6 @@ import {
   GITHUB_GUIDELINE_FILE_PATHS,
   isProcessTemplateFile,
   isReviewTargetFile,
-  parsePatchWithLineNumbers,
-  prioritizePatchHunks,
   resolveReviewLineForIssue,
 } from "#review";
 import type {
@@ -40,12 +29,84 @@ import type {
   ReviewTrigger,
 } from "#review";
 import { decodeGitHubFileContent } from "./github-content.js";
+import { createGitHubCommandWorkflows } from "./github-command-workflows.js";
+import { inferReviewLabels } from "../shared/auto-labels.js";
+import { buildChangelogQuestion } from "../shared/command-builders.js";
+import { mergeChangelogContent as mergeSharedChangelogContent } from "../shared/changelog.js";
+import { buildDescribeQuestion } from "../shared/describe-question.js";
+import { buildDiffFileContexts } from "../shared/diff-context.js";
+import { recordFeedbackSignal } from "../shared/feedback-signals.js";
+import {
+  loadProcessGuidelinesWithCache,
+  type ProcessGuideline,
+} from "../shared/process-guidelines.js";
+import { getPublicErrorMessage } from "../shared/public-error.js";
+import {
+  loadIncrementalReviewHead,
+  readMergedFeedbackSignals,
+  rememberIncrementalReviewHead,
+} from "../shared/review-state.js";
+import {
+  findPotentialSecrets as findSharedPotentialSecrets,
+  isLikelyPlaceholder as isLikelyPlaceholderShared,
+  type SecretFinding,
+} from "../shared/secret-scan.js";
+import { buildSecretWarningComment } from "../shared/secret-warning.js";
+import { reviewMessage } from "../shared/review-messages.js";
+import {
+  buildManagedCommentBody,
+  buildManagedCommentMarker,
+  type ManagedCommentKey,
+  MANAGED_COMMENT_SCAN_PER_PAGE,
+  MAX_MANAGED_COMMENT_SCAN_PAGES,
+} from "../shared/managed-comments.js";
+import {
+  DEFAULT_DEDUPE_TTL_MS,
+  isAutoReviewTrigger,
+  resolveDedupeTtlMs,
+  shouldSkipReviewForDraft,
+  shouldUseIncrementalReview,
+  shouldUseManagedReviewSummary,
+} from "../shared/review-triggers.js";
+export type {
+  GitHubAskRunParams,
+  GitHubChangelogRunParams,
+  GitHubCheckRunCreateParams,
+  GitHubCheckRunSummary,
+  GitHubCollectedContext,
+  GitHubCompareCommitsResponse,
+  GitHubDescribeRunParams,
+  GitHubIssueCommentSummary,
+  GitHubIssueSummary,
+  GitHubPullFile,
+  GitHubPullFilesListParams,
+  GitHubPullsListFilesMethod,
+  GitHubPullSummary,
+  GitHubRepositoryContentFile,
+  GitHubReviewContext,
+  GitHubReviewRunParams,
+  LoggerLike,
+  MinimalGitHubOctokit,
+} from "./github-review-types.js";
+import type {
+  GitHubAskRunParams,
+  GitHubChangelogRunParams,
+  GitHubCheckRunCreateParams,
+  GitHubCheckRunSummary,
+  GitHubCollectedContext,
+  GitHubDescribeRunParams,
+  GitHubPullFile,
+  GitHubPullFilesListParams,
+  GitHubPullSummary,
+  GitHubRepositoryContentFile,
+  GitHubReviewContext,
+  GitHubReviewRunParams,
+  MinimalGitHubOctokit,
+} from "./github-review-types.js";
 
 const MAX_FILES = 40;
 const DEFAULT_MAX_PATCH_CHARS_PER_FILE = 4_000;
 const DEFAULT_MAX_TOTAL_PATCH_CHARS = 60_000;
-const DEFAULT_DEDUPE_TTL_MS = 5 * 60 * 1_000;
-const DEFAULT_MERGED_REPORT_DEDUPE_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_GUIDELINE_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_GUIDELINES = 20;
 const MAX_GUIDELINES_PER_DIRECTORY = 8;
@@ -55,313 +116,13 @@ const MAX_INCREMENTAL_STATE_ENTRIES = 2_000;
 const DEFAULT_FEEDBACK_SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_FEEDBACK_SIGNALS = 80;
 const MAX_FEEDBACK_CACHE_ENTRIES = 1_000;
-const MANAGED_COMMENT_SCAN_PER_PAGE = 100;
-const MAX_MANAGED_COMMENT_SCAN_PAGES = 20;
 const GITHUB_INCREMENTAL_STATE_SCOPE = "github-incremental-head";
 const GITHUB_FEEDBACK_SIGNAL_SCOPE = "github-feedback-signals";
+const GITHUB_GUIDELINE_CACHE_SCOPE = "github-process-guidelines";
 const GITHUB_PULL_FILES_TRUNCATED_WARNING = {
   zh: "⚠️ 文件列表拉取达到上限（最多 20 页 * 100 = 2000 个文件），当前评审结果可能未覆盖全部变更。",
   en: "⚠️ File listing reached the hard limit (20 pages * 100 = 2000 files); this review may not cover all changed files.",
 } as const;
-
-type ProcessGuideline = { path: string; content: string };
-type SecretFinding = {
-  path: string;
-  line: number;
-  kind: string;
-  sample: string;
-};
-
-type ProcessGuidelineCacheEntry = ExpiringCacheEntry<ProcessGuideline[]>;
-type IncrementalHeadCacheEntry = ExpiringCacheEntry<string>;
-type FeedbackSignalCacheEntry = ExpiringCacheEntry<string[]>;
-
-const guidelineCache = new Map<string, ProcessGuidelineCacheEntry>();
-const incrementalHeadCache = new Map<string, IncrementalHeadCacheEntry>();
-const feedbackSignalCache = new Map<string, FeedbackSignalCacheEntry>();
-
-export interface LoggerLike {
-  info(metadata: unknown, message: string): void;
-  error(metadata: unknown, message: string): void;
-}
-
-export interface GitHubPullSummary {
-  title: string;
-  body: string | null;
-  user: { login: string } | null;
-  draft?: boolean;
-  base: { ref: string; sha: string };
-  head: { ref: string; sha: string };
-  additions: number;
-  deletions: number;
-  changed_files: number;
-  html_url: string;
-}
-
-export interface GitHubIssueCommentSummary {
-  id: number;
-  body?: string | null;
-}
-
-export interface GitHubIssueSummary {
-  number: number;
-  title?: string | null;
-  body?: string | null;
-  state?: string | null;
-  html_url?: string | null;
-  pull_request?: unknown;
-}
-
-export interface GitHubPullFile {
-  filename: string;
-  previous_filename?: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  patch?: string;
-}
-
-export interface GitHubCompareCommitsResponse {
-  files?: GitHubPullFile[];
-}
-
-export interface GitHubCheckRunSummary {
-  name?: string;
-  status?: string;
-  conclusion?: string | null;
-  details_url?: string | null;
-  html_url?: string | null;
-  output?: {
-    title?: string | null;
-    summary?: string | null;
-    text?: string | null;
-  };
-}
-
-export interface GitHubCheckRunCreateParams {
-  [key: string]: unknown;
-  owner: string;
-  repo: string;
-  name: string;
-  head_sha: string;
-  details_url?: string;
-  status: "queued" | "in_progress" | "completed";
-  conclusion?:
-    | "success"
-    | "failure"
-    | "neutral"
-    | "cancelled"
-    | "timed_out"
-    | "action_required";
-  completed_at?: string;
-  output?: {
-    title: string;
-    summary: string;
-    text?: string;
-  };
-}
-
-export interface GitHubRepositoryContentFile {
-  type?: "file" | "dir" | string;
-  path?: string;
-  encoding?: string;
-  content?: string;
-  sha?: string;
-}
-
-export interface GitHubPullFilesListParams {
-  [key: string]: unknown;
-  owner: string;
-  repo: string;
-  pull_number: number;
-  per_page: number;
-  page?: number;
-}
-
-export type GitHubPullsListFilesMethod = (
-  params: GitHubPullFilesListParams,
-) => Promise<{ data: GitHubPullFile[] }>;
-
-export interface MinimalGitHubOctokit {
-  repos: {
-    getContent(params: {
-      owner: string;
-      repo: string;
-      path: string;
-      ref?: string;
-    }): Promise<{
-      data: GitHubRepositoryContentFile | GitHubRepositoryContentFile[];
-    }>;
-    compareCommits?(params: {
-      [key: string]: unknown;
-      owner: string;
-      repo: string;
-      base: string;
-      head: string;
-    }): Promise<{
-      data: GitHubCompareCommitsResponse;
-    }>;
-    createOrUpdateFileContents?(params: {
-      [key: string]: unknown;
-      owner: string;
-      repo: string;
-      path: string;
-      message: string;
-      content: string;
-      sha?: string;
-      branch?: string;
-    }): Promise<unknown>;
-  };
-  pulls: {
-    get(params: {
-      owner: string;
-      repo: string;
-      pull_number: number;
-    }): Promise<{ data: GitHubPullSummary }>;
-    listFiles: GitHubPullsListFilesMethod;
-    createReviewComment(params: {
-      owner: string;
-      repo: string;
-      pull_number: number;
-      body: string;
-      commit_id: string;
-      path: string;
-      line: number;
-      side: "LEFT" | "RIGHT";
-    }): Promise<unknown>;
-    update(params: {
-      owner: string;
-      repo: string;
-      pull_number: number;
-      body: string;
-    }): Promise<unknown>;
-  };
-  issues: {
-    listForRepo?(params: {
-      [key: string]: unknown;
-      owner: string;
-      repo: string;
-      state?: "open" | "closed" | "all";
-      sort?: "created" | "updated" | "comments";
-      direction?: "asc" | "desc";
-      per_page?: number;
-      page?: number;
-    }): Promise<{ data: GitHubIssueSummary[] }>;
-    listComments?(params: {
-      owner: string;
-      repo: string;
-      issue_number: number;
-      per_page?: number;
-      page?: number;
-    }): Promise<{ data: GitHubIssueCommentSummary[] }>;
-    createComment(params: {
-      owner: string;
-      repo: string;
-      issue_number: number;
-      body: string;
-    }): Promise<{ data: { id: number } }>;
-    updateComment(params: {
-      owner: string;
-      repo: string;
-      comment_id: number;
-      body: string;
-    }): Promise<unknown>;
-    addLabels?(params: {
-      [key: string]: unknown;
-      owner: string;
-      repo: string;
-      issue_number: number;
-      labels: string[];
-    }): Promise<unknown>;
-  };
-  checks?: {
-    create(params: GitHubCheckRunCreateParams): Promise<unknown>;
-    listForRef?(params: {
-      [key: string]: unknown;
-      owner: string;
-      repo: string;
-      ref: string;
-      per_page?: number;
-    }): Promise<{
-      data: { check_runs?: GitHubCheckRunSummary[] };
-    }>;
-  };
-  paginate(
-    method: GitHubPullsListFilesMethod,
-    params: GitHubPullFilesListParams,
-  ): Promise<GitHubPullFile[]>;
-  __getListFilesTruncated?(params: GitHubPullFilesListParams): boolean;
-  __getLastListFilesTruncated?(): boolean;
-}
-
-export interface GitHubReviewContext {
-  repo(): { owner: string; repo: string };
-  octokit: MinimalGitHubOctokit;
-  log: LoggerLike;
-}
-
-interface GitHubReviewRunParams {
-  context: GitHubReviewContext;
-  pullNumber: number;
-  mode: ReviewMode;
-  trigger: ReviewTrigger;
-  dedupeSuffix?: string;
-  customRules?: string[];
-  includeCiChecks?: boolean;
-  enableSecretScan?: boolean;
-  secretScanCustomPatterns?: string[];
-  enableAutoLabel?: boolean;
-  throwOnError?: boolean;
-}
-
-interface GitHubDescribeRunParams {
-  context: GitHubReviewContext;
-  pullNumber: number;
-  apply?: boolean;
-  trigger: ReviewTrigger;
-  dedupeSuffix?: string;
-  throwOnError?: boolean;
-}
-
-interface GitHubAskRunParams {
-  context: GitHubReviewContext;
-  pullNumber: number;
-  question: string;
-  trigger: ReviewTrigger;
-  managedCommentKey?: string;
-  dedupeSuffix?: string;
-  customRules?: string[];
-  includeCiChecks?: boolean;
-  commentTitle?: string;
-  displayQuestion?: string;
-  enableConversationContext?: boolean;
-  throwOnError?: boolean;
-}
-
-interface GitHubChangelogRunParams {
-  context: GitHubReviewContext;
-  pullNumber: number;
-  trigger: ReviewTrigger;
-  focus?: string;
-  apply?: boolean;
-  dedupeSuffix?: string;
-  customRules?: string[];
-  includeCiChecks?: boolean;
-  throwOnError?: boolean;
-}
-
-interface GitHubCollectedContext {
-  input: PullRequestReviewInput;
-  files: DiffFileContext[];
-  filesTruncated: boolean;
-  owner: string;
-  repo: string;
-  baseSha: string;
-  headSha: string;
-  baseBranch: string;
-  headBranch: string;
-  author: string;
-}
 
 export function resolveGitHubPatchCharLimits(): {
   maxPatchCharsPerFile: number;
@@ -388,58 +149,13 @@ export function resolveGitHubPatchCharLimits(): {
   };
 }
 
-type ManagedGitHubCommentKey = string;
-
-function normalizeManagedGitHubCommentKey(raw: string): string {
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9:_-]/g, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 120);
-  return normalized || "default";
-}
-
-export function buildManagedCommandCommentKey(
-  command: string,
-  seed: string,
-): string {
-  const commandKey = normalizeManagedGitHubCommentKey(`cmd-${command}`).replace(
-    /:/g,
-    "-",
-  );
-  const normalizedSeed = seed.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 240);
-  return `${commandKey}:${fnv1a32Hex(normalizedSeed)}`;
-}
-
-function managedGitHubCommentMarker(key: ManagedGitHubCommentKey): string {
-  return `<!-- mr-agent:${normalizeManagedGitHubCommentKey(key)} -->`;
-}
-
-function managedGitHubCommentBody(
-  body: string,
-  key: ManagedGitHubCommentKey,
-): string {
-  return `${body.trim()}\n\n${managedGitHubCommentMarker(key)}`;
-}
-
-function isGitHubAutoReviewTrigger(trigger: ReviewTrigger): boolean {
-  return (
-    trigger === "pr-opened" ||
-    trigger === "pr-edited" ||
-    trigger === "pr-synchronize"
-  );
-}
-
-function shouldUseManagedReviewSummary(trigger: ReviewTrigger): boolean {
-  return isGitHubAutoReviewTrigger(trigger) || trigger === "merged";
-}
+export { buildManagedCommandCommentKey } from "../shared/managed-comments.js";
 
 export function shouldSkipGitHubReviewForDraft(
   trigger: ReviewTrigger,
   isDraft: boolean,
 ): boolean {
-  return isDraft && isGitHubAutoReviewTrigger(trigger);
+  return shouldSkipReviewForDraft(trigger, isDraft);
 }
 
 export async function upsertGitHubManagedIssueComment(params: {
@@ -448,10 +164,10 @@ export async function upsertGitHubManagedIssueComment(params: {
   repo: string;
   issueNumber: number;
   body: string;
-  markerKey: ManagedGitHubCommentKey;
+  markerKey: ManagedCommentKey;
 }): Promise<void> {
-  const marker = managedGitHubCommentMarker(params.markerKey);
-  const nextBody = managedGitHubCommentBody(params.body, params.markerKey);
+  const marker = buildManagedCommentMarker(params.markerKey);
+  const nextBody = buildManagedCommentBody(params.body, params.markerKey);
   const listComments = params.context.octokit.issues.listComments;
   if (listComments) {
     try {
@@ -533,25 +249,19 @@ export async function publishGitHubNoDiffStatus(params: {
   repo: string;
   pullNumber: number;
   progressCommentId?: number;
-  markerKey: ManagedGitHubCommentKey;
+  markerKey: ManagedCommentKey;
   body?: string;
 }): Promise<void> {
   const locale = resolveUiLocale();
   const body =
     params.body?.trim() ||
-    localizeText(
-      {
-        zh: "`AI Review` 未发现可评审的文本改动，已跳过。",
-        en: "`AI Review` found no textual changes to review, skipped.",
-      },
-      locale,
-    );
+    reviewMessage("reviewNoDiffSkipped", locale);
   if (params.progressCommentId) {
     await params.context.octokit.issues.updateComment({
       owner: params.owner,
       repo: params.repo,
       comment_id: params.progressCommentId,
-      body: managedGitHubCommentBody(body, params.markerKey),
+      body: buildManagedCommentBody(body, params.markerKey),
     });
     return;
   }
@@ -590,7 +300,7 @@ export async function runGitHubReview(
   ]
     .filter(Boolean)
     .join(":");
-  const dedupeTtlMs = resolveDedupeTtlMs(trigger, mode);
+  const dedupeTtlMs = resolveDedupeTtlMs(trigger, mode, "GITHUB");
 
   if (isDuplicateRequest(requestKey, dedupeTtlMs)) {
     if (trigger === "comment-command") {
@@ -622,7 +332,7 @@ export async function runGitHubReview(
   const feedbackSignals = loadGitHubFeedbackSignals(owner, repo, pullNumber);
   let preloadedPullSummary: GitHubPullSummary | undefined;
 
-  if (isGitHubAutoReviewTrigger(trigger)) {
+  if (isAutoReviewTrigger(trigger)) {
     const prMeta = await context.octokit.pulls.get({
       owner,
       repo,
@@ -655,13 +365,7 @@ export async function runGitHubReview(
       owner,
       repo,
       issue_number: pullNumber,
-      body: localizeText(
-        {
-          zh: "`AI Review` 正在分析这个 PR，请稍候...",
-          en: "`AI Review` is analyzing this PR, please wait...",
-        },
-        locale,
-      ),
+      body: reviewMessage("reviewRunning", locale),
     });
     progressCommentId = progress.data.id;
   }
@@ -682,13 +386,7 @@ export async function runGitHubReview(
     if (collected.files.length === 0) {
       const noDiffBody = collected.filesTruncated
         ? appendGitHubFilesTruncatedWarning(
-            localizeText(
-              {
-                zh: "`AI Review` 未发现可评审的文本改动。",
-                en: "`AI Review` found no textual changes to review.",
-              },
-              locale,
-            ),
+            reviewMessage("reviewNoDiff", locale),
             locale,
           )
         : undefined;
@@ -715,13 +413,7 @@ export async function runGitHubReview(
         locale,
       );
       const summaryBody = [
-        localizeText(
-          {
-            zh: "## AI 评审结果（Comment 模式）",
-            en: "## AI Review Result (Comment Mode)",
-          },
-          locale,
-        ),
+        reviewMessage("reviewCommentModeTitle", locale),
         "",
         localizeText(
           {
@@ -731,13 +423,7 @@ export async function runGitHubReview(
           locale,
         ),
         "",
-        localizeText(
-          {
-            zh: "如需汇总报告，请评论：`/ai-review report`",
-            en: "For a consolidated report, comment: `/ai-review report`",
-          },
-          locale,
-        ),
+        reviewMessage("reviewCommentModeHint", locale),
       ].join("\n");
       const summaryBodyWithWarning = maybeAppendGitHubFilesTruncatedWarning(
         summaryBody,
@@ -796,10 +482,11 @@ export async function runGitHubReview(
     }
 
     if (enableSecretScan) {
-      const findings = findPotentialSecrets(
-        collected.files,
-        secretScanCustomPatterns,
-      );
+      const findings = findSharedPotentialSecrets({
+        files: collected.files,
+        customPatterns: secretScanCustomPatterns,
+        maxFindings: 10,
+      });
       if (findings.length > 0) {
         await publishSecretWarningComment({
           context,
@@ -849,19 +536,15 @@ export async function runGitHubReview(
         owner,
         repo,
         comment_id: progressCommentId,
-        body: localizeText(
-          {
-            zh: "`AI Review` 分析完成，结果已发布。",
-            en: "`AI Review` analysis completed. Results have been published.",
-          },
-          locale,
-        ),
+        body: reviewMessage("reviewCompleted", locale),
       });
     }
 
     try {
       await publishNotification({
-        pushUrl: process.env.GITHUB_PUSH_URL ?? process.env.NOTIFY_WEBHOOK_URL,
+        pushUrl:
+          readOptionalStringEnv("GITHUB_PUSH_URL") ??
+          readOptionalStringEnv("NOTIFY_WEBHOOK_URL"),
         author: collected.author,
         repository: `${owner}/${repo}`,
         sourceBranch: collected.headBranch,
@@ -903,13 +586,7 @@ export async function runGitHubReview(
         repo,
         issue_number: pullNumber,
         body: [
-          localizeText(
-            {
-              zh: "## AI Review 执行失败",
-              en: "## AI Review Failed",
-            },
-            locale,
-          ),
+          reviewMessage("reviewFailureTitle", locale),
           "",
           localizeText(
             {
@@ -948,13 +625,7 @@ export async function runGitHubReview(
           owner,
           repo,
           comment_id: progressCommentId,
-          body: localizeText(
-            {
-              zh: "`AI Review` 执行失败，请查看下方错误说明。",
-              en: "`AI Review` failed. See the error details below.",
-            },
-            locale,
-          ),
+          body: reviewMessage("reviewFailureProgressHint", locale),
         });
       } catch (updateError) {
         context.log.error(
@@ -974,7 +645,9 @@ export async function runGitHubReview(
 
     try {
       await publishNotification({
-        pushUrl: process.env.GITHUB_PUSH_URL ?? process.env.NOTIFY_WEBHOOK_URL,
+        pushUrl:
+          readOptionalStringEnv("GITHUB_PUSH_URL") ??
+          readOptionalStringEnv("NOTIFY_WEBHOOK_URL"),
         author: "system",
         repository: `${owner}/${repo}`,
         sourceBranch: "-",
@@ -1010,7 +683,7 @@ export async function runGitHubReview(
 export function maybeAppendGitHubFilesTruncatedWarning(
   body: string,
   filesTruncated: boolean,
-  locale: "zh" | "en" = resolveUiLocale(),
+  locale: UiLocale = resolveUiLocale(),
 ): string {
   if (!filesTruncated) {
     return body;
@@ -1021,7 +694,7 @@ export function maybeAppendGitHubFilesTruncatedWarning(
 
 export function appendGitHubFilesTruncatedWarning(
   body: string,
-  locale: "zh" | "en" = resolveUiLocale(),
+  locale: UiLocale = resolveUiLocale(),
 ): string {
   return [
     body.trim(),
@@ -1047,56 +720,17 @@ export function recordGitHubFeedbackSignal(params: {
     params.repo,
     params.pullNumber,
   );
-  const normalizedSignal = params.signal.trim().replace(/\s+/g, " ").slice(0, 240);
-  if (!normalizedSignal) {
-    return;
-  }
-
-  const now = Date.now();
-  const ttlMs = readNumberEnv(
-    "GITHUB_FEEDBACK_SIGNAL_TTL_MS",
-    DEFAULT_FEEDBACK_SIGNAL_TTL_MS,
-  );
-  pruneExpiredCache(feedbackSignalCache, now);
-  const currentSignals =
-    getFreshCacheValue(feedbackSignalCache, feedbackKey, now) ??
-    loadRuntimeStateValue<string[]>(
-      GITHUB_FEEDBACK_SIGNAL_SCOPE,
-      feedbackKey,
-      now,
-    ) ??
-    [];
-  const nextSignals = [
-    normalizedSignal,
-    ...currentSignals.filter((item) => item !== normalizedSignal),
-  ].slice(0, MAX_FEEDBACK_SIGNALS);
-
-  feedbackSignalCache.set(feedbackKey, {
-    value: nextSignals,
-    expiresAt: now + ttlMs,
-  });
-  trimCache(feedbackSignalCache, MAX_FEEDBACK_CACHE_ENTRIES);
-  saveRuntimeStateValue({
+  recordFeedbackSignal({
     scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
     key: feedbackKey,
-    value: nextSignals,
-    expiresAt: now + ttlMs,
+    signal: params.signal,
+    ttlMs: readNumberEnv(
+      "GITHUB_FEEDBACK_SIGNAL_TTL_MS",
+      DEFAULT_FEEDBACK_SIGNAL_TTL_MS,
+    ),
+    maxSignals: MAX_FEEDBACK_SIGNALS,
     maxEntries: MAX_FEEDBACK_CACHE_ENTRIES,
   });
-}
-
-function resolveDedupeTtlMs(
-  trigger: ReviewTrigger,
-  mode: ReviewMode,
-): number {
-  if (trigger === "merged" && mode === "report") {
-    return readNumberEnv(
-      "GITHUB_MERGED_DEDUPE_TTL_MS",
-      DEFAULT_MERGED_REPORT_DEDUPE_TTL_MS,
-    );
-  }
-
-  return DEFAULT_DEDUPE_TTL_MS;
 }
 
 function loadGitHubFeedbackSignals(
@@ -1106,36 +740,23 @@ function loadGitHubFeedbackSignals(
 ): string[] {
   const feedbackKey = buildGitHubFeedbackSignalKey(owner, repo, pullNumber);
   const repositoryLevelKey = buildGitHubFeedbackSignalKey(owner, repo);
-  const now = Date.now();
-  pruneExpiredCache(feedbackSignalCache, now);
-  const scoped =
-    getFreshCacheValue(feedbackSignalCache, feedbackKey, now) ??
-    loadRuntimeStateValue<string[]>(GITHUB_FEEDBACK_SIGNAL_SCOPE, feedbackKey, now) ??
-    [];
-  const repositoryLevel =
-    getFreshCacheValue(feedbackSignalCache, repositoryLevelKey, now) ??
-    loadRuntimeStateValue<string[]>(
-      GITHUB_FEEDBACK_SIGNAL_SCOPE,
-      repositoryLevelKey,
-      now,
-    ) ??
-    [];
   if (
     !Number.isInteger(pullNumber) ||
     (pullNumber as number) <= 0 ||
     feedbackKey === repositoryLevelKey
   ) {
-    return repositoryLevel;
+    return readMergedFeedbackSignals({
+      scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
+      scopedKey: repositoryLevelKey,
+      maxSignals: MAX_FEEDBACK_SIGNALS,
+    });
   }
-  if (scoped.length === 0) {
-    return repositoryLevel;
-  }
-
-  const merged = [
-    ...scoped,
-    ...repositoryLevel.filter((signal) => !scoped.includes(signal)),
-  ];
-  return merged.slice(0, MAX_FEEDBACK_SIGNALS);
+  return readMergedFeedbackSignals({
+    scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
+    scopedKey: feedbackKey,
+    fallbackKey: repositoryLevelKey,
+    maxSignals: MAX_FEEDBACK_SIGNALS,
+  });
 }
 
 function buildGitHubFeedbackSignalKey(
@@ -1151,17 +772,12 @@ function buildGitHubFeedbackSignalKey(
   return `${base}#${pullNumber}`;
 }
 
-export function __readGitHubFeedbackSignalsForTests(
+export function readGitHubFeedbackSignals(
   owner: string,
   repo: string,
   pullNumber?: number,
 ): string[] {
   return loadGitHubFeedbackSignals(owner, repo, pullNumber);
-}
-
-export function __clearGitHubFeedbackSignalCacheForTests(): void {
-  feedbackSignalCache.clear();
-  clearRuntimeStateScope(GITHUB_FEEDBACK_SIGNAL_SCOPE);
 }
 
 async function collectGitHubPullRequestContext(params: {
@@ -1224,47 +840,21 @@ async function collectGitHubPullRequestContext(params: {
     });
   }
 
-  const changedFiles: DiffFileContext[] = [];
   const limits = resolveGitHubPatchCharLimits();
-  let totalPatchChars = 0;
-
-  for (const file of files) {
-    if (
-      changedFiles.length >= MAX_FILES ||
-      totalPatchChars >= limits.maxTotalPatchChars
-    ) {
-      break;
-    }
-
-    if (!isReviewTargetFile(file.filename, "github")) {
-      continue;
-    }
-
-    const rawPatch = file.patch ?? "(binary / patch omitted)";
-    const trimmedPatch = prioritizePatchHunks(
-      rawPatch,
-      limits.maxPatchCharsPerFile,
-    );
-
-    if (totalPatchChars + trimmedPatch.length > limits.maxTotalPatchChars) {
-      break;
-    }
-
-    totalPatchChars += trimmedPatch.length;
-    const parsedPatch = parsePatchWithLineNumbers(trimmedPatch);
-
-    changedFiles.push({
+  const { files: changedFiles } = buildDiffFileContexts({
+    candidates: files.map((file) => ({
       newPath: file.filename,
       oldPath: file.previous_filename ?? file.filename,
       status: file.status,
       additions: file.additions,
       deletions: file.deletions,
-      patch: trimmedPatch,
-      extendedDiff: parsedPatch.extendedDiff,
-      oldLinesWithNumber: parsedPatch.oldLinesWithNumber,
-      newLinesWithNumber: parsedPatch.newLinesWithNumber,
-    });
-  }
+      patch: file.patch,
+    })),
+    maxFiles: MAX_FILES,
+    maxPatchCharsPerFile: limits.maxPatchCharsPerFile,
+    maxTotalPatchChars: limits.maxTotalPatchChars,
+    shouldIncludeFile: (newPath) => isReviewTargetFile(newPath, "github"),
+  });
 
   const promptAdditions =
     incrementalBaseSha && incrementalBaseSha !== pr.head.sha
@@ -1338,17 +928,17 @@ function readGitHubListFilesTruncated(
   octokit: MinimalGitHubOctokit,
   params: GitHubPullFilesListParams,
 ): boolean {
-  if (octokit.__getListFilesTruncated) {
-    return octokit.__getListFilesTruncated(params);
+  if (octokit.getListFilesTruncated) {
+    return octokit.getListFilesTruncated(params);
   }
-  return octokit.__getLastListFilesTruncated?.() ?? false;
+  return octokit.getLastListFilesTruncated?.() ?? false;
 }
 
 async function publishGitHubLineComments(
   context: GitHubReviewContext,
   collected: GitHubCollectedContext,
   reviewResult: PullRequestReviewResult,
-  locale: "zh" | "en",
+  locale: UiLocale,
 ): Promise<{ posted: number; skipped: number }> {
   const { owner, repo } = collected;
   let posted = 0;
@@ -1387,482 +977,42 @@ async function publishGitHubLineComments(
   return { posted, skipped };
 }
 
+const gitHubCommandWorkflows = createGitHubCommandWorkflows({
+  defaultDedupeTtlMs: DEFAULT_DEDUPE_TTL_MS,
+  collectPullRequestContext: async (params) =>
+    collectGitHubPullRequestContext({
+      octokit: params.context.octokit as MinimalGitHubOctokit,
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      customRules: params.customRules,
+      includeCiChecks: params.includeCiChecks,
+      feedbackSignals: params.feedbackSignals,
+    }),
+  postCommandComment: postGitHubCommandComment,
+  loadFeedbackSignals: loadGitHubFeedbackSignals,
+  buildDescribeQuestion: buildGitHubDescribeQuestion,
+  buildChangelogQuestion: buildGitHubChangelogQuestion,
+  applyChangelogUpdate: applyGitHubChangelogUpdate,
+  getErrorMessage,
+});
+
 export async function runGitHubDescribe(
   params: GitHubDescribeRunParams,
 ): Promise<void> {
-  const {
-    context,
-    pullNumber,
-    apply = false,
-    trigger,
-    dedupeSuffix,
-    throwOnError = false,
-  } = params;
-  const { owner, repo } = context.repo();
-  const locale = resolveUiLocale();
-  const managedCommentKey = "cmd-describe";
-  const requestKey = [
-    `github:${owner}/${repo}#${pullNumber}:describe:${trigger}:${apply ? "apply" : "draft"}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-
-  if (isDuplicateRequest(requestKey, DEFAULT_DEDUPE_TTL_MS)) {
-    if (trigger === "comment-command" || trigger === "describe-command") {
-      await postGitHubCommandComment({
-        context,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        body: localizeText(
-          {
-            zh: "`AI Describe` 最近 5 分钟内已经执行过，本次请求已跳过。",
-            en: "`AI Describe` already ran in the last 5 minutes, skipped this request.",
-          },
-          locale,
-        ),
-        managedCommentKey,
-      });
-    }
-    return;
-  }
-
-  try {
-    const collected = await collectGitHubPullRequestContext({
-      octokit: context.octokit,
-      owner,
-      repo,
-      pullNumber,
-    });
-    const description = await answerPullRequestQuestion(
-      collected.input,
-      buildGitHubDescribeQuestion(locale),
-    );
-
-    if (apply) {
-      await context.octokit.pulls.update({
-        owner,
-        repo,
-        pull_number: pullNumber,
-        body: description,
-      });
-      await postGitHubCommandComment({
-        context,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        body: [
-          localizeText(
-            {
-              zh: "## AI PR 描述已更新",
-              en: "## AI PR Description Updated",
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: "已根据当前 diff 自动生成并写入 PR 描述。",
-              en: "The PR description was generated from the current diff and applied.",
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-      });
-      return;
-    }
-
-    await postGitHubCommandComment({
-      context,
-      owner,
-      repo,
-      issueNumber: pullNumber,
-      body: [
-        localizeText(
-          {
-            zh: "## AI 生成 PR 描述草稿",
-            en: "## AI PR Description Draft",
-          },
-          locale,
-        ),
-        "",
-        "```markdown",
-        description,
-        "```",
-        "",
-        localizeText(
-          {
-            zh: "如需自动写入 PR 描述，请使用：`/describe --apply`",
-            en: "To apply this draft to the PR description, use: `/describe --apply`",
-          },
-          locale,
-        ),
-      ].join("\n"),
-      managedCommentKey,
-    });
-  } catch (error) {
-    clearDuplicateRecord(requestKey);
-    const reason = getErrorMessage(error);
-    context.log.error(
-      { owner, repo, pullNumber, trigger, apply, error: reason },
-      "GitHub describe failed",
-    );
-
-    try {
-      await postGitHubCommandComment({
-        context,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        body: [
-          localizeText(
-            {
-              zh: "## AI Describe 执行失败",
-              en: "## AI Describe Failed",
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${getPublicErrorMessage(error)}\``,
-              en: `Error: \`${getPublicErrorMessage(error)}\``,
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-      });
-    } catch (commentError) {
-      context.log.error(
-        {
-          owner,
-          repo,
-          pullNumber,
-          trigger,
-          apply,
-          error: getErrorMessage(commentError),
-        },
-        "Failed to publish GitHub describe failure comment",
-      );
-    }
-
-    if (throwOnError) {
-      throw ensureError(error);
-    }
-  }
+  return gitHubCommandWorkflows.runDescribe(params);
 }
 
 export async function runGitHubAsk(
   params: GitHubAskRunParams,
 ): Promise<void> {
-  const {
-    context,
-    pullNumber,
-    question,
-    trigger,
-    managedCommentKey,
-    dedupeSuffix,
-    customRules = [],
-    includeCiChecks = true,
-    commentTitle = "AI Ask",
-    displayQuestion,
-    enableConversationContext = false,
-    throwOnError = false,
-  } = params;
-  const { owner, repo } = context.repo();
-  const locale = resolveUiLocale();
-  const normalizedQuestion = question.trim().replace(/\s+/g, " ").slice(0, 120);
-  const requestKey = [
-    `github:${owner}/${repo}#${pullNumber}:ask:${trigger}:${normalizedQuestion}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-
-  if (isDuplicateRequest(requestKey, DEFAULT_DEDUPE_TTL_MS)) {
-    await postGitHubCommandComment({
-      context,
-      owner,
-      repo,
-      issueNumber: pullNumber,
-      body: localizeText(
-        {
-          zh: `\`${commentTitle}\` 最近 5 分钟内已回答过相同问题，本次请求已跳过。`,
-          en: `\`${commentTitle}\` already answered the same question in the last 5 minutes, skipped this request.`,
-        },
-        locale,
-      ),
-      managedCommentKey,
-    });
-    return;
-  }
-
-  try {
-    const feedbackSignals = loadGitHubFeedbackSignals(owner, repo, pullNumber);
-    const collected = await collectGitHubPullRequestContext({
-      octokit: context.octokit,
-      owner,
-      repo,
-      pullNumber,
-      customRules,
-      includeCiChecks,
-      feedbackSignals,
-    });
-    const sessionKey = `github:${owner}/${repo}#${pullNumber}`;
-    const conversation = enableConversationContext
-      ? loadAskConversationTurns(sessionKey)
-      : [];
-    const answer = await answerPullRequestQuestion(collected.input, question, {
-      conversation,
-    });
-    if (enableConversationContext) {
-      rememberAskConversationTurn({
-        sessionKey,
-        question: (displayQuestion ?? question).trim(),
-        answer,
-      });
-    }
-    await postGitHubCommandComment({
-      context,
-      owner,
-      repo,
-      issueNumber: pullNumber,
-      body: [
-        `## ${commentTitle}`,
-        "",
-        `**Q:** ${(displayQuestion ?? question).trim()}`,
-        "",
-        `**A:** ${answer}`,
-      ].join("\n"),
-      managedCommentKey,
-    });
-  } catch (error) {
-    clearDuplicateRecord(requestKey);
-    context.log.error(
-      {
-        owner,
-        repo,
-        pullNumber,
-        trigger,
-        error: getErrorMessage(error),
-      },
-      "GitHub ask failed",
-    );
-
-    try {
-      await postGitHubCommandComment({
-        context,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        body: [
-          localizeText(
-            {
-              zh: `## ${commentTitle} 执行失败`,
-              en: `## ${commentTitle} Failed`,
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${getPublicErrorMessage(error)}\``,
-              en: `Error: \`${getPublicErrorMessage(error)}\``,
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-      });
-    } catch (commentError) {
-      context.log.error(
-        {
-          owner,
-          repo,
-          pullNumber,
-          trigger,
-          error: getErrorMessage(commentError),
-        },
-        "Failed to publish GitHub ask failure comment",
-      );
-    }
-
-    if (throwOnError) {
-      throw ensureError(error);
-    }
-  }
+  return gitHubCommandWorkflows.runAsk(params);
 }
 
 export async function runGitHubChangelog(
   params: GitHubChangelogRunParams,
 ): Promise<void> {
-  const {
-    context,
-    pullNumber,
-    trigger,
-    focus,
-    apply = false,
-    dedupeSuffix,
-    customRules = [],
-    includeCiChecks = true,
-    throwOnError = false,
-  } = params;
-  const { owner, repo } = context.repo();
-  const locale = resolveUiLocale();
-  const managedCommentKey = "cmd-changelog";
-  const requestKey = [
-    `github:${owner}/${repo}#${pullNumber}:changelog:${trigger}:${apply ? "apply" : "draft"}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-
-  if (isDuplicateRequest(requestKey, DEFAULT_DEDUPE_TTL_MS)) {
-    await postGitHubCommandComment({
-      context,
-      owner,
-      repo,
-      issueNumber: pullNumber,
-      body: localizeText(
-        {
-          zh: "`AI Changelog` 最近 5 分钟内已执行过同类请求，本次已跳过。",
-          en: "`AI Changelog` already handled a similar request in the last 5 minutes, skipped this request.",
-        },
-        locale,
-      ),
-      managedCommentKey,
-    });
-    return;
-  }
-
-  try {
-    const feedbackSignals = loadGitHubFeedbackSignals(owner, repo, pullNumber);
-    const collected = await collectGitHubPullRequestContext({
-      octokit: context.octokit,
-      owner,
-      repo,
-      pullNumber,
-      customRules,
-      includeCiChecks,
-      feedbackSignals,
-    });
-    const question = buildGitHubChangelogQuestion(focus, locale);
-    const draft = (await answerPullRequestQuestion(collected.input, question)).trim();
-
-    if (!apply) {
-      await postGitHubCommandComment({
-        context,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        body: [
-          "## AI Changelog Draft",
-          "",
-          draft,
-          "",
-          localizeText(
-            {
-              zh: "如需自动写入仓库 CHANGELOG，请使用：`/changelog --apply`。",
-              en: "To apply this draft to repository CHANGELOG, use: `/changelog --apply`.",
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-      });
-      return;
-    }
-
-    const applyResult = await applyGitHubChangelogUpdate({
-      context,
-      owner,
-      repo,
-      branch: collected.headBranch,
-      pullNumber,
-      draft,
-    });
-    await postGitHubCommandComment({
-      context,
-      owner,
-      repo,
-      issueNumber: pullNumber,
-      body: [
-        localizeText(
-          {
-            zh: "## AI Changelog 已更新",
-            en: "## AI Changelog Updated",
-          },
-          locale,
-        ),
-        "",
-        applyResult.message,
-        "",
-        "```markdown",
-        draft,
-        "```",
-      ].join("\n"),
-      managedCommentKey,
-    });
-  } catch (error) {
-    clearDuplicateRecord(requestKey);
-    context.log.error(
-      {
-        owner,
-        repo,
-        pullNumber,
-        trigger,
-        apply,
-        error: getErrorMessage(error),
-      },
-      "GitHub changelog failed",
-    );
-
-    try {
-      await postGitHubCommandComment({
-        context,
-        owner,
-        repo,
-        issueNumber: pullNumber,
-        body: [
-          localizeText(
-            {
-              zh: "## AI Changelog 执行失败",
-              en: "## AI Changelog Failed",
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${getPublicErrorMessage(error)}\``,
-              en: `Error: \`${getPublicErrorMessage(error)}\``,
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-      });
-    } catch (commentError) {
-      context.log.error(
-        {
-          owner,
-          repo,
-          pullNumber,
-          trigger,
-          apply,
-          error: getErrorMessage(commentError),
-        },
-        "Failed to publish GitHub changelog failure comment",
-      );
-    }
-
-    if (throwOnError) {
-      throw ensureError(error);
-    }
-  }
+  return gitHubCommandWorkflows.runChangelog(params);
 }
 
 async function loadIncrementalPullFiles(params: {
@@ -1967,204 +1117,28 @@ async function loadHeadCheckRuns(params: {
   }
 }
 
-function shouldUseIncrementalReview(trigger: ReviewTrigger): boolean {
-  return trigger === "pr-synchronize" || trigger === "pr-edited";
-}
-
 function getIncrementalHead(reviewPrKey: string): string | undefined {
-  const now = Date.now();
-  pruneExpiredCache(incrementalHeadCache, now);
-  return (
-    getFreshCacheValue(incrementalHeadCache, reviewPrKey, now) ??
-    loadRuntimeStateValue<string>(GITHUB_INCREMENTAL_STATE_SCOPE, reviewPrKey, now)
-  );
+  return loadIncrementalReviewHead({
+    scope: GITHUB_INCREMENTAL_STATE_SCOPE,
+    key: reviewPrKey,
+  });
 }
 
 function rememberIncrementalHead(reviewPrKey: string, headSha: string): void {
-  const now = Date.now();
-  const ttlMs = readNumberEnv(
-    "GITHUB_INCREMENTAL_STATE_TTL_MS",
-    DEFAULT_INCREMENTAL_STATE_TTL_MS,
-  );
-  incrementalHeadCache.set(reviewPrKey, {
-    expiresAt: now + ttlMs,
-    value: headSha,
-  });
-  trimCache(incrementalHeadCache, MAX_INCREMENTAL_STATE_ENTRIES);
-  saveRuntimeStateValue({
+  rememberIncrementalReviewHead({
     scope: GITHUB_INCREMENTAL_STATE_SCOPE,
     key: reviewPrKey,
-    value: headSha,
-    expiresAt: now + ttlMs,
+    headSha,
+    ttlMs: readNumberEnv(
+      "GITHUB_INCREMENTAL_STATE_TTL_MS",
+      DEFAULT_INCREMENTAL_STATE_TTL_MS,
+    ),
     maxEntries: MAX_INCREMENTAL_STATE_ENTRIES,
   });
 }
 
-function findPotentialSecrets(
-  files: DiffFileContext[],
-  customPatterns: string[] = [],
-): SecretFinding[] {
-  const findings: SecretFinding[] = [];
-  const seen = new Set<string>();
-  const compiledCustomPatterns = compileCustomSecretPatterns(customPatterns);
-  for (const file of files) {
-    for (const candidate of extractAddedLines(file.patch, file.newPath)) {
-      const secret = detectSecretOnLine(candidate.text, compiledCustomPatterns);
-      if (!secret) {
-        continue;
-      }
-      if (isLikelyPlaceholder(candidate.text)) {
-        continue;
-      }
-
-      const key = `${candidate.path}:${candidate.line}:${secret.kind}:${secret.sample}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      findings.push({
-        path: candidate.path,
-        line: candidate.line,
-        kind: secret.kind,
-        sample: secret.sample,
-      });
-      if (findings.length >= 10) {
-        return findings;
-      }
-    }
-  }
-
-  return findings;
-}
-
-function extractAddedLines(
-  patch: string,
-  path: string,
-): Array<{ path: string; line: number; text: string }> {
-  const lines = patch.split("\n");
-  const results: Array<{ path: string; line: number; text: string }> = [];
-  let newLine = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      const match = line.match(/\+(\d+)(?:,\d+)?/);
-      newLine = match ? Number(match[1]) : newLine;
-      continue;
-    }
-
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      results.push({
-        path,
-        line: newLine,
-        text: line.slice(1),
-      });
-      newLine += 1;
-      continue;
-    }
-
-    if (line.startsWith("-") && !line.startsWith("---")) {
-      continue;
-    }
-
-    if (!line.startsWith("\\")) {
-      newLine += 1;
-    }
-  }
-
-  return results;
-}
-
-function detectSecretOnLine(
-  text: string,
-  customPatterns: RegExp[] = [],
-): { kind: string; sample: string } | undefined {
-  const rules: Array<{ kind: string; pattern: RegExp }> = [
-    { kind: "AWS Access Key", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
-    {
-      kind: "GitHub Token",
-      pattern: /\b(?:ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,})\b/,
-    },
-    { kind: "GitLab Token", pattern: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
-    { kind: "Google API Key", pattern: /\bAIza[0-9A-Za-z\-_]{35}\b/ },
-    { kind: "Google OAuth Token", pattern: /\bya29\.[0-9A-Za-z\-_]+\b/ },
-    { kind: "Slack Token", pattern: /\bxox(?:a|b|p|r|s)-[A-Za-z0-9-]{10,}\b/ },
-    { kind: "Stripe Live Key", pattern: /\bsk_live_[0-9A-Za-z]{16,}\b/ },
-    { kind: "NPM Token", pattern: /\bnpm_[A-Za-z0-9]{36}\b/ },
-    { kind: "Twilio Secret Key", pattern: /\bSK[0-9a-fA-F]{32}\b/ },
-    {
-      kind: "Private Key",
-      pattern: /-----BEGIN (?:RSA|EC|OPENSSH|DSA|PGP) PRIVATE KEY-----/,
-    },
-    {
-      kind: "Azure Storage Connection String",
-      pattern:
-        /\bDefaultEndpointsProtocol=https;AccountName=[^;\s]+;AccountKey=[^;\s]+;EndpointSuffix=[^;\s]+\b/i,
-    },
-    {
-      kind: "Database URL Credential",
-      pattern:
-        /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqps?):\/\/[^:\s/]+:[^@\s]+@[^\s]+/i,
-    },
-    {
-      kind: "Generic Credential",
-      pattern:
-        /\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*["'][^"'\\n]{8,}["']/i,
-    },
-    {
-      kind: "JWT-like Token",
-      pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
-    },
-    ...customPatterns.map((pattern, index) => ({
-      kind: `Custom Secret Pattern #${index + 1}`,
-      pattern,
-    })),
-  ];
-
-  for (const rule of rules) {
-    const matched = text.match(rule.pattern);
-    if (!matched) {
-      continue;
-    }
-
-    return {
-      kind: rule.kind,
-      sample: redactSecretSample(matched[0]),
-    };
-  }
-
-  return undefined;
-}
-
-function redactSecretSample(raw: string): string {
-  const compact = raw.replace(/\s+/g, " ").trim();
-  if (compact.length <= 10) {
-    return `${compact.slice(0, 2)}***`;
-  }
-
-  return `${compact.slice(0, 4)}***${compact.slice(-4)}`;
-}
-
 export function isLikelyPlaceholder(text: string): boolean {
-  const normalized = text.toLowerCase();
-  const placeholderPatterns = [
-    /\bchange[_-]?me\b/,
-    /\byour[_-]?(api[_-]?key|token|secret|password)[_-]?here\b/,
-    /\bfill[_-]?in[_-]?your(?:[_-]?(api[_-]?key|token|secret|password))?\b/,
-    /<\s*your[-_a-z0-9]+\s*>/,
-    /\bxxx+\b/,
-    /\btodo\b/,
-  ];
-  if (placeholderPatterns.some((pattern) => pattern.test(normalized))) {
-    return true;
-  }
-
-  return (
-    normalized.includes("example") ||
-    normalized.includes("sample") ||
-    normalized.includes("dummy") ||
-    normalized.includes("placeholder") ||
-    normalized.includes("replace-with")
-  );
+  return isLikelyPlaceholderShared(text);
 }
 
 async function publishSecretWarningComment(params: {
@@ -2186,49 +1160,15 @@ async function publishSecretWarningComment(params: {
   }
   const locale = resolveUiLocale();
 
-  const items = params.findings
-    .slice(0, 10)
-    .map(
-      (item) =>
-        localizeText(
-          {
-            zh: `- [ ] \`${item.path}:${item.line}\` 检测到疑似 **${item.kind}**（样本：\`${item.sample}\`）`,
-            en: `- [ ] \`${item.path}:${item.line}\` detected possible **${item.kind}** (sample: \`${item.sample}\`)`,
-          },
-          locale,
-        ),
-    );
-
   await params.context.octokit.issues.createComment({
     owner: params.owner,
     repo: params.repo,
     issue_number: params.pullNumber,
-    body: [
-      localizeText(
-        {
-          zh: "## 安全预警：疑似密钥泄露",
-          en: "## Security Alert: Potential Secret Leak",
-        },
-        locale,
-      ),
-      "",
-      localizeText(
-        {
-          zh: "请立即确认以下内容是否为真实凭据；若是，请立刻轮换并从历史中移除：",
-          en: "Please verify whether these are real credentials; if yes, rotate and remove them from history immediately:",
-        },
-        locale,
-      ),
-      ...items,
-      "",
-      localizeText(
-        {
-          zh: "建议：启用 GitHub secret scanning 与 push protection 作为长期防线。",
-          en: "Recommendation: enable GitHub secret scanning and push protection as a long-term safeguard.",
-        },
-        locale,
-      ),
-    ].join("\n"),
+    body: buildSecretWarningComment({
+      platform: "github",
+      findings: params.findings,
+      locale,
+    }),
   });
 }
 
@@ -2238,48 +1178,16 @@ function inferPullRequestLabels(params: {
   reviewResult: PullRequestReviewResult;
   hasSecretFinding: boolean;
 }): string[] {
-  const labels = new Set<string>();
-  const title = params.title.toLowerCase();
-  const paths = params.files.map((file) => file.newPath.toLowerCase());
-
-  if (params.hasSecretFinding) {
-    labels.add("security");
-  }
-
-  if (/\b(fix|bug|hotfix)\b/.test(title)) {
-    labels.add("bugfix");
-  }
-
-  if (/\b(feat|feature)\b/.test(title)) {
-    labels.add("feature");
-  }
-
-  if (/\brefactor\b/.test(title)) {
-    labels.add("refactor");
-  }
-
-  if (paths.length > 0 && paths.every((path) => isDocumentationFile(path))) {
-    labels.add("docs");
-  }
-
-  if (params.reviewResult.riskLevel === "high") {
-    labels.add("needs-attention");
-  }
-
-  if (labels.size === 0) {
-    labels.add("ai-reviewed");
-  }
-
-  return [...labels].slice(0, 8);
-}
-
-function isDocumentationFile(path: string): boolean {
-  return (
-    path.endsWith(".md") ||
-    path.endsWith(".mdx") ||
-    path.includes("/docs/") ||
-    path.startsWith("docs/")
-  );
+  return inferReviewLabels({
+    title: params.title,
+    files: params.files,
+    reviewResult: params.reviewResult,
+    hasSecretFinding: params.hasSecretFinding,
+    docsFromFiles: "all-documentation",
+    highRiskLabel: "needs-attention",
+    fallbackLabel: "ai-reviewed",
+    maxLabels: 8,
+  });
 }
 
 async function tryAddPullRequestLabels(params: {
@@ -2321,111 +1229,74 @@ async function loadRepositoryProcessGuidelines(params: {
   ref: string;
 }): Promise<ProcessGuideline[]> {
   const { octokit, owner, repo, ref } = params;
-  const cacheKey = `${owner}/${repo}@${ref}`;
-  const now = Date.now();
-  pruneExpiredCache(guidelineCache, now);
-  const cached = getFreshCacheValue(guidelineCache, cacheKey, now);
-  if (cached) {
-    return cached;
-  }
-
-  const guidelines: ProcessGuideline[] = [];
-  const visited = new Set<string>();
-
-  for (const path of GITHUB_GUIDELINE_FILE_PATHS) {
-    await tryAddGuideline({
-      octokit,
-      owner,
-      repo,
-      ref,
-      path,
-      guidelines,
-      visited,
-    });
-  }
-
-  for (const dir of GITHUB_GUIDELINE_DIRECTORIES) {
-    const entries = await tryListDirectory({
-      octokit,
-      owner,
-      repo,
-      ref,
-      path: dir,
-    });
-
-    for (const entry of entries.slice(0, MAX_GUIDELINES_PER_DIRECTORY)) {
-      if (!isProcessTemplateFile(entry.path, "github")) {
-        continue;
-      }
-
-      await tryAddGuideline({
+  return loadProcessGuidelinesWithCache({
+    scope: GITHUB_GUIDELINE_CACHE_SCOPE,
+    cacheKey: `${owner}/${repo}@${ref}`,
+    ttlMs: readNumberEnv(
+      "GITHUB_GUIDELINE_CACHE_TTL_MS",
+      DEFAULT_GUIDELINE_CACHE_TTL_MS,
+    ),
+    maxEntries: MAX_GUIDELINE_CACHE_ENTRIES,
+    filePaths: GITHUB_GUIDELINE_FILE_PATHS,
+    directories: GITHUB_GUIDELINE_DIRECTORIES,
+    maxGuidelines: MAX_GUIDELINES,
+    maxGuidelinesPerDirectory: MAX_GUIDELINES_PER_DIRECTORY,
+    isTemplateFile: (path) => isProcessTemplateFile(path, "github"),
+    readFile: async (path) =>
+      readGitHubGuidelineFile({
         octokit,
         owner,
         repo,
         ref,
-        path: entry.path,
-        guidelines,
-        visited,
-      });
-    }
-  }
-
-  const result = guidelines.slice(0, MAX_GUIDELINES);
-  guidelineCache.set(cacheKey, {
-    expiresAt:
-      now +
-      readNumberEnv("GITHUB_GUIDELINE_CACHE_TTL_MS", DEFAULT_GUIDELINE_CACHE_TTL_MS),
-    value: result,
+        path,
+      }),
+    listDirectory: async (path) =>
+      listGitHubDirectory({
+        octokit,
+        owner,
+        repo,
+        ref,
+        path,
+      }),
   });
-  trimCache(guidelineCache, MAX_GUIDELINE_CACHE_ENTRIES);
-
-  return result;
 }
 
-async function tryAddGuideline(params: {
+async function readGitHubGuidelineFile(params: {
   octokit: MinimalGitHubOctokit;
   owner: string;
   repo: string;
   ref: string;
   path: string;
-  guidelines: ProcessGuideline[];
-  visited: Set<string>;
-}): Promise<void> {
-  const normalizedPath = params.path.trim();
-  if (!normalizedPath || params.visited.has(normalizedPath.toLowerCase())) {
-    return;
-  }
-
-  params.visited.add(normalizedPath.toLowerCase());
-
+}): Promise<ProcessGuideline | undefined> {
   try {
     const response = await params.octokit.repos.getContent({
       owner: params.owner,
       repo: params.repo,
-      path: normalizedPath,
+      path: params.path,
       ref: params.ref,
     });
     const file = asContentFile(response.data);
     if (!file || file.type !== "file" || !file.content) {
-      return;
+      return undefined;
     }
 
     const text = decodeGitHubFileContent(file.content, file.encoding);
     const trimmed = text.trim();
     if (!trimmed) {
-      return;
+      return undefined;
     }
 
-    params.guidelines.push({
-      path: file.path ?? normalizedPath,
+    return {
+      path: file.path ?? params.path,
       content: trimmed.slice(0, 4_000),
-    });
+    };
   } catch {
     // File does not exist or cannot be read. Continue with other candidates.
+    return undefined;
   }
 }
 
-async function tryListDirectory(params: {
+async function listGitHubDirectory(params: {
   octokit: MinimalGitHubOctokit;
   owner: string;
   repo: string;
@@ -2466,61 +1337,15 @@ function asContentFile(
 
 export function buildGitHubChangelogQuestion(
   focus: string | undefined,
-  locale: "zh" | "en" = resolveUiLocale(),
+  locale: UiLocale = resolveUiLocale(),
 ): string {
-  const normalizedFocus = focus?.trim() ?? "";
-  if (locale === "en") {
-    if (normalizedFocus) {
-      return `Generate a Markdown changelog entry (Keep a Changelog style) for the current PR changes, with extra focus on: ${normalizedFocus}. Output only the changelog content body without extra explanation.`;
-    }
-    return "Generate a Markdown changelog entry (Keep a Changelog style) for the current PR changes. Output only the changelog content body without extra explanation.";
-  }
-
-  if (normalizedFocus) {
-    return `请根据当前 PR 改动生成可直接放入 CHANGELOG.md 的 Markdown 条目（Keep a Changelog 风格），重点覆盖：${normalizedFocus}。仅输出 changelog 内容本体，不要额外说明。`;
-  }
-
-  return "请根据当前 PR 改动生成可直接放入 CHANGELOG.md 的 Markdown 条目（Keep a Changelog 风格）。仅输出 changelog 内容本体，不要额外说明。";
+  return buildChangelogQuestion("PR", focus, locale);
 }
 
 export function buildGitHubDescribeQuestion(
-  locale: "zh" | "en" = resolveUiLocale(),
+  locale: UiLocale = resolveUiLocale(),
 ): string {
-  if (locale === "en") {
-    return [
-      "Based on current PR changes, generate a Markdown draft that can be pasted directly into the PR description.",
-      "Structure requirements: include the following headings in this exact order:",
-      "## Summary",
-      "## Change Overview",
-      "## File Walkthrough",
-      "## Test Plan",
-      "## Related Issue",
-      "Content requirements:",
-      "1) Summarize the goal and major impact of this change;",
-      "2) In Change Overview, include change size and branch information;",
-      "3) In File Walkthrough, cover key files and important changes;",
-      "4) In Test Plan, provide an executable verification checklist;",
-      "5) In Related Issue, keep the placeholder `- Closes #`.",
-      "Output requirement: return Markdown body only. No JSON, no code fences, no extra explanation.",
-    ].join("\n");
-  }
-
-  return [
-    "请基于当前 PR 的变更内容，生成一份可直接粘贴到 PR 描述区的 Markdown 草稿。",
-    "结构要求：必须包含以下标题（按顺序）：",
-    "## Summary",
-    "## Change Overview",
-    "## File Walkthrough",
-    "## Test Plan",
-    "## Related Issue",
-    "内容要求：",
-    "1) 总结本次变更的目标和主要影响；",
-    "2) Change Overview 里给出变更规模和分支信息；",
-    "3) File Walkthrough 覆盖关键文件和改动点；",
-    "4) Test Plan 给出可执行的验证清单；",
-    "5) Related Issue 保留 `- Closes #` 占位。",
-    "输出要求：只输出 Markdown 本体，不要 JSON，不要代码块，不要额外解释。",
-  ].join("\n");
+  return buildDescribeQuestion("PR", locale);
 }
 
 async function applyGitHubChangelogUpdate(params: {
@@ -2532,7 +1357,7 @@ async function applyGitHubChangelogUpdate(params: {
   draft: string;
 }): Promise<{ message: string }> {
   const locale = resolveUiLocale();
-  const path = process.env.GITHUB_CHANGELOG_PATH?.trim() || "CHANGELOG.md";
+  const path = readStringEnv("GITHUB_CHANGELOG_PATH", "CHANGELOG.md");
   const title = `PR #${params.pullNumber}`;
   const octokit = params.context.octokit;
   if (!octokit.repos.createOrUpdateFileContents) {
@@ -2592,61 +1417,9 @@ export function mergeChangelogContent(
   draft: string,
   title: string,
 ): string {
-  const normalizedDraft = draft.trim();
-  const safeTitle = title.trim();
-  const body = currentContent.trim();
-  if (body && hasChangelogTitle(body, safeTitle)) {
-    return `${body.trimEnd()}\n`;
-  }
-
-  const entry = [`### ${safeTitle}`, "", normalizedDraft].join("\n");
-
-  if (!body) {
-    return ["# Changelog", "", "## Unreleased", "", entry, ""].join("\n");
-  }
-
-  const unreleasedRe = /^##\s+Unreleased\s*$/im;
-  const match = unreleasedRe.exec(body);
-  if (!match || match.index === undefined) {
-    return [body, "", "## Unreleased", "", entry, ""].join("\n");
-  }
-
-  const insertAt = match.index + match[0].length;
-  return `${body.slice(0, insertAt)}\n\n${entry}\n${body.slice(insertAt)}`.trimEnd() + "\n";
-}
-
-function hasChangelogTitle(content: string, title: string): boolean {
-  const safeTitle = title.trim();
-  if (!safeTitle) {
-    return false;
-  }
-
-  const escapedTitle = escapeRegExp(safeTitle);
-  return new RegExp(`^###\\s+${escapedTitle}\\s*$`, "im").test(content);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return mergeSharedChangelogContent(currentContent, draft, title);
 }
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function getPublicErrorMessage(error: unknown): string {
-  const message = getErrorMessage(error);
-
-  const allowList = [
-    /^Missing\s+[A-Z0-9_]+/,
-    /^Unsupported AI_PROVIDER/,
-    /^Model returned empty/,
-    /^Model response is not valid JSON/,
-    /^Request timed out\.?/i,
-  ];
-
-  if (allowList.some((pattern) => pattern.test(message))) {
-    return message;
-  }
-
-  return "内部执行错误（详情请查看服务日志）";
 }

@@ -1,9 +1,5 @@
-import {
-  __getRuntimeStateScopeEntryCountForTests,
-  clearRuntimeStateScope,
-  loadRuntimeStateValue,
-  saveRuntimeStateValue,
-} from "./runtime-state.js";
+import { getRuntimeStateScopeEntryCount, loadRuntimeStateValue, saveRuntimeStateValue } from "./runtime-state.js";
+import { nowMs } from "./clock.js";
 
 const MAX_RATE_LIMIT_KEYS = 5_000;
 const MAX_RATE_LIMIT_KEY_IDLE_MS = 24 * 60 * 60 * 1_000;
@@ -30,7 +26,7 @@ export function isRateLimited(key: string, limit: number, windowMs: number): boo
 
   const safeLimit = Math.max(1, Math.floor(limit));
   const safeWindowMs = Math.max(1, Math.floor(windowMs));
-  const now = Date.now();
+  const now = nowMs();
   const windowStart = now - safeWindowMs;
 
   const existing =
@@ -50,7 +46,7 @@ export function isRateLimited(key: string, limit: number, windowMs: number): boo
 }
 
 function touchRateLimitRecord(key: string, timestamps: number[]): void {
-  const latest = timestamps[timestamps.length - 1] ?? Date.now();
+  const latest = timestamps[timestamps.length - 1] ?? nowMs();
   saveRuntimeStateValue({
     scope: RATE_LIMIT_STATE_SCOPE,
     key,
@@ -60,10 +56,6 @@ function touchRateLimitRecord(key: string, timestamps: number[]): void {
   });
 }
 
-export function __clearRateLimitStateForTests(): void {
-  clearRuntimeStateScope(RATE_LIMIT_STATE_SCOPE);
-}
-
-export function __getRateLimitRecordCountForTests(): number {
-  return __getRuntimeStateScopeEntryCountForTests(RATE_LIMIT_STATE_SCOPE);
+export function getRateLimitRecordCount(): number {
+  return getRuntimeStateScopeEntryCount(RATE_LIMIT_STATE_SCOPE);
 }

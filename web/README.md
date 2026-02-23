@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MR Agent Web
 
-## Getting Started
+Marketing/presentation frontend for MR Agent, built with Next.js App Router + `next-intl`.
 
-First, run the development server:
+## Stack
+
+- Next.js 16
+- React 19
+- TypeScript
+- Tailwind CSS v4
+- `next-intl` (zh/en routing and messages)
+
+## Local Development
 
 ```bash
+cd web
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Default local URL: `http://localhost:3000`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build and Run
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cd web
+npm run build
+npm run start
+```
 
-## Learn More
+## Quality Checks
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cd web
+npm run lint
+# run web tests from repository root (uses root dev dependency `tsx`)
+cd ..
+node --import tsx --test web/tests/*.test.ts
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Project Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `app/` - App Router pages, layouts, SEO routes (`sitemap.ts`, `robots.ts`, `llms.txt`)
+- `components/home/` - homepage sections and interactive components
+- `i18n/` + `messages/` - locale config and translation content
+- `lib/` - SEO and i18n helpers
+- `tests/` - Node test files for i18n and SEO config

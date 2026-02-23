@@ -4,14 +4,17 @@ import "reflect-metadata";
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { json, urlencoded, type Request } from "express";
+import { prepareRuntimeStateBackend, readOptionalStringEnv } from "#core";
 import { AppModule } from "./app.module.js";
 
 async function bootstrap(): Promise<void> {
+  await prepareRuntimeStateBackend();
+
   const app = await NestFactory.create(AppModule, {
     bodyParser: false,
     rawBody: true,
   });
-  const bodyLimit = resolveWebhookBodyLimit(process.env.WEBHOOK_BODY_LIMIT);
+  const bodyLimit = resolveWebhookBodyLimit(readOptionalStringEnv("WEBHOOK_BODY_LIMIT"));
   app.use(
     json({
       limit: bodyLimit,
@@ -27,7 +30,7 @@ async function bootstrap(): Promise<void> {
   );
   app.enableShutdownHooks();
 
-  const port = resolvePort(process.env.PORT);
+  const port = resolvePort(readOptionalStringEnv("PORT"));
   await app.listen(port);
 
   Logger.log(`MR Agent listening on port ${port}`, "Bootstrap");

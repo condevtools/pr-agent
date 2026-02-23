@@ -1,12 +1,45 @@
-export * from "./ask-session.js";
-export * from "./cache.js";
-export * from "./dedupe.js";
-export * from "./env.js";
-export * from "./errors.js";
-export * from "./fnv.js";
-export * from "./http.js";
-export * from "./i18n.js";
-export * from "./path.js";
-export * from "./rate-limit.js";
-export * from "./runtime-state.js";
-export * from "./secret-patterns.js";
+export {
+  loadAskConversationTurns,
+  rememberAskConversationTurn,
+  type AskConversationTurn,
+} from "./ask-session.js";
+export {
+  getFreshCacheValue,
+  pruneExpiredCache,
+  trimCache,
+  type ExpiringCacheEntry,
+} from "./cache.js";
+export { ManualClock, nowMs, systemClock, type Clock } from "./clock.js";
+export { clearDuplicateRecord, isDuplicateRequest } from "./dedupe.js";
+export {
+  parseBooleanEnv,
+  readNumberEnv,
+  readOptionalStringEnv,
+  readStringEnv,
+} from "./env.js";
+export { BadWebhookRequestError, ensureError, WebhookAuthError } from "./errors.js";
+export { fnv1a32Hex } from "./fnv.js";
+export {
+  beginHttpShutdown,
+  computeRetryDelayMs,
+  fetchWithRetry,
+  getHttpShutdownSignal,
+  isHttpShutdownRequested,
+  type FetchRetryOptions,
+} from "./http.js";
+export { localizeText, resolveUiLocale, type UiLocale } from "./i18n.js";
+export { logCore } from "./logger.js";
+export { encodePath } from "./path.js";
+export { isRateLimited, normalizeRateLimitPart } from "./rate-limit.js";
+export {
+  assertRuntimeStateBackendReady,
+  deleteRuntimeStateValue,
+  loadRuntimeStateValue,
+  prepareRuntimeStateBackend,
+  resolveRuntimeStateBackend,
+  saveRuntimeStateValue,
+} from "./runtime-state.js";
+export {
+  compileCustomSecretPatterns,
+  type CustomSecretPatternMatcher,
+} from "./secret-patterns.js";

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  flushWebhookStoreWrites,
   assertWebhookReplayAuthorized,
   getStoredWebhookEventById,
   listStoredWebhookEvents,
@@ -16,7 +17,7 @@ const storeFile = join(
   `mr-agent-webhook-events-${Date.now()}-${Math.random().toString(16).slice(2)}.ndjson`,
 );
 
-test("webhook replay store can persist and read events", () => {
+test("webhook replay store can persist and read events", async () => {
   const originalStoreEnabled = process.env.WEBHOOK_EVENT_STORE_ENABLED;
   const originalStoreFile = process.env.WEBHOOK_EVENT_STORE_FILE;
 
@@ -37,15 +38,16 @@ test("webhook replay store can persist and read events", () => {
     });
 
     assert.ok(eventId);
+    await flushWebhookStoreWrites();
 
-    const listed = listStoredWebhookEvents({
+    const listed = await listStoredWebhookEvents({
       platform: "github",
       limit: 5,
     });
     assert.equal(listed.length, 1);
     assert.equal(listed[0]?.id, eventId);
 
-    const stored = getStoredWebhookEventById({
+    const stored = await getStoredWebhookEventById({
       id: eventId ?? "",
       platform: "github",
     });

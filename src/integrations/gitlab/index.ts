@@ -1,1 +1,1 @@
-export * from "./gitlab-review.js";
+export { runGitLabWebhook, type GitLabWebhookBody } from "./gitlab-review.js";

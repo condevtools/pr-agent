@@ -59,7 +59,7 @@ test("rest octokit tracks list-files truncated flag per pull request", async () 
     });
 
     assert.equal(
-      octokit.__getListFilesTruncated?.({
+      octokit.getListFilesTruncated?.({
         owner: "acme",
         repo: "demo",
         pull_number: 1,
@@ -68,7 +68,7 @@ test("rest octokit tracks list-files truncated flag per pull request", async () 
       true,
     );
     assert.equal(
-      octokit.__getListFilesTruncated?.({
+      octokit.getListFilesTruncated?.({
         owner: "acme",
         repo: "demo",
         pull_number: 2,

@@ -1,208 +1,73 @@
 import type { ApplicationFunction } from "probot";
+import { assertRuntimeStateBackendReady } from "#core";
 import {
-  handleGitHubIssueCommentCommand,
-  recordGitHubFeedbackSignal,
-  resolveGitHubPullRequestAutoReviewPolicy,
-  resolveGitHubReviewBehaviorPolicy,
-  runGitHubIssuePolicyCheck,
-  runGitHubPullRequestPolicyCheck,
-  runGitHubReview,
+  handleGitHubWebhookEvent,
 } from "#integrations/github";
 
+const ISSUE_POLICY_EVENTS = ["issues.opened", "issues.edited"] as const;
+const PULL_REQUEST_EVENTS = [
+  "pull_request.opened",
+  "pull_request.edited",
+  "pull_request.synchronize",
+  "pull_request.closed",
+] as const;
+const PULL_REQUEST_REVIEW_THREAD_EVENTS = [
+  "pull_request_review_thread.resolved",
+  "pull_request_review_thread.unresolved",
+] as const;
+
 export const app: ApplicationFunction = (probot): void => {
+  assertRuntimeStateBackendReady();
   probot.log.info("AI reviewer app loaded (GitHub + GitLab compatible)");
 
-  probot.on("issues.opened", async (context) => {
-    if (context.payload.issue.pull_request) {
-      return;
-    }
-
-    await runGitHubIssuePolicyCheck({
-      context,
-      issueNumber: context.payload.issue.number,
-      title: context.payload.issue.title ?? "",
-      body: context.payload.issue.body ?? "",
-      ref: context.payload.repository.default_branch,
+  const dispatchEvent = async (params: {
+    eventName: "issues" | "pull_request" | "pull_request_review_thread" | "issue_comment";
+    context: {
+      payload: unknown;
+      octokit: unknown;
+      log: unknown;
+    };
+  }): Promise<void> => {
+    await handleGitHubWebhookEvent({
+      eventName: params.eventName,
+      payload: params.context.payload,
+      octokit: params.context.octokit as never,
+      logger: params.context.log as never,
+      runtimeMode: "github-app",
     });
-  });
+  };
 
-  probot.on("issues.edited", async (context) => {
-    if (context.payload.issue.pull_request) {
-      return;
-    }
-
-    await runGitHubIssuePolicyCheck({
-      context,
-      issueNumber: context.payload.issue.number,
-      title: context.payload.issue.title ?? "",
-      body: context.payload.issue.body ?? "",
-      ref: context.payload.repository.default_branch,
-    });
-  });
-
-  probot.on("pull_request.opened", async (context) => {
-    await runGitHubPullRequestPolicyCheck({
-      context,
-      pullNumber: context.payload.pull_request.number,
-      title: context.payload.pull_request.title ?? "",
-      body: context.payload.pull_request.body ?? "",
-      headSha: context.payload.pull_request.head.sha,
-      baseRef: context.payload.pull_request.base.ref,
-      detailsUrl: context.payload.pull_request.html_url,
-    });
-
-    const autoReview = await resolveGitHubPullRequestAutoReviewPolicy({
-      context,
-      baseRef: context.payload.pull_request.base.ref,
-      action: "opened",
-    });
-    if (autoReview.enabled) {
-      await runGitHubReview({
+  for (const issueEvent of ISSUE_POLICY_EVENTS) {
+    probot.on(issueEvent, async (context) => {
+      await dispatchEvent({
+        eventName: "issues",
         context,
-        pullNumber: context.payload.pull_request.number,
-        mode: autoReview.mode,
-        trigger: "pr-opened",
-        dedupeSuffix: context.payload.pull_request.head.sha,
-        customRules: autoReview.customRules,
-        includeCiChecks: autoReview.includeCiChecks,
-        enableSecretScan: autoReview.secretScanEnabled,
-        secretScanCustomPatterns: autoReview.secretScanCustomPatterns,
-        enableAutoLabel: autoReview.autoLabelEnabled,
       });
-    }
-  });
-
-  probot.on("pull_request.edited", async (context) => {
-    await runGitHubPullRequestPolicyCheck({
-      context,
-      pullNumber: context.payload.pull_request.number,
-      title: context.payload.pull_request.title ?? "",
-      body: context.payload.pull_request.body ?? "",
-      headSha: context.payload.pull_request.head.sha,
-      baseRef: context.payload.pull_request.base.ref,
-      detailsUrl: context.payload.pull_request.html_url,
     });
+  }
 
-    const autoReview = await resolveGitHubPullRequestAutoReviewPolicy({
-      context,
-      baseRef: context.payload.pull_request.base.ref,
-      action: "edited",
-    });
-    if (autoReview.enabled) {
-      await runGitHubReview({
+  for (const pullRequestEvent of PULL_REQUEST_EVENTS) {
+    probot.on(pullRequestEvent, async (context) => {
+      await dispatchEvent({
+        eventName: "pull_request",
         context,
-        pullNumber: context.payload.pull_request.number,
-        mode: autoReview.mode,
-        trigger: "pr-edited",
-        dedupeSuffix: context.payload.pull_request.head.sha,
-        customRules: autoReview.customRules,
-        includeCiChecks: autoReview.includeCiChecks,
-        enableSecretScan: autoReview.secretScanEnabled,
-        secretScanCustomPatterns: autoReview.secretScanCustomPatterns,
-        enableAutoLabel: autoReview.autoLabelEnabled,
       });
-    }
-  });
-
-  probot.on("pull_request.synchronize", async (context) => {
-    await runGitHubPullRequestPolicyCheck({
-      context,
-      pullNumber: context.payload.pull_request.number,
-      title: context.payload.pull_request.title ?? "",
-      body: context.payload.pull_request.body ?? "",
-      headSha: context.payload.pull_request.head.sha,
-      baseRef: context.payload.pull_request.base.ref,
-      detailsUrl: context.payload.pull_request.html_url,
     });
+  }
 
-    const autoReview = await resolveGitHubPullRequestAutoReviewPolicy({
-      context,
-      baseRef: context.payload.pull_request.base.ref,
-      action: "synchronize",
-    });
-    if (autoReview.enabled) {
-      await runGitHubReview({
+  for (const threadEvent of PULL_REQUEST_REVIEW_THREAD_EVENTS) {
+    probot.on(threadEvent, async (context) => {
+      await dispatchEvent({
+        eventName: "pull_request_review_thread",
         context,
-        pullNumber: context.payload.pull_request.number,
-        mode: autoReview.mode,
-        trigger: "pr-synchronize",
-        dedupeSuffix: context.payload.pull_request.head.sha,
-        customRules: autoReview.customRules,
-        includeCiChecks: autoReview.includeCiChecks,
-        enableSecretScan: autoReview.secretScanEnabled,
-        secretScanCustomPatterns: autoReview.secretScanCustomPatterns,
-        enableAutoLabel: autoReview.autoLabelEnabled,
       });
-    }
-  });
-
-  probot.on("pull_request.closed", async (context) => {
-    if (!context.payload.pull_request.merged) {
-      return;
-    }
-
-    const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
-      context,
-      baseRef: context.payload.pull_request.base.ref,
     });
-    await runGitHubReview({
-      context,
-      pullNumber: context.payload.pull_request.number,
-      mode: "report",
-      trigger: "merged",
-      customRules: reviewBehavior.customRules,
-      includeCiChecks: reviewBehavior.includeCiChecks,
-      enableSecretScan: reviewBehavior.secretScanEnabled,
-      secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
-      enableAutoLabel: reviewBehavior.autoLabelEnabled,
-    });
-  });
-
-  probot.on("pull_request_review_thread.resolved", async (context) => {
-    const repoInfo = context.repo();
-    const pullNumber = context.payload.pull_request?.number;
-    if (!pullNumber) {
-      return;
-    }
-
-    recordGitHubFeedbackSignal({
-      owner: repoInfo.owner,
-      repo: repoInfo.repo,
-      pullNumber,
-      signal: `PR #${pullNumber} review thread resolved: developer indicates suggestion fixed/high-value`,
-    });
-  });
-
-  probot.on("pull_request_review_thread.unresolved", async (context) => {
-    const repoInfo = context.repo();
-    const pullNumber = context.payload.pull_request?.number;
-    if (!pullNumber) {
-      return;
-    }
-
-    recordGitHubFeedbackSignal({
-      owner: repoInfo.owner,
-      repo: repoInfo.repo,
-      pullNumber,
-      signal: `PR #${pullNumber} review thread unresolved: developer indicates suggestion still not satisfied`,
-    });
-  });
+  }
 
   probot.on("issue_comment.created", async (context) => {
-    const body = context.payload.comment.body?.trim() ?? "";
-    if (!context.payload.issue.pull_request) {
-      return;
-    }
-    const repoInfo = context.repo();
-    await handleGitHubIssueCommentCommand({
+    await dispatchEvent({
+      eventName: "issue_comment",
       context,
-      owner: repoInfo.owner,
-      repo: repoInfo.repo,
-      issueNumber: context.payload.issue.number,
-      body,
-      commentUser: context.payload.comment.user,
-      rateLimitPlatform: "github-app",
-      throwOnError: false,
     });
   });
 };

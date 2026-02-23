@@ -18,10 +18,12 @@ test("health endpoint returns static status when deep check is disabled", async 
 test("health deep check includes ai probe details", async () => {
   const originalProvider = process.env.AI_PROVIDER;
   const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalLiveProbe = process.env.HEALTHCHECK_AI_LIVE_PROBE;
   const originalFetch = globalThis.fetch;
 
   process.env.AI_PROVIDER = "openai";
   process.env.OPENAI_API_KEY = "test-key";
+  process.env.HEALTHCHECK_AI_LIVE_PROBE = "true";
   globalThis.fetch = async () =>
     new Response(
       JSON.stringify({
@@ -48,6 +50,41 @@ test("health deep check includes ai probe details", async () => {
   } finally {
     process.env.AI_PROVIDER = originalProvider;
     process.env.OPENAI_API_KEY = originalApiKey;
+    process.env.HEALTHCHECK_AI_LIVE_PROBE = originalLiveProbe;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("health deep check skips live provider request by default", async () => {
+  const originalProvider = process.env.AI_PROVIDER;
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalLiveProbe = process.env.HEALTHCHECK_AI_LIVE_PROBE;
+  const originalFetch = globalThis.fetch;
+
+  process.env.AI_PROVIDER = "openai";
+  process.env.OPENAI_API_KEY = "test-key";
+  delete process.env.HEALTHCHECK_AI_LIVE_PROBE;
+
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return new Response("", { status: 500 });
+  };
+
+  try {
+    const service = new AppService();
+    const result = await service.getHealth({
+      mode: "nest",
+      deep: true,
+    });
+
+    assert.equal(result.checks?.ai.provider, "openai");
+    assert.equal(result.checks?.ai.ok, true);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    process.env.AI_PROVIDER = originalProvider;
+    process.env.OPENAI_API_KEY = originalApiKey;
+    process.env.HEALTHCHECK_AI_LIVE_PROBE = originalLiveProbe;
     globalThis.fetch = originalFetch;
   }
 });

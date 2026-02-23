@@ -3,16 +3,43 @@ import { readNumberEnv } from "./env.js";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRY_COUNT = 2;
 const DEFAULT_RETRY_BACKOFF_MS = 400;
+const DEFAULT_RETRY_MAX_DELAY_MS = 30_000;
 const HTTP_SHUTDOWN_ERROR_MESSAGE = "http client is shutting down";
 
-let httpShutdownRequested = false;
-let httpShutdownController = new AbortController();
+export class HttpLifecycleRuntime {
+  private shutdownRequested = false;
+  private shutdownController = new AbortController();
+
+  isShutdownRequested(): boolean {
+    return this.shutdownRequested;
+  }
+
+  getShutdownSignal(): AbortSignal {
+    return this.shutdownController.signal;
+  }
+
+  beginShutdown(): void {
+    if (this.shutdownRequested) {
+      return;
+    }
+    this.shutdownRequested = true;
+    this.shutdownController.abort(new Error(HTTP_SHUTDOWN_ERROR_MESSAGE));
+  }
+}
+
+export function createHttpLifecycleRuntime(): HttpLifecycleRuntime {
+  return new HttpLifecycleRuntime();
+}
+
+const defaultHttpRuntime = createHttpLifecycleRuntime();
 
 export interface FetchRetryOptions {
   timeoutMs?: number;
   retries?: number;
   backoffMs?: number;
+  maxDelayMs?: number;
   retryOnStatuses?: number[];
+  runtime?: HttpLifecycleRuntime;
 }
 
 export async function fetchWithRetry(
@@ -20,7 +47,8 @@ export async function fetchWithRetry(
   init: RequestInit = {},
   options: FetchRetryOptions = {},
 ): Promise<Response> {
-  if (httpShutdownRequested) {
+  const runtime = options.runtime ?? defaultHttpRuntime;
+  if (runtime.isShutdownRequested()) {
     throw new Error(HTTP_SHUTDOWN_ERROR_MESSAGE);
   }
 
@@ -28,13 +56,15 @@ export async function fetchWithRetry(
   const retries = options.retries ?? readNumberEnv("HTTP_RETRIES", DEFAULT_RETRY_COUNT);
   const backoffMs =
     options.backoffMs ?? readNumberEnv("HTTP_RETRY_BACKOFF_MS", DEFAULT_RETRY_BACKOFF_MS);
+  const maxDelayMs =
+    options.maxDelayMs ?? readNumberEnv("HTTP_RETRY_MAX_DELAY_MS", DEFAULT_RETRY_MAX_DELAY_MS);
   const retryOnStatuses =
     options.retryOnStatuses ?? [408, 409, 425, 429, 500, 502, 503, 504];
 
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    if (httpShutdownRequested) {
+    if (runtime.isShutdownRequested()) {
       throw new Error(HTTP_SHUTDOWN_ERROR_MESSAGE);
     }
 
@@ -43,7 +73,7 @@ export async function fetchWithRetry(
     const signal = mergeAbortSignals([
       controller.signal,
       init.signal,
-      httpShutdownController.signal,
+      runtime.getShutdownSignal(),
     ]);
 
     try {
@@ -57,12 +87,12 @@ export async function fetchWithRetry(
         return response;
       }
 
-      await wait(computeRetryDelayMs(attempt, backoffMs));
+      await wait(computeRetryDelayMs(attempt, backoffMs, Math.random(), maxDelayMs));
     } catch (error) {
       clearTimeout(timeout);
       lastError = error;
 
-      if (httpShutdownRequested) {
+      if (runtime.isShutdownRequested()) {
         throw new Error(HTTP_SHUTDOWN_ERROR_MESSAGE);
       }
 
@@ -70,7 +100,7 @@ export async function fetchWithRetry(
         break;
       }
 
-      await wait(computeRetryDelayMs(attempt, backoffMs));
+      await wait(computeRetryDelayMs(attempt, backoffMs, Math.random(), maxDelayMs));
     }
   }
 
@@ -82,40 +112,51 @@ export async function fetchWithRetry(
 }
 
 export function beginHttpShutdown(): void {
-  if (httpShutdownRequested) {
-    return;
-  }
-  httpShutdownRequested = true;
-  httpShutdownController.abort(new Error(HTTP_SHUTDOWN_ERROR_MESSAGE));
+  beginHttpShutdownWithRuntime(defaultHttpRuntime);
 }
 
 export function isHttpShutdownRequested(): boolean {
-  return httpShutdownRequested;
+  return isHttpShutdownRequestedForRuntime(defaultHttpRuntime);
 }
 
 export function getHttpShutdownSignal(): AbortSignal {
-  return httpShutdownController.signal;
+  return getHttpShutdownSignalForRuntime(defaultHttpRuntime);
 }
 
-export function __resetHttpShutdownForTests(): void {
-  httpShutdownRequested = false;
-  httpShutdownController = new AbortController();
+export function beginHttpShutdownWithRuntime(runtime: HttpLifecycleRuntime): void {
+  runtime.beginShutdown();
+}
+
+export function isHttpShutdownRequestedForRuntime(
+  runtime: HttpLifecycleRuntime,
+): boolean {
+  return runtime.isShutdownRequested();
+}
+
+export function getHttpShutdownSignalForRuntime(
+  runtime: HttpLifecycleRuntime,
+): AbortSignal {
+  return runtime.getShutdownSignal();
 }
 
 export function computeRetryDelayMs(
   attempt: number,
   backoffMs: number,
   randomValue = Math.random(),
+  maxDelayMs = Number.POSITIVE_INFINITY,
 ): number {
   const safeAttempt = Math.max(0, Math.floor(attempt));
   const safeBackoffMs = Math.max(0, Math.floor(backoffMs));
+  const safeMaxDelayMs = Number.isFinite(maxDelayMs)
+    ? Math.max(1, Math.floor(maxDelayMs))
+    : Number.POSITIVE_INFINITY;
   const baseDelay = safeBackoffMs * 2 ** safeAttempt;
   const jitterMax = safeBackoffMs * 0.2;
   const normalizedRandom = Number.isFinite(randomValue)
     ? Math.min(1, Math.max(0, randomValue))
     : 0;
   const jitter = Math.floor(jitterMax * normalizedRandom);
-  return Math.floor(baseDelay + jitter);
+  return Math.floor(Math.min(baseDelay + jitter, safeMaxDelayMs));
 }
 
 function wait(ms: number): Promise<void> {

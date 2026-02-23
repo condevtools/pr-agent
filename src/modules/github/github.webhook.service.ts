@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 
-import { BadWebhookRequestError } from "#core";
+import { BadWebhookRequestError, parseBooleanEnv, readOptionalStringEnv } from "#core";
 import {
   type LoggerLike,
   handlePlainGitHubWebhook,
@@ -8,6 +8,7 @@ import {
 import {
   formatLogMessage,
   normalizeHeaderRecord,
+  readRawBody,
 } from "../webhook/webhook.utils.js";
 
 @Injectable()
@@ -50,23 +51,10 @@ export class GithubWebhookService {
   }
 }
 
-function readRawBody(rawBody: Buffer | string | undefined): string | undefined {
-  if (typeof rawBody === "string") {
-    return rawBody;
-  }
-
-  if (Buffer.isBuffer(rawBody)) {
-    return rawBody.toString("utf8");
-  }
-
-  return undefined;
-}
-
 function buildFallbackRawBodyForSignatureSkip(
   body: unknown,
 ): string | undefined {
-  const skipSignature =
-    (process.env.GITHUB_WEBHOOK_SKIP_SIGNATURE ?? "").toLowerCase() === "true";
+  const skipSignature = parseBooleanEnv(readOptionalStringEnv("GITHUB_WEBHOOK_SKIP_SIGNATURE"));
   if (!skipSignature || body === undefined) {
     return undefined;
   }

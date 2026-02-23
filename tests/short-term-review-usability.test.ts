@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  __clearGitHubFeedbackSignalCacheForTests,
-  __readGitHubFeedbackSignalsForTests,
+  readGitHubFeedbackSignals,
   appendGitHubFilesTruncatedWarning,
   maybeAppendGitHubFilesTruncatedWarning,
   buildManagedCommandCommentKey,
@@ -33,7 +32,6 @@ import {
   shouldRequireGitLabWebhookSecret,
 } from "../src/modules/gitlab/gitlab.webhook.service.ts";
 import {
-  buildGitLabManagedCommandCommentKey,
   buildGitLabChangelogQuestion,
   buildGitLabDescribeQuestion,
   isGitLabBotUserName,
@@ -43,14 +41,16 @@ import {
   shouldSkipGitLabReviewForDraft,
   upsertGitLabManagedComment,
 } from "../src/integrations/gitlab/gitlab-review.ts";
+import { buildManagedCommandCommentKey } from "../src/integrations/shared/managed-comments.ts";
 import {
-  __clearOpenAIClientCacheForTests,
+  createOpenAIClientCache,
+  openAIClientCacheKey,
+} from "../src/review/ai-client-cache.ts";
+import {
   buildAskPrompt,
   buildUserPrompt,
-  getOpenAIClientFromCache,
   normalizeAskResultForSchema,
   normalizeReviewResultForSchema,
-  openAIClientCacheKey,
   buildGeminiGenerationConfig,
   isModelResponseNotJsonError,
   parseAnthropicJsonPayload,
@@ -60,16 +60,19 @@ import {
   shouldRetryGeminiWithoutSchema,
 } from "../src/review/ai-reviewer.ts";
 import {
-  __clearRateLimitStateForTests,
-  __getRateLimitRecordCountForTests,
+  getRateLimitRecordCount,
   isRateLimited,
 } from "../src/core/rate-limit.ts";
 import {
-  __clearAskConversationCacheForTests,
   loadAskConversationTurns,
   rememberAskConversationTurn,
 } from "../src/core/ask-session.ts";
-import { resolveUiLocale } from "../src/core/i18n.ts";
+import {
+  clearAskConversationState,
+  clearGitHubFeedbackSignals,
+  clearRateLimitState,
+} from "../src/testing/runtime-state-test-api.ts";
+import { localizeText, resolveUiLocale } from "../src/core/i18n.ts";
 import {
   buildIssueCommentMarkdown,
   buildReportCommentMarkdown,
@@ -280,19 +283,20 @@ test("draft auto-review skip only applies to auto triggers", () => {
 });
 
 test("openai client cache reuses instance for same config", () => {
-  const a = getOpenAIClientFromCache({
+  const cache = createOpenAIClientCache();
+  const a = cache.get({
     apiKey: "k1",
     baseURL: "https://example-openai.local",
     timeout: 10_000,
     maxRetries: 2,
   });
-  const b = getOpenAIClientFromCache({
+  const b = cache.get({
     apiKey: "k1",
     baseURL: "https://example-openai.local",
     timeout: 10_000,
     maxRetries: 2,
   });
-  const c = getOpenAIClientFromCache({
+  const c = cache.get({
     apiKey: "k2",
     baseURL: "https://example-openai.local",
     timeout: 10_000,
@@ -318,35 +322,35 @@ test("openai client cache key does not expose raw api key", () => {
 test("openai client cache evicts oldest entry when exceeding max size", () => {
   const originalLimit = process.env.MAX_OPENAI_CLIENT_CACHE_ENTRIES;
   process.env.MAX_OPENAI_CLIENT_CACHE_ENTRIES = "2";
-  __clearOpenAIClientCacheForTests();
+  const cache = createOpenAIClientCache();
 
   try {
-    const first = getOpenAIClientFromCache({
+    const first = cache.get({
       apiKey: "k1",
       baseURL: "https://example-openai.local",
       timeout: 10_000,
       maxRetries: 2,
     });
-    const second = getOpenAIClientFromCache({
+    const second = cache.get({
       apiKey: "k2",
       baseURL: "https://example-openai.local",
       timeout: 10_000,
       maxRetries: 2,
     });
-    getOpenAIClientFromCache({
+    cache.get({
       apiKey: "k3",
       baseURL: "https://example-openai.local",
       timeout: 10_000,
       maxRetries: 2,
     });
 
-    const secondStillCached = getOpenAIClientFromCache({
+    const secondStillCached = cache.get({
       apiKey: "k2",
       baseURL: "https://example-openai.local",
       timeout: 10_000,
       maxRetries: 2,
     });
-    const firstAfterEviction = getOpenAIClientFromCache({
+    const firstAfterEviction = cache.get({
       apiKey: "k1",
       baseURL: "https://example-openai.local",
       timeout: 10_000,
@@ -357,7 +361,7 @@ test("openai client cache evicts oldest entry when exceeding max size", () => {
     assert.notEqual(first, firstAfterEviction);
   } finally {
     process.env.MAX_OPENAI_CLIENT_CACHE_ENTRIES = originalLimit;
-    __clearOpenAIClientCacheForTests();
+    cache.clear();
   }
 });
 
@@ -491,9 +495,9 @@ test("managed command comment key is deterministic and seed-sensitive", () => {
   assert.equal(g1, g2);
   assert.notEqual(g1, g3);
 
-  const l1 = buildGitLabManagedCommandCommentKey("ask", "How to fix flaky test?");
-  const l2 = buildGitLabManagedCommandCommentKey("ask", "How to fix flaky test?");
-  const l3 = buildGitLabManagedCommandCommentKey("ask", "How to fix timeout?");
+  const l1 = buildManagedCommandCommentKey("ask", "How to fix flaky test?");
+  const l2 = buildManagedCommandCommentKey("ask", "How to fix flaky test?");
+  const l3 = buildManagedCommandCommentKey("ask", "How to fix timeout?");
   assert.equal(l1, l2);
   assert.notEqual(l1, l3);
 });
@@ -736,7 +740,7 @@ test("shared issue_comment command handler ignores bot users", async () => {
         getContent: async () => ({ data: [] }),
       },
       paginate: async () => [],
-      __getLastListFilesTruncated: () => false,
+      getLastListFilesTruncated: () => false,
     },
   };
 
@@ -796,7 +800,7 @@ test("github auto review reuses preloaded pull metadata and avoids duplicate pul
         updateComment: async () => ({}),
       },
       paginate: async () => [],
-      __getLastListFilesTruncated: () => false,
+      getLastListFilesTruncated: () => false,
     },
   };
 
@@ -863,7 +867,7 @@ test("github pr-edited skips review when head sha is unchanged after dedupe ttl"
         paginateCalls += 1;
         return [];
       },
-      __getLastListFilesTruncated: () => false,
+      getLastListFilesTruncated: () => false,
     },
   };
 
@@ -1054,7 +1058,7 @@ test("github command rate limit comment is localized in english", async () => {
   process.env.MR_AGENT_LOCALE = "en";
   process.env.COMMAND_RATE_LIMIT_MAX = "1";
   process.env.COMMAND_RATE_LIMIT_WINDOW_MS = "3600000";
-  __clearRateLimitStateForTests();
+  clearRateLimitState();
 
   const postedBodies: string[] = [];
   const context = {
@@ -1110,7 +1114,7 @@ test("github command rate limit comment is localized in english", async () => {
     process.env.MR_AGENT_LOCALE = originalLocale;
     process.env.COMMAND_RATE_LIMIT_MAX = originalMax;
     process.env.COMMAND_RATE_LIMIT_WINDOW_MS = originalWindow;
-    __clearRateLimitStateForTests();
+    clearRateLimitState();
   }
 });
 
@@ -1147,7 +1151,7 @@ test("rate limiter blocks within window and resets outside window", () => {
   const originalNow = Date.now;
   let now = 1_000_000;
   Date.now = () => now;
-  __clearRateLimitStateForTests();
+  clearRateLimitState();
 
   try {
     assert.equal(isRateLimited("github:repo:1:user:a:cmd:ask", 2, 1_000), false);
@@ -1158,12 +1162,12 @@ test("rate limiter blocks within window and resets outside window", () => {
     assert.equal(isRateLimited("github:repo:1:user:a:cmd:ask", 2, 1_000), false);
   } finally {
     Date.now = originalNow;
-    __clearRateLimitStateForTests();
+    clearRateLimitState();
   }
 });
 
 test("rate limiter separates different keys", () => {
-  __clearRateLimitStateForTests();
+  clearRateLimitState();
   try {
     assert.equal(isRateLimited("github:repo:1:user:a:cmd:ask", 1, 60_000), false);
     assert.equal(isRateLimited("github:repo:1:user:a:cmd:ask", 1, 60_000), true);
@@ -1171,7 +1175,7 @@ test("rate limiter separates different keys", () => {
     assert.equal(isRateLimited("github:repo:1:user:b:cmd:ask", 1, 60_000), false);
     assert.equal(isRateLimited("github:repo:2:user:a:cmd:ask", 1, 60_000), false);
   } finally {
-    __clearRateLimitStateForTests();
+    clearRateLimitState();
   }
 });
 
@@ -1179,23 +1183,23 @@ test("rate limiter prunes stale keys after long idle period", () => {
   const originalNow = Date.now;
   let now = 1_000_000;
   Date.now = () => now;
-  __clearRateLimitStateForTests();
+  clearRateLimitState();
 
   try {
     assert.equal(isRateLimited("github:repo:1:user:a:cmd:ask", 1, 1_000), false);
-    assert.equal(__getRateLimitRecordCountForTests(), 1);
+    assert.equal(getRateLimitRecordCount(), 1);
 
     now += 24 * 60 * 60 * 1_000 + 1;
     assert.equal(isRateLimited("github:repo:1:user:b:cmd:ask", 1, 1_000), false);
-    assert.equal(__getRateLimitRecordCountForTests(), 1);
+    assert.equal(getRateLimitRecordCount(), 1);
   } finally {
     Date.now = originalNow;
-    __clearRateLimitStateForTests();
+    clearRateLimitState();
   }
 });
 
 test("github feedback signals are pr-scoped with repository fallback", () => {
-  __clearGitHubFeedbackSignalCacheForTests();
+  clearGitHubFeedbackSignals();
   try {
     recordGitHubFeedbackSignal({
       owner: "acme",
@@ -1215,22 +1219,22 @@ test("github feedback signals are pr-scoped with repository fallback", () => {
       signal: "pr-102-signal",
     });
 
-    assert.deepEqual(__readGitHubFeedbackSignalsForTests("acme", "demo", 101), [
+    assert.deepEqual(readGitHubFeedbackSignals("acme", "demo", 101), [
       "pr-101-signal",
       "repo-default",
     ]);
-    assert.deepEqual(__readGitHubFeedbackSignalsForTests("acme", "demo", 102), [
+    assert.deepEqual(readGitHubFeedbackSignals("acme", "demo", 102), [
       "pr-102-signal",
       "repo-default",
     ]);
-    assert.deepEqual(__readGitHubFeedbackSignalsForTests("acme", "demo", 999), [
+    assert.deepEqual(readGitHubFeedbackSignals("acme", "demo", 999), [
       "repo-default",
     ]);
-    assert.deepEqual(__readGitHubFeedbackSignalsForTests("acme", "demo"), [
+    assert.deepEqual(readGitHubFeedbackSignals("acme", "demo"), [
       "repo-default",
     ]);
   } finally {
-    __clearGitHubFeedbackSignalCacheForTests();
+    clearGitHubFeedbackSignals();
   }
 });
 
@@ -1281,7 +1285,7 @@ test("github command rate limit key includes user/pr/command dimensions", () => 
   const originalWindow = process.env.COMMAND_RATE_LIMIT_WINDOW_MS;
   process.env.COMMAND_RATE_LIMIT_MAX = "1";
   process.env.COMMAND_RATE_LIMIT_WINDOW_MS = "3600000";
-  __clearRateLimitStateForTests();
+  clearRateLimitState();
 
   try {
     assert.equal(
@@ -1342,7 +1346,7 @@ test("github command rate limit key includes user/pr/command dimensions", () => 
   } finally {
     process.env.COMMAND_RATE_LIMIT_MAX = originalMax;
     process.env.COMMAND_RATE_LIMIT_WINDOW_MS = originalWindow;
-    __clearRateLimitStateForTests();
+    clearRateLimitState();
   }
 });
 
@@ -1387,7 +1391,7 @@ test("github pull files pagination marks truncated at 20 full pages and appends 
       pull_number: 1,
       per_page: 100,
     });
-    const truncated = octokit.__getLastListFilesTruncated?.() ?? false;
+    const truncated = octokit.getLastListFilesTruncated?.() ?? false;
 
     assert.equal(requestedPages.length, 20);
     assert.equal(files.length, 2_000);
@@ -1625,6 +1629,9 @@ test("gitlab changelog question template supports english locale and focus", () 
 });
 
 test("ask prompt keeps shared context and limits diff section to first 40 files", () => {
+  const originalLocale = process.env.MR_AGENT_LOCALE;
+  process.env.MR_AGENT_LOCALE = "en";
+
   const changedFiles = Array.from({ length: 45 }, (_, index) => ({
     newPath: `src/file-${index + 1}.ts`,
     oldPath: `src/file-${index + 1}.ts`,
@@ -1633,49 +1640,53 @@ test("ask prompt keeps shared context and limits diff section to first 40 files"
     deletions: 1,
     extendedDiff: `@@ -1,1 +1,1 @@\n-old-${index + 1}\n+new-${index + 1}`,
   }));
-  const prompt = buildAskPrompt(
-    {
-      platform: "github",
-      repository: "acme/demo",
-      number: 42,
-      title: "Refactor prompt builder",
-      body: "Body",
-      author: "alice",
-      baseBranch: "main",
-      headBranch: "feat/refactor",
-      additions: 45,
-      deletions: 45,
-      changedFilesCount: 45,
-      changedFiles,
-      customRules: ["avoid breaking changes"],
-      feedbackSignals: ["prefer actionable suggestions"],
-      ciChecks: [
-        {
-          name: "lint",
-          status: "completed",
-          conclusion: "failed",
-          detailsUrl: "https://ci.example/lint",
-          summary: "1 error",
-        },
-      ],
-      processGuidelines: [
-        {
-          path: ".github/pull_request_template.md",
-          content: "Template content",
-        },
-      ],
-    },
-    "  why this failed?  ",
-  );
+  try {
+    const prompt = buildAskPrompt(
+      {
+        platform: "github",
+        repository: "acme/demo",
+        number: 42,
+        title: "Refactor prompt builder",
+        body: "Body",
+        author: "alice",
+        baseBranch: "main",
+        headBranch: "feat/refactor",
+        additions: 45,
+        deletions: 45,
+        changedFilesCount: 45,
+        changedFiles,
+        customRules: ["avoid breaking changes"],
+        feedbackSignals: ["prefer actionable suggestions"],
+        ciChecks: [
+          {
+            name: "lint",
+            status: "completed",
+            conclusion: "failed",
+            detailsUrl: "https://ci.example/lint",
+            summary: "1 error",
+          },
+        ],
+        processGuidelines: [
+          {
+            path: ".github/pull_request_template.md",
+            content: "Template content",
+          },
+        ],
+      },
+      "  why this failed?  ",
+    );
 
-  assert.match(prompt, /### File 40/);
-  assert.doesNotMatch(prompt, /### File 41/);
-  assert.match(prompt, /CI checks on current head:/);
-  assert.match(
-    prompt,
-    /- lint \(status=completed, conclusion=failed, url=https:\/\/ci\.example\/lint\)\n  summary=1 error/,
-  );
-  assert.match(prompt, /用户问题：\nwhy this failed\?/);
+    assert.match(prompt, /### File 40/);
+    assert.doesNotMatch(prompt, /### File 41/);
+    assert.match(prompt, /CI checks on current head:/);
+    assert.match(
+      prompt,
+      /- lint \(status=completed, conclusion=failed, url=https:\/\/ci\.example\/lint\)\n  summary=1 error/,
+    );
+    assert.match(prompt, /User question:\nwhy this failed\?/);
+  } finally {
+    process.env.MR_AGENT_LOCALE = originalLocale;
+  }
 });
 
 test("ask prompt includes previous q&a conversation context", () => {
@@ -1763,8 +1774,32 @@ test("ui locale resolver supports en variants and defaults to en", () => {
   assert.equal(resolveUiLocale("EN-us"), "en");
   assert.equal(resolveUiLocale("english"), "en");
   assert.equal(resolveUiLocale("zh"), "zh");
+  assert.equal(resolveUiLocale("fr-CA"), "fr-ca");
   assert.equal(resolveUiLocale(undefined), "en");
   assert.equal(resolveUiLocale(""), "en");
+});
+
+test("localizeText falls back safely for extended locales", () => {
+  assert.equal(
+    localizeText(
+      {
+        en: "Hello",
+        zh: "你好",
+      },
+      "fr-ca",
+    ),
+    "Hello",
+  );
+  assert.equal(
+    localizeText(
+      {
+        "fr-ca": "Bonjour",
+        en: "Hello",
+      },
+      "fr-ca",
+    ),
+    "Bonjour",
+  );
 });
 
 test("github truncated warning supports english locale", () => {
@@ -1827,7 +1862,7 @@ test("ask conversation cache stores per-session turns and trims to max turns", (
   const originalTtl = process.env.ASK_SESSION_TTL_MS;
   process.env.ASK_SESSION_MAX_TURNS = "2";
   process.env.ASK_SESSION_TTL_MS = "60000";
-  __clearAskConversationCacheForTests();
+  clearAskConversationState();
 
   try {
     rememberAskConversationTurn({
@@ -1861,7 +1896,7 @@ test("ask conversation cache stores per-session turns and trims to max turns", (
   } finally {
     process.env.ASK_SESSION_MAX_TURNS = originalMaxTurns;
     process.env.ASK_SESSION_TTL_MS = originalTtl;
-    __clearAskConversationCacheForTests();
+    clearAskConversationState();
   }
 });
 

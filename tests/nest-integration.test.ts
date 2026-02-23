@@ -11,7 +11,7 @@ import { GithubWebhookController } from "../src/modules/github/github.webhook.co
 import { GithubWebhookService } from "../src/modules/github/github.webhook.service.js";
 import { GitlabWebhookController } from "../src/modules/gitlab/gitlab.webhook.controller.js";
 import { GitlabWebhookService } from "../src/modules/gitlab/gitlab.webhook.service.js";
-import { __resetMetricsForTests } from "../src/modules/webhook/metrics.js";
+import { clearMetricState } from "../src/testing/metrics-test-api.ts";
 
 interface MockResponse {
   statusCode?: number;
@@ -32,7 +32,7 @@ test("nestjs module metadata declares expected imports/controllers/providers", (
 });
 
 test("nestjs controllers expose health/metrics and validate webhook payloads", async () => {
-  __resetMetricsForTests();
+  clearMetricState();
   const appController = new AppController(new AppService());
   const githubController = new GithubWebhookController(new GithubWebhookService());
   const gitlabController = new GitlabWebhookController(new GitlabWebhookService());

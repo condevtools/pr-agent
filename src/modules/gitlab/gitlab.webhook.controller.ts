@@ -9,7 +9,7 @@ import {
 } from "@nestjs/common";
 import type { Request } from "express";
 
-import { BadWebhookRequestError } from "#core";
+import { BadWebhookRequestError, readOptionalStringEnv } from "#core";
 import type { GitLabWebhookBody } from "#integrations/gitlab";
 import {
   GitlabWebhookService,
@@ -20,13 +20,14 @@ import {
   isDeepHealthQuery,
   type HealthStatus,
 } from "../webhook/health.js";
-import { incrementMetricCounter } from "../webhook/metrics.js";
+import { incrementMetricCounter } from "../webhook/metrics-runtime.js";
 import {
   assertWebhookReplayAuthorized,
   getStoredWebhookEventById,
-  recordWebhookEvent,
+  scheduleWebhookEventRecord,
   resolveStoredWebhookReplayPayload,
 } from "../webhook/webhook-replay.js";
+import { readHeaderValue, safeJsonStringify } from "../webhook/webhook.utils.js";
 
 @Controller("gitlab")
 export class GitlabWebhookController {
@@ -36,7 +37,7 @@ export class GitlabWebhookController {
   health(@Query("deep") deep?: string): Promise<HealthStatus> {
     const requiresSecret = shouldRequireGitLabWebhookSecret();
     const webhookConfigured =
-      !requiresSecret || Boolean(process.env.GITLAB_WEBHOOK_SECRET?.trim());
+      !requiresSecret || Boolean(readOptionalStringEnv("GITLAB_WEBHOOK_SECRET"));
     return buildHealthStatus({
       mode: "gitlab-webhook",
       deep: isDeepHealthQuery(deep),
@@ -53,17 +54,10 @@ export class GitlabWebhookController {
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
     const eventName = (readHeaderValue(headers, "x-gitlab-event") ?? "unknown").toLowerCase();
+    const metricEvent = normalizeGitLabMetricEventName(eventName);
     incrementMetricCounter("mr_agent_webhook_requests_total", {
       platform: "gitlab",
-      event: eventName,
-    });
-    recordWebhookEvent({
-      platform: "gitlab",
-      eventName,
-      headers,
-      payload: request.body as GitLabWebhookBody | undefined,
-      rawBody:
-        typeof request.body === "undefined" ? undefined : safeJsonStringify(request.body),
+      event: metricEvent,
     });
 
     try {
@@ -74,6 +68,16 @@ export class GitlabWebhookController {
       incrementMetricCounter("mr_agent_webhook_results_total", {
         platform: "gitlab",
         result: "ok",
+      });
+      scheduleWebhookEventRecord({
+        platform: "gitlab",
+        eventName,
+        headers,
+        payload: request.body as GitLabWebhookBody | undefined,
+        rawBody:
+          typeof request.body === "undefined"
+            ? undefined
+            : safeJsonStringify(request.body, ""),
       });
       return result;
     } catch (error) {
@@ -91,7 +95,7 @@ export class GitlabWebhookController {
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
     assertWebhookReplayAuthorized(headers);
-    const event = getStoredWebhookEventById({
+    const event = await getStoredWebhookEventById({
       id: eventId,
       platform: "gitlab",
     });
@@ -138,37 +142,14 @@ export class GitlabWebhookController {
   }
 }
 
-function readHeaderValue(
-  headers: Record<string, string | string[] | undefined>,
-  targetKey: string,
-): string | undefined {
-  const direct = headers[targetKey];
-  if (typeof direct === "string") {
-    return direct;
-  }
-  if (Array.isArray(direct)) {
-    return direct[0];
-  }
+const GITLAB_METRIC_EVENT_NAMES = new Set([
+  "merge request hook",
+  "note hook",
+]);
 
-  const target = targetKey.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== target) {
-      continue;
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value[0];
-    }
+function normalizeGitLabMetricEventName(eventName: string): string {
+  if (GITLAB_METRIC_EVENT_NAMES.has(eventName)) {
+    return eventName;
   }
-  return undefined;
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "";
-  }
+  return "other";
 }

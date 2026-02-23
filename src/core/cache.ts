@@ -36,6 +36,9 @@ export function getFreshCacheValue<T>(
     cache.delete(key);
     return undefined;
   }
+  // Touch on read so trimCache behaves as an LRU eviction.
+  cache.delete(key);
+  cache.set(key, cached);
   return cached.value;
 }
 

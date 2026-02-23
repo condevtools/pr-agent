@@ -1,6 +1,10 @@
-export type UiLocale = "zh" | "en";
+import { readOptionalStringEnv } from "./env.js";
 
-export function resolveUiLocale(rawLocale: string | undefined = process.env.MR_AGENT_LOCALE): UiLocale {
+export type UiLocale = "zh" | "en" | (string & {});
+
+export function resolveUiLocale(
+  rawLocale: string | undefined = readOptionalStringEnv("MR_AGENT_LOCALE"),
+): UiLocale {
   const normalized = (rawLocale ?? "").trim().toLowerCase();
   if (
     normalized === "zh" ||
@@ -22,15 +26,30 @@ export function resolveUiLocale(rawLocale: string | undefined = process.env.MR_A
     return "en";
   }
 
+  if (/^[a-z]{2}(?:[-_][a-z0-9]+)*$/.test(normalized)) {
+    return normalized.replace(/_/g, "-");
+  }
+
   return "en";
 }
 
 export function localizeText(
-  text: {
-    zh: string;
-    en: string;
-  },
+  text: Record<string, string>,
   locale: UiLocale = resolveUiLocale(),
 ): string {
-  return locale === "en" ? text.en : text.zh;
+  if (!text || typeof text !== "object") {
+    return "";
+  }
+  if (text[locale]) {
+    return text[locale];
+  }
+  if (text.en) {
+    return text.en;
+  }
+  if (text.zh) {
+    return text.zh;
+  }
+
+  const firstValue = Object.values(text).find((item) => typeof item === "string");
+  return firstValue ?? "";
 }

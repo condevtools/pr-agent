@@ -1,24 +1,22 @@
 import {
   BadWebhookRequestError,
   clearDuplicateRecord,
-  compileCustomSecretPatterns,
   ensureError,
-  fetchWithRetry,
-  fnv1a32Hex,
-  getFreshCacheValue,
   isDuplicateRequest,
   isRateLimited,
   loadRuntimeStateValue,
   loadAskConversationTurns,
   localizeText,
+  nowMs,
   normalizeRateLimitPart,
-  pruneExpiredCache,
+  parseBooleanEnv,
   readNumberEnv,
+  readOptionalStringEnv,
+  readStringEnv,
   rememberAskConversationTurn,
   resolveUiLocale,
   saveRuntimeStateValue,
-  trimCache,
-  type ExpiringCacheEntry,
+  type UiLocale,
 } from "#core";
 import { publishNotification } from "#integrations/notify";
 import {
@@ -41,9 +39,7 @@ import {
   parseFeedbackCommand,
   parseGenerateTestsCommand,
   parseImproveCommand,
-  parsePatchWithLineNumbers,
   parseReflectCommand,
-  prioritizePatchHunks,
   parseReviewCommand,
   parseSimilarIssueCommand,
   resolveReviewLineForIssue,
@@ -53,13 +49,76 @@ import type {
   PullRequestReviewInput,
   PullRequestReviewResult,
   ReviewMode,
+  ReviewTrigger,
 } from "#review";
+import {
+  buildAddDocRule,
+  buildChangelogQuestion,
+  buildChecksQuestion,
+  buildGenerateTestsQuestion,
+  buildImproveRule,
+  buildReflectQuestion,
+} from "../shared/command-builders.js";
+import { inferReviewLabels } from "../shared/auto-labels.js";
+import { buildDescribeQuestion } from "../shared/describe-question.js";
+import {
+  dispatchCommandRegistrations,
+  type CommandDispatchResult,
+  type CommandRegistration,
+} from "../shared/command-dispatch.js";
+import { buildDiffFileContexts } from "../shared/diff-context.js";
+import {
+  buildCommandApplyDisabledByPolicyMessage,
+  buildCommandDisabledByPolicyMessage,
+  buildFeedbackSignalRecordedMessage,
+  buildReflectDependsOnAskMessage,
+} from "../shared/command-messages.js";
+import { mergeChangelogContent as mergeSharedChangelogContent } from "../shared/changelog.js";
+import { recordFeedbackSignal } from "../shared/feedback-signals.js";
+import {
+  loadProcessGuidelinesWithCache,
+  type ProcessGuideline,
+} from "../shared/process-guidelines.js";
+import { getPublicErrorMessage } from "../shared/public-error.js";
+import { parseReviewPolicyOverridesFromConfigText } from "../shared/review-policy-parser.js";
+import {
+  loadIncrementalReviewHead,
+  readMergedFeedbackSignals,
+  rememberIncrementalReviewHead,
+} from "../shared/review-state.js";
+import {
+  findPotentialSecrets as findSharedPotentialSecrets,
+  type SecretFinding,
+} from "../shared/secret-scan.js";
+import { buildSecretWarningComment } from "../shared/secret-warning.js";
+import { reviewMessage } from "../shared/review-messages.js";
+import {
+  buildSimilarIssueComment,
+  buildSimilarIssueQueryMissingMessage,
+  resolveSimilarIssueQuery,
+} from "../shared/similar-issue.js";
+import { createGitLabCommandWorkflows } from "./gitlab-command-workflows.js";
+import { gitLabApiRequest } from "./gitlab-http.js";
+import {
+  buildManagedCommandCommentKey,
+  buildManagedCommentBody,
+  buildManagedCommentMarker,
+  type ManagedCommentKey,
+  MANAGED_COMMENT_SCAN_PER_PAGE,
+  MAX_MANAGED_COMMENT_SCAN_PAGES,
+} from "../shared/managed-comments.js";
+import {
+  DEFAULT_DEDUPE_TTL_MS,
+  isAutoReviewTrigger,
+  resolveDedupeTtlMs,
+  shouldSkipReviewForDraft,
+  shouldUseIncrementalReview,
+  shouldUseManagedReviewSummary,
+} from "../shared/review-triggers.js";
 
 const MAX_FILES = 40;
 const DEFAULT_MAX_PATCH_CHARS_PER_FILE = 4_000;
 const DEFAULT_MAX_TOTAL_PATCH_CHARS = 60_000;
-const DEFAULT_DEDUPE_TTL_MS = 5 * 60 * 1_000;
-const DEFAULT_MERGED_REPORT_DEDUPE_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_GUIDELINE_CACHE_TTL_MS = 5 * 60 * 1_000;
 const DEFAULT_INCREMENTAL_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const DEFAULT_FEEDBACK_SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -72,28 +131,10 @@ const MAX_GUIDELINE_CACHE_ENTRIES = 500;
 const MAX_INCREMENTAL_STATE_ENTRIES = 2_000;
 const MAX_FEEDBACK_SIGNALS = 80;
 const MAX_FEEDBACK_CACHE_ENTRIES = 1_000;
-const MANAGED_NOTE_SCAN_PER_PAGE = 100;
-const MAX_MANAGED_NOTE_SCAN_PAGES = 20;
 const GITLAB_INCREMENTAL_STATE_SCOPE = "gitlab-incremental-head";
 const GITLAB_FEEDBACK_SIGNAL_SCOPE = "gitlab-feedback-signals";
-
-type ProcessGuideline = { path: string; content: string };
-type SecretFinding = {
-  path: string;
-  line: number;
-  kind: string;
-  sample: string;
-};
-
-type ProcessGuidelineCacheEntry = ExpiringCacheEntry<ProcessGuideline[]>;
-type IncrementalHeadCacheEntry = ExpiringCacheEntry<string>;
-type FeedbackSignalCacheEntry = ExpiringCacheEntry<string[]>;
-type GitLabReviewPolicyCacheEntry = ExpiringCacheEntry<GitLabReviewPolicy>;
-
-const guidelineCache = new Map<string, ProcessGuidelineCacheEntry>();
-const incrementalHeadCache = new Map<string, IncrementalHeadCacheEntry>();
-const feedbackSignalCache = new Map<string, FeedbackSignalCacheEntry>();
-const gitlabPolicyCache = new Map<string, GitLabReviewPolicyCacheEntry>();
+const GITLAB_GUIDELINE_CACHE_SCOPE = "gitlab-process-guidelines";
+const GITLAB_POLICY_CACHE_SCOPE = "gitlab-review-policy";
 
 export function resolveGitLabPatchCharLimits(): {
   maxPatchCharsPerFile: number;
@@ -241,44 +282,12 @@ interface GitLabCollectedContext extends GitLabCommentTarget {
   mrUrl: string;
 }
 
-type ManagedGitLabNoteKey = string;
-
-function normalizeManagedGitLabNoteKey(raw: string): string {
-  const normalized = raw
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9:_-]/g, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 120);
-  return normalized || "default";
-}
-
-export function buildGitLabManagedCommandCommentKey(
-  command: string,
-  seed: string,
-): string {
-  const commandKey = normalizeManagedGitLabNoteKey(`cmd-${command}`).replace(
-    /:/g,
-    "-",
-  );
-  const normalizedSeed = seed.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 240);
-  return `${commandKey}:${fnv1a32Hex(normalizedSeed)}`;
-}
-
-function managedGitLabNoteMarker(key: ManagedGitLabNoteKey): string {
-  return `<!-- mr-agent:${normalizeManagedGitLabNoteKey(key)} -->`;
-}
-
-function managedGitLabNoteBody(body: string, key: ManagedGitLabNoteKey): string {
-  return `${body.trim()}\n\n${managedGitLabNoteMarker(key)}`;
-}
-
 interface GitLabReviewRunParams {
   payload: GitLabMrWebhookBody;
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
   mode?: ReviewMode;
-  trigger?: GitLabReviewTrigger;
+  trigger?: ReviewTrigger;
   dedupeSuffix?: string;
   customRules?: string[];
   includeCiChecks?: boolean;
@@ -293,7 +302,7 @@ interface GitLabAskRunParams {
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
   question: string;
-  trigger: GitLabReviewTrigger;
+  trigger: ReviewTrigger;
   dedupeSuffix?: string;
   customRules?: string[];
   includeCiChecks?: boolean;
@@ -308,7 +317,7 @@ interface GitLabDescribeRunParams {
   payload: GitLabMrWebhookBody;
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
-  trigger: GitLabReviewTrigger;
+  trigger: ReviewTrigger;
   apply?: boolean;
   dedupeSuffix?: string;
   throwOnError?: boolean;
@@ -318,7 +327,7 @@ interface GitLabChangelogRunParams {
   payload: GitLabMrWebhookBody;
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
-  trigger: GitLabReviewTrigger;
+  trigger: ReviewTrigger;
   focus?: string;
   apply?: boolean;
   dedupeSuffix?: string;
@@ -369,26 +378,42 @@ const defaultGitLabReviewPolicy: GitLabReviewPolicy = {
   customRules: [],
 };
 
-type GitLabReviewTrigger =
-  | "merged"
-  | "comment-command"
-  | "describe-command"
-  | "pr-opened"
-  | "pr-edited"
-  | "pr-synchronize"
-  | "gitlab-webhook";
-
-function isGitLabAutoReviewTrigger(trigger: GitLabReviewTrigger): boolean {
-  return (
-    trigger === "pr-opened" ||
-    trigger === "pr-edited" ||
-    trigger === "pr-synchronize"
-  );
-}
-
-function shouldUseManagedGitLabReviewSummary(trigger: GitLabReviewTrigger): boolean {
-  return isGitLabAutoReviewTrigger(trigger) || trigger === "merged";
-}
+const gitLabCommandWorkflows = createGitLabCommandWorkflows({
+  defaultDedupeTtlMs: DEFAULT_DEDUPE_TTL_MS,
+  requireGitLabToken,
+  buildCommentTarget: (payload) =>
+    buildGitLabCommentTargetFromPayload({
+      payload: payload as GitLabMrWebhookBody,
+      baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
+    }),
+  postCommandComment: postGitLabCommandComment,
+  loadFeedbackSignals: loadGitLabFeedbackSignals,
+  collectMergeRequestContext: async (params) =>
+    collectGitLabMergeRequestContext({
+      payload: params.payload as GitLabMrWebhookBody,
+      gitlabToken: params.gitlabToken,
+      baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
+      customRules: params.customRules,
+      includeCiChecks: params.includeCiChecks,
+      feedbackSignals: params.feedbackSignals,
+    }),
+  buildDescribeQuestion: (locale) => buildGitLabDescribeQuestion(locale),
+  buildChangelogQuestion: (focus, locale) =>
+    buildGitLabChangelogQuestion(focus, locale),
+  updateMergeRequestDescription: async (params) =>
+    updateGitLabMergeRequestDescription({
+      gitlabToken: params.gitlabToken,
+      collected: params.collected as GitLabCollectedContext,
+      description: params.description,
+    }),
+  applyChangelogUpdate: async (params) =>
+    applyGitLabChangelogUpdate({
+      gitlabToken: params.gitlabToken,
+      collected: params.collected as GitLabCollectedContext,
+      pullNumber: params.pullNumber,
+      draft: params.draft,
+    }),
+});
 
 function isGitLabTitleDraftLike(titleRaw: string | undefined): boolean {
   const title = (titleRaw ?? "").trim().toLowerCase();
@@ -415,37 +440,27 @@ function isGitLabMergeRequestDraft(payload: GitLabMrWebhookBody): boolean {
 }
 
 export function shouldSkipGitLabReviewForDraft(
-  trigger: GitLabReviewTrigger,
+  trigger: ReviewTrigger,
   isDraft: boolean,
 ): boolean {
-  return isDraft && isGitLabAutoReviewTrigger(trigger);
+  return shouldSkipReviewForDraft(trigger, isDraft);
 }
 
 export async function upsertGitLabManagedComment(params: {
   gitlabToken: string;
   target: GitLabCommentTarget;
   body: string;
-  markerKey: ManagedGitLabNoteKey;
+  markerKey: ManagedCommentKey;
   logger?: LoggerLike;
 }): Promise<void> {
-  const marker = managedGitLabNoteMarker(params.markerKey);
-  const nextBody = managedGitLabNoteBody(params.body, params.markerKey);
+  const marker = buildManagedCommentMarker(params.markerKey);
+  const nextBody = buildManagedCommentBody(params.body, params.markerKey);
   try {
-    for (let page = 1; page <= MAX_MANAGED_NOTE_SCAN_PAGES; page += 1) {
-      const listed = await fetchWithRetry(
-        `${params.target.baseUrl}/api/v4/projects/${encodeURIComponent(params.target.projectId)}/merge_requests/${params.target.mrId}/notes?per_page=${MANAGED_NOTE_SCAN_PER_PAGE}&page=${page}`,
-        {
-          headers: {
-            "PRIVATE-TOKEN": params.gitlabToken,
-            "content-type": "application/json",
-          },
-        },
-        {
-          timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-          retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-          backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-        },
-      );
+    for (let page = 1; page <= MAX_MANAGED_COMMENT_SCAN_PAGES; page += 1) {
+      const listed = await gitLabApiRequest({
+        url: `${params.target.baseUrl}/api/v4/projects/${encodeURIComponent(params.target.projectId)}/merge_requests/${params.target.mrId}/notes?per_page=${MANAGED_COMMENT_SCAN_PER_PAGE}&page=${page}`,
+        token: params.gitlabToken,
+      });
       if (!listed.ok) {
         break;
       }
@@ -458,28 +473,18 @@ export async function upsertGitLabManagedComment(params: {
           item.body.includes(marker),
       );
       if (existing?.id) {
-        const updateResp = await fetchWithRetry(
-          `${params.target.baseUrl}/api/v4/projects/${encodeURIComponent(params.target.projectId)}/merge_requests/${params.target.mrId}/notes/${existing.id}`,
-          {
-            method: "PUT",
-            headers: {
-              "PRIVATE-TOKEN": params.gitlabToken,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({ body: nextBody }),
-          },
-          {
-            timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-            retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-            backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-          },
-        );
+        const updateResp = await gitLabApiRequest({
+          url: `${params.target.baseUrl}/api/v4/projects/${encodeURIComponent(params.target.projectId)}/merge_requests/${params.target.mrId}/notes/${existing.id}`,
+          token: params.gitlabToken,
+          method: "PUT",
+          body: { body: nextBody },
+        });
         if (updateResp.ok) {
           return;
         }
       }
 
-      if (data.length < MANAGED_NOTE_SCAN_PER_PAGE) {
+      if (data.length < MANAGED_COMMENT_SCAN_PER_PAGE) {
         break;
       }
     }
@@ -580,7 +585,7 @@ async function shouldRejectGitLabCommandByRateLimit(params: {
     gitlabToken: params.gitlabToken,
     target: params.target,
     body: gitLabCommandRateLimitMessage(resolveUiLocale()),
-    managedCommentKey: buildGitLabManagedCommandCommentKey(
+    managedCommentKey: buildManagedCommandCommentKey(
       "rate-limit",
       params.command,
     ),
@@ -589,7 +594,7 @@ async function shouldRejectGitLabCommandByRateLimit(params: {
   return true;
 }
 
-function gitLabCommandRateLimitMessage(locale: "zh" | "en"): string {
+function gitLabCommandRateLimitMessage(locale: UiLocale): string {
   return localizeText(
     {
       zh: "`命令触发过于频繁，请稍后再试（默认每用户每 MR 每小时 10 次）。`",
@@ -615,7 +620,10 @@ export async function runGitLabWebhook(params: {
     }
 
     const gitlabToken = requireGitLabToken(params.headers);
-    const baseUrl = resolveGitLabBaseUrl(process.env.GITLAB_BASE_URL, payload.project.web_url);
+    const baseUrl = resolveGitLabBaseUrl(
+      readOptionalStringEnv("GITLAB_BASE_URL"),
+      payload.project.web_url,
+    );
     const actionKind = mapGitLabActionToReviewEvent(action);
     const policy = await resolveGitLabReviewPolicy({
       baseUrl,
@@ -699,7 +707,7 @@ export async function runGitLabReview(
   ]
     .filter(Boolean)
     .join(":");
-  if (isDuplicateRequest(requestKey, resolveGitLabDedupeTtl(trigger, mode))) {
+  if (isDuplicateRequest(requestKey, resolveDedupeTtlMs(trigger, mode, "GITLAB"))) {
     return { ok: true, message: "duplicate request ignored" };
   }
 
@@ -736,7 +744,7 @@ export async function runGitLabReview(
     const collected = await collectGitLabMergeRequestContext({
       payload,
       gitlabToken,
-      baseUrl: process.env.GITLAB_BASE_URL,
+      baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
       incrementalBaseSha,
       customRules,
       includeCiChecks,
@@ -754,14 +762,8 @@ export async function runGitLabReview(
     );
 
     if (collected.files.length === 0) {
-      const noDiffBody = localizeText(
-        {
-          zh: "`AI Review` 未发现可评审的文本改动，已跳过。",
-          en: "`AI Review` found no textual changes to review, skipped.",
-        },
-        locale,
-      );
-      if (shouldUseManagedGitLabReviewSummary(trigger)) {
+      const noDiffBody = reviewMessage("reviewNoDiffSkipped", locale);
+      if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitLabManagedComment({
           gitlabToken,
           target: collected,
@@ -780,23 +782,11 @@ export async function runGitLabReview(
     if (mode === "comment") {
       await publishGitLabLineComments(gitlabToken, collected, result, logger, locale);
       const summaryBody = [
-        localizeText(
-          {
-            zh: "## AI 评审结果（Comment 模式）",
-            en: "## AI Review Result (Comment Mode)",
-          },
-          locale,
-        ),
+        reviewMessage("reviewCommentModeTitle", locale),
         "",
-        localizeText(
-          {
-            zh: "如需汇总报告，请评论：`/ai-review report`",
-            en: "For a consolidated report, comment: `/ai-review report`",
-          },
-          locale,
-        ),
+        reviewMessage("reviewCommentModeHint", locale),
       ].join("\n");
-      if (shouldUseManagedGitLabReviewSummary(trigger)) {
+      if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitLabManagedComment({
           gitlabToken,
           target: collected,
@@ -816,7 +806,7 @@ export async function runGitLabReview(
       }, {
         locale,
       });
-      if (shouldUseManagedGitLabReviewSummary(trigger)) {
+      if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitLabManagedComment({
           gitlabToken,
           target: collected,
@@ -830,12 +820,17 @@ export async function runGitLabReview(
     }
 
     if (enableSecretScan) {
-      const findings = findPotentialSecrets(
-        collected.files,
-        secretScanCustomPatterns,
-      );
+      const findings = findSharedPotentialSecrets({
+        files: collected.files,
+        customPatterns: secretScanCustomPatterns,
+        maxFindings: 20,
+      });
       if (findings.length > 0) {
-        const warning = buildGitLabSecretWarningComment(findings, locale);
+        const warning = buildSecretWarningComment({
+          platform: "gitlab",
+          findings,
+          locale,
+        });
         await publishGitLabGeneralComment(gitlabToken, collected, warning);
       }
 
@@ -873,8 +868,8 @@ export async function runGitLabReview(
     const pushUrl =
       headers["x-push-url"] ??
       headers["x-qwx-robot-url"] ??
-      process.env.GITLAB_PUSH_URL ??
-      process.env.NOTIFY_WEBHOOK_URL;
+      readOptionalStringEnv("GITLAB_PUSH_URL") ??
+      readOptionalStringEnv("NOTIFY_WEBHOOK_URL");
     try {
       await publishNotification({
         pushUrl,
@@ -909,8 +904,8 @@ export async function runGitLabReview(
     const pushUrl =
       headers["x-push-url"] ??
       headers["x-qwx-robot-url"] ??
-      process.env.GITLAB_PUSH_URL ??
-      process.env.NOTIFY_WEBHOOK_URL;
+      readOptionalStringEnv("GITLAB_PUSH_URL") ??
+      readOptionalStringEnv("NOTIFY_WEBHOOK_URL");
     try {
       await publishNotification({
         pushUrl,
@@ -947,34 +942,15 @@ export function recordGitLabFeedbackSignal(params: {
   signal: string;
 }): void {
   const key = `${params.projectId}`;
-  const signal = params.signal.trim().replace(/\s+/g, " ").slice(0, 240);
-  if (!signal) {
-    return;
-  }
-  const now = Date.now();
-  const ttlMs = readNumberEnv(
-    "GITLAB_FEEDBACK_SIGNAL_TTL_MS",
-    DEFAULT_FEEDBACK_SIGNAL_TTL_MS,
-  );
-  pruneExpiredCache(feedbackSignalCache, now);
-  const current =
-    getFreshCacheValue(feedbackSignalCache, key, now) ??
-    loadRuntimeStateValue<string[]>(GITLAB_FEEDBACK_SIGNAL_SCOPE, key, now) ??
-    [];
-  const nextSignals = [signal, ...current.filter((item) => item !== signal)].slice(
-    0,
-    MAX_FEEDBACK_SIGNALS,
-  );
-  feedbackSignalCache.set(key, {
-    value: nextSignals,
-    expiresAt: now + ttlMs,
-  });
-  trimCache(feedbackSignalCache, MAX_FEEDBACK_CACHE_ENTRIES);
-  saveRuntimeStateValue({
+  recordFeedbackSignal({
     scope: GITLAB_FEEDBACK_SIGNAL_SCOPE,
     key,
-    value: nextSignals,
-    expiresAt: now + ttlMs,
+    signal: params.signal,
+    ttlMs: readNumberEnv(
+      "GITLAB_FEEDBACK_SIGNAL_TTL_MS",
+      DEFAULT_FEEDBACK_SIGNAL_TTL_MS,
+    ),
+    maxSignals: MAX_FEEDBACK_SIGNALS,
     maxEntries: MAX_FEEDBACK_CACHE_ENTRIES,
   });
 }
@@ -1013,10 +989,13 @@ async function handleGitLabNoteWebhook(params: {
   const gitlabToken = requireGitLabToken(params.headers);
   const target = buildGitLabCommentTargetFromPayload({
     payload: mergePayload,
-    baseUrl: process.env.GITLAB_BASE_URL,
+    baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
   });
   const commentUserName = payload.user?.username;
-  const baseUrl = resolveGitLabBaseUrl(process.env.GITLAB_BASE_URL, payload.project.web_url);
+  const baseUrl = resolveGitLabBaseUrl(
+    readOptionalStringEnv("GITLAB_BASE_URL"),
+    payload.project.web_url,
+  );
   const policy = await resolveGitLabReviewPolicy({
     baseUrl,
     projectId: payload.project.id,
@@ -1024,8 +1003,21 @@ async function handleGitLabNoteWebhook(params: {
     ref: mergePayload.object_attributes.target_branch,
   });
 
-  const feedbackCommand = parseFeedbackCommand(body);
-  if (feedbackCommand.matched) {
+  const hitRateLimit = async (
+    command:
+      | "feedback"
+      | "describe"
+      | "ask"
+      | "checks"
+      | "generate-tests"
+      | "changelog"
+      | "improve"
+      | "add-doc"
+      | "reflect"
+      | "similar-issue"
+      | "ai-review",
+    message: string,
+  ): Promise<{ ok: boolean; message: string } | undefined> => {
     if (
       await shouldRejectGitLabCommandByRateLimit({
         gitlabToken,
@@ -1033,945 +1025,467 @@ async function handleGitLabNoteWebhook(params: {
         projectId: payload.project.id,
         mrId: mergePayload.object_attributes.iid,
         userName: commentUserName,
-        command: "feedback",
+        command,
         logger: params.logger,
       })
     ) {
-      return { ok: true, message: "feedback command rate limited" };
+      return { ok: true, message };
     }
-    if (!policy.feedbackCommandEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/feedback` 在当前仓库已被禁用（.mr-agent.yml -> review.feedbackCommandEnabled=false）。",
-            en: "`/feedback` is disabled for this repository (.mr-agent.yml -> review.feedbackCommandEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "feedback command ignored by policy" };
-    }
+    return undefined;
+  };
 
-    const positive =
-      feedbackCommand.action === "resolved" || feedbackCommand.action === "up";
-    const signalCore = positive
-      ? "developer prefers high-confidence, actionable suggestions"
-      : "developer prefers fewer low-value/noisy suggestions";
-    const noteText = feedbackCommand.note ? `; note: ${feedbackCommand.note}` : "";
-    recordGitLabFeedbackSignal({
-      projectId: payload.project.id,
-      signal: `MR !${mergePayload.object_attributes.iid} ${feedbackCommand.action}: ${signalCore}${noteText}`,
-    });
-
-    const context = await collectGitLabMergeRequestContext({
-      payload: mergePayload,
-      gitlabToken,
-      baseUrl: process.env.GITLAB_BASE_URL,
-    });
-    await publishGitLabGeneralComment(
-      gitlabToken,
-      context,
-      localizeText(
-        {
-          zh: `已记录反馈信号：\`${feedbackCommand.action}\`。后续评审会参考该偏好。`,
-          en: `Recorded feedback signal: \`${feedbackCommand.action}\`. Future reviews will use this preference.`,
-        },
-        locale,
-      ),
-    );
-    return { ok: true, message: "feedback command recorded" };
-  }
-
-  const describe = parseDescribeCommand(body);
-  if (describe.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "describe",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "describe command rate limited" };
-    }
-    if (!policy.describeEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/describe` 在当前仓库已被禁用（.mr-agent.yml -> review.describeEnabled=false）。",
-            en: "`/describe` is disabled for this repository (.mr-agent.yml -> review.describeEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "describe command ignored by policy" };
-    }
-    if (describe.apply && !policy.describeAllowApply) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/describe --apply` 在当前仓库已被禁用（.mr-agent.yml -> review.describeAllowApply=false）。",
-            en: "`/describe --apply` is disabled for this repository (.mr-agent.yml -> review.describeAllowApply=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "describe apply ignored by policy" };
-    }
-
-    await runGitLabDescribe({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      trigger: "describe-command",
-      apply: describe.apply && policy.describeAllowApply,
-    });
-    return { ok: true, message: "describe command triggered" };
-  }
-
-  const ask = parseAskCommand(body);
-  if (ask.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "ask",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "ask command rate limited" };
-    }
-    if (!policy.askCommandEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/ask` 在当前仓库已被禁用（.mr-agent.yml -> review.askCommandEnabled=false）。",
-            en: "`/ask` is disabled for this repository (.mr-agent.yml -> review.askCommandEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "ask command ignored by policy" };
-    }
-
-    await runGitLabAsk({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      question: ask.question,
-      trigger: "comment-command",
-      customRules: policy.customRules,
-      includeCiChecks: policy.includeCiChecks,
-      enableConversationContext: true,
-      managedCommentKey: buildGitLabManagedCommandCommentKey("ask", ask.question),
-    });
-    return { ok: true, message: "ask command triggered" };
-  }
-
-  const checksCommand = parseChecksCommand(body);
-  if (checksCommand.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "checks",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "checks command rate limited" };
-    }
-    if (!policy.checksCommandEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/checks` 在当前仓库已被禁用（.mr-agent.yml -> review.checksCommandEnabled=false）。",
-            en: "`/checks` is disabled for this repository (.mr-agent.yml -> review.checksCommandEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "checks command ignored by policy" };
-    }
-
-    const checksQuestion = checksCommand.question
-      ? `请结合当前 MR 的 CI 检查结果给出修复建议。额外问题：${checksCommand.question}`
-      : "请结合当前 MR 的 CI 检查结果，分析失败原因并给出可执行修复步骤（优先级从高到低）。";
-    await runGitLabAsk({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      question: checksQuestion,
-      trigger: "comment-command",
-      customRules: policy.customRules,
-      includeCiChecks: true,
-      commentTitle: "AI Checks",
-      managedCommentKey: buildGitLabManagedCommandCommentKey(
-        "checks",
-        checksQuestion,
-      ),
-    });
-    return { ok: true, message: "checks command triggered" };
-  }
-
-  const generateTests = parseGenerateTestsCommand(body);
-  if (generateTests.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "generate-tests",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "generate_tests command rate limited" };
-    }
-    if (!policy.generateTestsCommandEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/generate_tests` 在当前仓库已被禁用（.mr-agent.yml -> review.generateTestsCommandEnabled=false）。",
-            en: "`/generate_tests` is disabled for this repository (.mr-agent.yml -> review.generateTestsCommandEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "generate_tests command ignored by policy" };
-    }
-
-    const generateTestsQuestion = generateTests.focus
-      ? `请基于当前 MR 改动生成可执行测试方案和测试代码草案，重点覆盖：${generateTests.focus}。输出要求：按文件路径分组，包含测试名称、前置条件、关键断言、边界/回归用例。`
-      : "请基于当前 MR 改动生成可执行测试方案和测试代码草案。输出要求：按文件路径分组，包含测试名称、前置条件、关键断言、边界/回归用例。";
-    await runGitLabAsk({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      question: generateTestsQuestion,
-      trigger: "comment-command",
-      customRules: policy.customRules,
-      includeCiChecks: policy.includeCiChecks,
-      commentTitle: "AI Test Generator",
-      displayQuestion: generateTests.focus
-        ? `/generate_tests ${generateTests.focus}`
-        : "/generate_tests",
-      managedCommentKey: buildGitLabManagedCommandCommentKey(
-        "generate-tests",
-        generateTestsQuestion,
-      ),
-    });
-    return { ok: true, message: "generate_tests command triggered" };
-  }
-
-  const changelogCommand = parseChangelogCommand(body);
-  if (changelogCommand.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "changelog",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "changelog command rate limited" };
-    }
-    if (!policy.changelogCommandEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/changelog` 在当前仓库已被禁用（.mr-agent.yml -> review.changelogCommandEnabled=false）。",
-            en: "`/changelog` is disabled for this repository (.mr-agent.yml -> review.changelogCommandEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "changelog command ignored by policy" };
-    }
-    if (changelogCommand.apply && !policy.changelogAllowApply) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/changelog --apply` 在当前仓库已被禁用（.mr-agent.yml -> review.changelogAllowApply=false）。",
-            en: "`/changelog --apply` is disabled for this repository (.mr-agent.yml -> review.changelogAllowApply=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "changelog apply ignored by policy" };
-    }
-
-    await runGitLabChangelog({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      trigger: "comment-command",
-      focus: changelogCommand.focus,
-      apply: changelogCommand.apply && policy.changelogAllowApply,
-      customRules: policy.customRules,
-      includeCiChecks: policy.includeCiChecks,
-    });
-    return { ok: true, message: "changelog command triggered" };
-  }
-
-  const improveCommand = parseImproveCommand(body);
-  if (improveCommand.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "improve",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "improve command rate limited" };
-    }
-
-    await runGitLabReview({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      mode: "comment",
-      trigger: "comment-command",
-      customRules: [...policy.customRules, buildGitLabImproveRule(improveCommand.focus)],
-      includeCiChecks: policy.includeCiChecks,
-      enableSecretScan: policy.secretScanEnabled,
-      secretScanCustomPatterns: policy.secretScanCustomPatterns,
-      enableAutoLabel: false,
-    });
-    return { ok: true, message: "improve command triggered" };
-  }
-
-  const addDocCommand = parseAddDocCommand(body);
-  if (addDocCommand.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "add-doc",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "add_doc command rate limited" };
-    }
-
-    await runGitLabReview({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      mode: "comment",
-      trigger: "comment-command",
-      customRules: [...policy.customRules, buildGitLabAddDocRule(addDocCommand.focus)],
-      includeCiChecks: policy.includeCiChecks,
-      enableSecretScan: false,
-      enableAutoLabel: false,
-    });
-    return { ok: true, message: "add_doc command triggered" };
-  }
-
-  const reflectCommand = parseReflectCommand(body);
-  if (reflectCommand.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "reflect",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "reflect command rate limited" };
-    }
-    if (!policy.askCommandEnabled) {
-      await publishGitLabGeneralComment(
-        gitlabToken,
-        target,
-        localizeText(
-          {
-            zh: "`/reflect` 依赖 `/ask` 能力，但当前仓库已禁用 ask（.mr-agent.yml -> review.askCommandEnabled=false）。",
-            en: "`/reflect` depends on `/ask`, but ask is disabled for this repository (.mr-agent.yml -> review.askCommandEnabled=false).",
-          },
-          locale,
-        ),
-      );
-      return { ok: true, message: "reflect command ignored by policy" };
-    }
-
-    const reflectQuestion = buildGitLabReflectQuestion(reflectCommand.request);
-    await runGitLabAsk({
-      payload: mergePayload,
-      headers: params.headers,
-      logger: params.logger,
-      question: reflectQuestion,
-      trigger: "comment-command",
-      customRules: policy.customRules,
-      includeCiChecks: policy.includeCiChecks,
-      commentTitle: "AI Reflect",
-      displayQuestion: reflectCommand.request
-        ? `/reflect ${reflectCommand.request}`
-        : "/reflect",
-      managedCommentKey: buildGitLabManagedCommandCommentKey("reflect", reflectQuestion),
-    });
-    return { ok: true, message: "reflect command triggered" };
-  }
-
-  const similarIssueCommand = parseSimilarIssueCommand(body);
-  if (similarIssueCommand.matched) {
-    if (
-      await shouldRejectGitLabCommandByRateLimit({
-        gitlabToken,
-        target,
-        projectId: payload.project.id,
-        mrId: mergePayload.object_attributes.iid,
-        userName: commentUserName,
-        command: "similar-issue",
-        logger: params.logger,
-      })
-    ) {
-      return { ok: true, message: "similar_issue command rate limited" };
-    }
-
-    await runGitLabSimilarIssueCommand({
-      payload: mergePayload,
-      gitlabToken,
-      query: similarIssueCommand.query,
-      locale,
-    });
-    return { ok: true, message: "similar_issue command triggered" };
-  }
-
-  const command = parseReviewCommand(body);
-  if (!command.matched) {
-    return { ok: true, message: "ignored note content" };
-  }
-  if (
-    await shouldRejectGitLabCommandByRateLimit({
-      gitlabToken,
-      target,
-      projectId: payload.project.id,
-      mrId: mergePayload.object_attributes.iid,
-      userName: commentUserName,
-      command: "ai-review",
-      logger: params.logger,
-    })
-  ) {
-    return { ok: true, message: "note review rate limited" };
-  }
-
-  await runGitLabReview({
-    payload: mergePayload,
-    headers: params.headers,
-    logger: params.logger,
-    mode: command.mode,
-    trigger: "comment-command",
-    customRules: policy.customRules,
-    includeCiChecks: policy.includeCiChecks,
-    enableSecretScan: policy.secretScanEnabled,
-    secretScanCustomPatterns: policy.secretScanCustomPatterns,
-    enableAutoLabel: policy.autoLabelEnabled,
+  const registerCommand = <TParsed>(
+    name: string,
+    parse: () => TParsed | undefined,
+    execute: (parsed: TParsed) => Promise<CommandDispatchResult>,
+  ): CommandRegistration<unknown> => ({
+    name,
+    parse: parse as () => unknown | undefined,
+    execute: execute as (parsed: unknown) => Promise<CommandDispatchResult>,
   });
-  return { ok: true, message: "note review triggered" };
+
+  const commandRegistry: CommandRegistration<unknown>[] = [
+    registerCommand(
+      "feedback",
+      () => {
+        const parsed = parseFeedbackCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (feedbackCommand) => {
+        const limited = await hitRateLimit("feedback", "feedback command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.feedbackCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "feedback",
+              policyPath: ".mr-agent.yml -> review.feedbackCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "feedback command ignored by policy" };
+        }
+
+        const positive =
+          feedbackCommand.action === "resolved" || feedbackCommand.action === "up";
+        const signalCore = positive
+          ? "developer prefers high-confidence, actionable suggestions"
+          : "developer prefers fewer low-value/noisy suggestions";
+        const noteText = feedbackCommand.note ? `; note: ${feedbackCommand.note}` : "";
+        recordGitLabFeedbackSignal({
+          projectId: payload.project.id,
+          signal: `MR !${mergePayload.object_attributes.iid} ${feedbackCommand.action}: ${signalCore}${noteText}`,
+        });
+
+        const context = await collectGitLabMergeRequestContext({
+          payload: mergePayload,
+          gitlabToken,
+          baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
+        });
+        await publishGitLabGeneralComment(
+          gitlabToken,
+          context,
+          buildFeedbackSignalRecordedMessage({
+            action: feedbackCommand.action,
+            locale,
+          }),
+        );
+        return { ok: true, message: "feedback command recorded" };
+      },
+    ),
+    registerCommand(
+      "describe",
+      () => {
+        const parsed = parseDescribeCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (describe) => {
+        const limited = await hitRateLimit("describe", "describe command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.describeEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "describe",
+              policyPath: ".mr-agent.yml -> review.describeEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "describe command ignored by policy" };
+        }
+        if (describe.apply && !policy.describeAllowApply) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandApplyDisabledByPolicyMessage({
+              command: "describe",
+              policyPath: ".mr-agent.yml -> review.describeAllowApply=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "describe apply ignored by policy" };
+        }
+
+        await runGitLabDescribe({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          trigger: "describe-command",
+          apply: describe.apply && policy.describeAllowApply,
+        });
+        return { ok: true, message: "describe command triggered" };
+      },
+    ),
+    registerCommand(
+      "ask",
+      () => {
+        const parsed = parseAskCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (ask) => {
+        const limited = await hitRateLimit("ask", "ask command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.askCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "ask",
+              policyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "ask command ignored by policy" };
+        }
+
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: ask.question,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          enableConversationContext: true,
+          managedCommentKey: buildManagedCommandCommentKey("ask", ask.question),
+        });
+        return { ok: true, message: "ask command triggered" };
+      },
+    ),
+    registerCommand(
+      "checks",
+      () => {
+        const parsed = parseChecksCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (checksCommand) => {
+        const limited = await hitRateLimit("checks", "checks command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.checksCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "checks",
+              policyPath: ".mr-agent.yml -> review.checksCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "checks command ignored by policy" };
+        }
+
+        const checksQuestion = buildChecksQuestion("MR", checksCommand.question, locale);
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: checksQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: true,
+          commentTitle: "AI Checks",
+          managedCommentKey: buildManagedCommandCommentKey(
+            "checks",
+            checksQuestion,
+          ),
+        });
+        return { ok: true, message: "checks command triggered" };
+      },
+    ),
+    registerCommand(
+      "generate-tests",
+      () => {
+        const parsed = parseGenerateTestsCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (generateTests) => {
+        const limited = await hitRateLimit(
+          "generate-tests",
+          "generate_tests command rate limited",
+        );
+        if (limited) {
+          return limited;
+        }
+        if (!policy.generateTestsCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "generate_tests",
+              policyPath: ".mr-agent.yml -> review.generateTestsCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "generate_tests command ignored by policy" };
+        }
+
+        const generateTestsQuestion = buildGenerateTestsQuestion(
+          "MR",
+          generateTests.focus,
+          locale,
+        );
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: generateTestsQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          commentTitle: "AI Test Generator",
+          displayQuestion: generateTests.focus
+            ? `/generate_tests ${generateTests.focus}`
+            : "/generate_tests",
+          managedCommentKey: buildManagedCommandCommentKey(
+            "generate-tests",
+            generateTestsQuestion,
+          ),
+        });
+        return { ok: true, message: "generate_tests command triggered" };
+      },
+    ),
+    registerCommand(
+      "changelog",
+      () => {
+        const parsed = parseChangelogCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (changelogCommand) => {
+        const limited = await hitRateLimit("changelog", "changelog command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.changelogCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "changelog",
+              policyPath: ".mr-agent.yml -> review.changelogCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "changelog command ignored by policy" };
+        }
+        if (changelogCommand.apply && !policy.changelogAllowApply) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandApplyDisabledByPolicyMessage({
+              command: "changelog",
+              policyPath: ".mr-agent.yml -> review.changelogAllowApply=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "changelog apply ignored by policy" };
+        }
+
+        await runGitLabChangelog({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          trigger: "comment-command",
+          focus: changelogCommand.focus,
+          apply: changelogCommand.apply && policy.changelogAllowApply,
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+        });
+        return { ok: true, message: "changelog command triggered" };
+      },
+    ),
+    registerCommand(
+      "improve",
+      () => {
+        const parsed = parseImproveCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (improveCommand) => {
+        const limited = await hitRateLimit("improve", "improve command rate limited");
+        if (limited) {
+          return limited;
+        }
+
+        await runGitLabReview({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          mode: "comment",
+          trigger: "comment-command",
+          customRules: [...policy.customRules, buildGitLabImproveRule(improveCommand.focus)],
+          includeCiChecks: policy.includeCiChecks,
+          enableSecretScan: policy.secretScanEnabled,
+          secretScanCustomPatterns: policy.secretScanCustomPatterns,
+          enableAutoLabel: false,
+        });
+        return { ok: true, message: "improve command triggered" };
+      },
+    ),
+    registerCommand(
+      "add-doc",
+      () => {
+        const parsed = parseAddDocCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (addDocCommand) => {
+        const limited = await hitRateLimit("add-doc", "add_doc command rate limited");
+        if (limited) {
+          return limited;
+        }
+
+        await runGitLabReview({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          mode: "comment",
+          trigger: "comment-command",
+          customRules: [...policy.customRules, buildGitLabAddDocRule(addDocCommand.focus)],
+          includeCiChecks: policy.includeCiChecks,
+          enableSecretScan: false,
+          enableAutoLabel: false,
+        });
+        return { ok: true, message: "add_doc command triggered" };
+      },
+    ),
+    registerCommand(
+      "reflect",
+      () => {
+        const parsed = parseReflectCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (reflectCommand) => {
+        const limited = await hitRateLimit("reflect", "reflect command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.askCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildReflectDependsOnAskMessage({
+              askPolicyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "reflect command ignored by policy" };
+        }
+
+        const reflectQuestion = buildGitLabReflectQuestion(reflectCommand.request, locale);
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: reflectQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          commentTitle: "AI Reflect",
+          displayQuestion: reflectCommand.request
+            ? `/reflect ${reflectCommand.request}`
+            : "/reflect",
+          managedCommentKey: buildManagedCommandCommentKey("reflect", reflectQuestion),
+        });
+        return { ok: true, message: "reflect command triggered" };
+      },
+    ),
+    registerCommand(
+      "similar-issue",
+      () => {
+        const parsed = parseSimilarIssueCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (similarIssueCommand) => {
+        const limited = await hitRateLimit(
+          "similar-issue",
+          "similar_issue command rate limited",
+        );
+        if (limited) {
+          return limited;
+        }
+
+        await runGitLabSimilarIssueCommand({
+          payload: mergePayload,
+          gitlabToken,
+          query: similarIssueCommand.query,
+          locale,
+        });
+        return { ok: true, message: "similar_issue command triggered" };
+      },
+    ),
+    registerCommand(
+      "ai-review",
+      () => {
+        const parsed = parseReviewCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (command) => {
+        const limited = await hitRateLimit("ai-review", "note review rate limited");
+        if (limited) {
+          return limited;
+        }
+
+        await runGitLabReview({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          mode: command.mode,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          enableSecretScan: policy.secretScanEnabled,
+          secretScanCustomPatterns: policy.secretScanCustomPatterns,
+          enableAutoLabel: policy.autoLabelEnabled,
+        });
+        return { ok: true, message: "note review triggered" };
+      },
+    ),
+  ];
+
+  return dispatchCommandRegistrations(commandRegistry, {
+    ok: true,
+    message: "ignored note content",
+  });
 }
 
 async function runGitLabAsk(params: GitLabAskRunParams): Promise<void> {
-  const {
-    payload,
-    headers,
-    logger,
-    question,
-    trigger,
-    dedupeSuffix,
-    customRules = [],
-    includeCiChecks = true,
-    commentTitle = "AI Ask",
-    displayQuestion,
-    managedCommentKey,
-    enableConversationContext = false,
-    throwOnError = false,
-  } = params;
-  const locale = resolveUiLocale();
-  const requestKey = [
-    `gitlab:${payload.project.id}#${payload.object_attributes.iid}:ask:${trigger}:${question.trim().replace(/\s+/g, " ").slice(0, 120)}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-
-  const gitlabToken = requireGitLabToken(headers);
-  const target = buildGitLabCommentTargetFromPayload({
-    payload,
-    baseUrl: process.env.GITLAB_BASE_URL,
-  });
-  if (isDuplicateRequest(requestKey, DEFAULT_DEDUPE_TTL_MS)) {
-    await postGitLabCommandComment({
-      gitlabToken,
-      target,
-      body: localizeText(
-        {
-          zh: `\`${commentTitle}\` 最近 5 分钟内已执行过同类请求，本次已跳过。`,
-          en: `\`${commentTitle}\` already handled a similar request in the last 5 minutes, skipped this request.`,
-        },
-        locale,
-      ),
-      managedCommentKey,
-      logger,
-    });
-    return;
-  }
-
-  try {
-    const feedbackSignals = loadGitLabFeedbackSignals(payload.project.id);
-    const collected = await collectGitLabMergeRequestContext({
-      payload,
-      gitlabToken,
-      baseUrl: process.env.GITLAB_BASE_URL,
-      customRules,
-      includeCiChecks,
-      feedbackSignals,
-    });
-    const sessionKey = `gitlab:${payload.project.id}#${payload.object_attributes.iid}`;
-    const conversation = enableConversationContext
-      ? loadAskConversationTurns(sessionKey)
-      : [];
-    const answer = await answerPullRequestQuestion(collected.input, question, {
-      conversation,
-    });
-    if (enableConversationContext) {
-      rememberAskConversationTurn({
-        sessionKey,
-        question: (displayQuestion ?? question).trim(),
-        answer,
-      });
-    }
-    await postGitLabCommandComment({
-      gitlabToken,
-      target: collected,
-      body: [
-        `## ${commentTitle}`,
-        "",
-        `**Q:** ${(displayQuestion ?? question).trim()}`,
-        "",
-        `**A:** ${answer}`,
-      ].join("\n"),
-      managedCommentKey,
-      logger,
-    });
-  } catch (error) {
-    clearDuplicateRecord(requestKey);
-    logger.error(
-      {
-        projectId: payload.project.id,
-        mrId: payload.object_attributes.iid,
-        trigger,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      "GitLab ask failed",
-    );
-    try {
-      await postGitLabCommandComment({
-        gitlabToken,
-        target,
-        body: [
-          localizeText(
-            {
-              zh: `## ${commentTitle} 执行失败`,
-              en: `## ${commentTitle} Failed`,
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${error instanceof Error ? error.message : String(error)}\``,
-              en: `Error: \`${error instanceof Error ? error.message : String(error)}\``,
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-        logger,
-      });
-    } catch (commentError) {
-      logger.error(
-        {
-          projectId: payload.project.id,
-          mrId: payload.object_attributes.iid,
-          trigger,
-          error: commentError instanceof Error ? commentError.message : String(commentError),
-        },
-        "Failed to publish GitLab ask failure comment",
-      );
-    }
-    if (throwOnError) {
-      throw ensureError(error);
-    }
-  }
+  return gitLabCommandWorkflows.runAsk(params);
 }
 
 async function runGitLabDescribe(params: GitLabDescribeRunParams): Promise<void> {
-  const {
-    payload,
-    headers,
-    logger,
-    trigger,
-    apply = false,
-    dedupeSuffix,
-    throwOnError = false,
-  } = params;
-  const managedCommentKey = "cmd-describe";
-  const locale = resolveUiLocale();
-  const requestKey = [
-    `gitlab:${payload.project.id}#${payload.object_attributes.iid}:describe:${trigger}:${apply ? "apply" : "draft"}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-
-  const gitlabToken = requireGitLabToken(headers);
-  const target = buildGitLabCommentTargetFromPayload({
-    payload,
-    baseUrl: process.env.GITLAB_BASE_URL,
-  });
-  if (isDuplicateRequest(requestKey, DEFAULT_DEDUPE_TTL_MS)) {
-    await postGitLabCommandComment({
-      gitlabToken,
-      target,
-      body: localizeText(
-        {
-          zh: "`AI MR 描述` 最近 5 分钟内已执行过同类请求，本次已跳过。",
-          en: "`AI MR Description` already handled a similar request in the last 5 minutes, skipped this request.",
-        },
-        locale,
-      ),
-      managedCommentKey,
-      logger,
-    });
-    return;
-  }
-
-  try {
-    const collected = await collectGitLabMergeRequestContext({
-      payload,
-      gitlabToken,
-      baseUrl: process.env.GITLAB_BASE_URL,
-    });
-    const description = await answerPullRequestQuestion(
-      collected.input,
-      buildGitLabDescribeQuestion(locale),
-    );
-
-    if (apply) {
-      await updateGitLabMergeRequestDescription({
-        gitlabToken,
-        collected,
-        description,
-      });
-      await postGitLabCommandComment({
-        gitlabToken,
-        target: collected,
-        body: [
-          localizeText(
-            {
-              zh: "## AI MR 描述已更新",
-              en: "## AI MR Description Updated",
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: "已根据当前 diff 自动生成并写入 MR 描述。",
-              en: "The MR description was generated from the current diff and applied.",
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-        logger,
-      });
-      return;
-    }
-
-    await postGitLabCommandComment({
-      gitlabToken,
-      target: collected,
-      body: [
-        localizeText(
-          {
-            zh: "## AI 生成 MR 描述草稿",
-            en: "## AI MR Description Draft",
-          },
-          locale,
-        ),
-        "",
-        "```markdown",
-        description,
-        "```",
-        "",
-        localizeText(
-          {
-            zh: "如需自动写入 MR 描述，请使用：`/describe --apply`",
-            en: "To apply this draft to the MR description, use: `/describe --apply`",
-          },
-          locale,
-        ),
-      ].join("\n"),
-      managedCommentKey,
-      logger,
-    });
-  } catch (error) {
-    clearDuplicateRecord(requestKey);
-    logger.error(
-      {
-        projectId: payload.project.id,
-        mrId: payload.object_attributes.iid,
-        trigger,
-        apply,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      "GitLab describe failed",
-    );
-    try {
-      await postGitLabCommandComment({
-        gitlabToken,
-        target,
-        body: [
-          localizeText(
-            {
-              zh: "## AI MR 描述执行失败",
-              en: "## AI MR Description Failed",
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${error instanceof Error ? error.message : String(error)}\``,
-              en: `Error: \`${error instanceof Error ? error.message : String(error)}\``,
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-        logger,
-      });
-    } catch (commentError) {
-      logger.error(
-        {
-          projectId: payload.project.id,
-          mrId: payload.object_attributes.iid,
-          trigger,
-          apply,
-          error: commentError instanceof Error ? commentError.message : String(commentError),
-        },
-        "Failed to publish GitLab describe failure comment",
-      );
-    }
-    if (throwOnError) {
-      throw ensureError(error);
-    }
-  }
+  return gitLabCommandWorkflows.runDescribe(params);
 }
 
 async function runGitLabChangelog(params: GitLabChangelogRunParams): Promise<void> {
-  const {
-    payload,
-    headers,
-    logger,
-    trigger,
-    focus,
-    apply = false,
-    dedupeSuffix,
-    customRules = [],
-    includeCiChecks = true,
-    throwOnError = false,
-  } = params;
-  const managedCommentKey = "cmd-changelog";
-  const locale = resolveUiLocale();
-  const requestKey = [
-    `gitlab:${payload.project.id}#${payload.object_attributes.iid}:changelog:${trigger}:${apply ? "apply" : "draft"}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-
-  const gitlabToken = requireGitLabToken(headers);
-  const target = buildGitLabCommentTargetFromPayload({
-    payload,
-    baseUrl: process.env.GITLAB_BASE_URL,
-  });
-  if (isDuplicateRequest(requestKey, DEFAULT_DEDUPE_TTL_MS)) {
-    await postGitLabCommandComment({
-      gitlabToken,
-      target,
-      body: localizeText(
-        {
-          zh: "`AI Changelog` 最近 5 分钟内已执行过同类请求，本次已跳过。",
-          en: "`AI Changelog` already handled a similar request in the last 5 minutes, skipped this request.",
-        },
-        locale,
-      ),
-      managedCommentKey,
-      logger,
-    });
-    return;
-  }
-
-  try {
-    const feedbackSignals = loadGitLabFeedbackSignals(payload.project.id);
-    const collected = await collectGitLabMergeRequestContext({
-      payload,
-      gitlabToken,
-      baseUrl: process.env.GITLAB_BASE_URL,
-      customRules,
-      includeCiChecks,
-      feedbackSignals,
-    });
-    const draft = (
-      await answerPullRequestQuestion(
-        collected.input,
-        buildGitLabChangelogQuestion(focus, locale),
-      )
-    ).trim();
-
-    if (!apply) {
-      await postGitLabCommandComment({
-        gitlabToken,
-        target: collected,
-        body: [
-          "## AI Changelog Draft",
-          "",
-          draft,
-          "",
-          localizeText(
-            {
-              zh: "如需自动写入仓库 CHANGELOG，请使用：`/changelog --apply`。",
-              en: "To apply this draft to repository CHANGELOG, use: `/changelog --apply`.",
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-        logger,
-      });
-      return;
-    }
-
-    const applyResult = await applyGitLabChangelogUpdate({
-      gitlabToken,
-      collected,
-      pullNumber: collected.mrId,
-      draft,
-    });
-    await postGitLabCommandComment({
-      gitlabToken,
-      target: collected,
-      body: [
-        localizeText(
-          {
-            zh: "## AI Changelog 已更新",
-            en: "## AI Changelog Updated",
-          },
-          locale,
-        ),
-        "",
-        applyResult.message,
-        "",
-        "```markdown",
-        draft,
-        "```",
-      ].join("\n"),
-      managedCommentKey,
-      logger,
-    });
-  } catch (error) {
-    clearDuplicateRecord(requestKey);
-    logger.error(
-      {
-        projectId: payload.project.id,
-        mrId: payload.object_attributes.iid,
-        trigger,
-        apply,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      "GitLab changelog failed",
-    );
-    try {
-      await postGitLabCommandComment({
-        gitlabToken,
-        target,
-        body: [
-          localizeText(
-            {
-              zh: "## AI Changelog 执行失败",
-              en: "## AI Changelog Failed",
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${error instanceof Error ? error.message : String(error)}\``,
-              en: `Error: \`${error instanceof Error ? error.message : String(error)}\``,
-            },
-            locale,
-          ),
-        ].join("\n"),
-        managedCommentKey,
-        logger,
-      });
-    } catch (commentError) {
-      logger.error(
-        {
-          projectId: payload.project.id,
-          mrId: payload.object_attributes.iid,
-          trigger,
-          apply,
-          error: commentError instanceof Error ? commentError.message : String(commentError),
-        },
-        "Failed to publish GitLab changelog failure comment",
-      );
-    }
-    if (throwOnError) {
-      throw ensureError(error);
-    }
-  }
+  return gitLabCommandWorkflows.runChangelog(params);
 }
 
 async function collectGitLabMergeRequestContext(params: {
@@ -1995,25 +1509,15 @@ async function collectGitLabMergeRequestContext(params: {
   const mrId = payload.object_attributes.iid;
   const baseUrl = resolveGitLabBaseUrl(params.baseUrl, payload.project.web_url);
 
-  const response = await fetchWithRetry(
-    `${baseUrl}/api/v4/projects/${encodeURIComponent(projectId)}/merge_requests/${mrId}/changes`,
-    {
-      headers: {
-        "PRIVATE-TOKEN": gitlabToken,
-        "content-type": "application/json",
-      },
-    },
-    {
-      timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-      retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-      backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-    },
-  );
+  const response = await gitLabApiRequest({
+    url: `${baseUrl}/api/v4/projects/${encodeURIComponent(projectId)}/merge_requests/${mrId}/changes`,
+    token: gitlabToken,
+  });
 
   if (!response.ok) {
     const body = await response.text();
     throw new Error(
-      `获取 GitLab MR changes 失败 (${response.status}): ${body.slice(0, 300)}`,
+      `Failed to fetch GitLab MR changes (${response.status}): ${body.slice(0, 300)}`,
     );
   }
 
@@ -2035,49 +1539,24 @@ async function collectGitLabMergeRequestContext(params: {
     }
   }
 
-  const files: DiffFileContext[] = [];
   const limits = resolveGitLabPatchCharLimits();
-  let totalPatchChars = 0;
-  let totalAdditions = 0;
-  let totalDeletions = 0;
-
-  for (const change of sourceChanges) {
-    if (files.length >= MAX_FILES || totalPatchChars >= limits.maxTotalPatchChars) {
-      break;
-    }
-
-    if (!isReviewTargetFile(change.new_path, "gitlab")) {
-      continue;
-    }
-
-    const rawPatch = change.diff ?? "(binary / patch omitted)";
-    const trimmedPatch = prioritizePatchHunks(
-      rawPatch,
-      limits.maxPatchCharsPerFile,
-    );
-
-    if (totalPatchChars + trimmedPatch.length > limits.maxTotalPatchChars) {
-      break;
-    }
-
-    totalPatchChars += trimmedPatch.length;
-    const parsed = parsePatchWithLineNumbers(trimmedPatch);
-    const stats = countPatchChanges(trimmedPatch);
-    totalAdditions += stats.additions;
-    totalDeletions += stats.deletions;
-
-    files.push({
+  const {
+    files,
+    totalAdditions,
+    totalDeletions,
+  } = buildDiffFileContexts({
+    candidates: sourceChanges.map((change) => ({
       newPath: change.new_path,
       oldPath: change.old_path || change.new_path,
       status: resolveGitLabChangeStatus(change),
-      additions: stats.additions,
-      deletions: stats.deletions,
-      patch: trimmedPatch,
-      extendedDiff: parsed.extendedDiff,
-      oldLinesWithNumber: parsed.oldLinesWithNumber,
-      newLinesWithNumber: parsed.newLinesWithNumber,
-    });
-  }
+      patch: change.diff,
+    })),
+    maxFiles: MAX_FILES,
+    maxPatchCharsPerFile: limits.maxPatchCharsPerFile,
+    maxTotalPatchChars: limits.maxTotalPatchChars,
+    shouldIncludeFile: (newPath) => isReviewTargetFile(newPath, "gitlab"),
+    resolveStats: (trimmedPatch) => countPatchChanges(trimmedPatch),
+  });
 
   const processGuidelines = await loadGitLabRepositoryProcessGuidelines({
     baseUrl,
@@ -2148,7 +1627,7 @@ async function publishGitLabLineComments(
   collected: GitLabCollectedContext,
   result: PullRequestReviewResult,
   logger: LoggerLike,
-  locale: "zh" | "en",
+  locale: UiLocale,
 ): Promise<void> {
   let failed = 0;
   for (const review of result.reviews) {
@@ -2179,25 +1658,15 @@ async function publishGitLabLineComments(
 
     let response: Response;
     try {
-      response = await fetchWithRetry(
-        `${collected.baseUrl}/api/v4/projects/${encodeURIComponent(collected.projectId)}/merge_requests/${collected.mrId}/discussions`,
-        {
-          method: "POST",
-          headers: {
-            "PRIVATE-TOKEN": gitlabToken,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            body,
-            position,
-          }),
+      response = await gitLabApiRequest({
+        url: `${collected.baseUrl}/api/v4/projects/${encodeURIComponent(collected.projectId)}/merge_requests/${collected.mrId}/discussions`,
+        token: gitlabToken,
+        method: "POST",
+        body: {
+          body,
+          position,
         },
-        {
-          timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-          retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-          backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-        },
-      );
+      });
     } catch (error) {
       failed += 1;
       logger.error(
@@ -2235,27 +1704,17 @@ async function publishGitLabGeneralComment(
   target: GitLabCommentTarget,
   body: string,
 ): Promise<void> {
-  const response = await fetchWithRetry(
-    `${target.baseUrl}/api/v4/projects/${encodeURIComponent(target.projectId)}/merge_requests/${target.mrId}/notes`,
-    {
-      method: "POST",
-      headers: {
-        "PRIVATE-TOKEN": gitlabToken,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ body }),
-    },
-    {
-      timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-      retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-      backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-    },
-  );
+  const response = await gitLabApiRequest({
+    url: `${target.baseUrl}/api/v4/projects/${encodeURIComponent(target.projectId)}/merge_requests/${target.mrId}/notes`,
+    token: gitlabToken,
+    method: "POST",
+    body: { body },
+  });
 
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
-      `发布 GitLab 报告评论失败 (${response.status}): ${text.slice(0, 300)}`,
+      `Failed to publish GitLab report comment (${response.status}): ${text.slice(0, 300)}`,
     );
   }
 }
@@ -2291,13 +1750,7 @@ function ensureSecureGitLabBaseUrl(
 }
 
 function readBoolEnv(key: string): boolean {
-  const normalized = (process.env[key] ?? "").trim().toLowerCase();
-  return (
-    normalized === "true" ||
-    normalized === "1" ||
-    normalized === "yes" ||
-    normalized === "on"
-  );
+  return parseBooleanEnv(readOptionalStringEnv(key));
 }
 
 function parseMode(modeRaw: string | undefined): ReviewMode | undefined {
@@ -2316,118 +1769,71 @@ async function loadGitLabRepositoryProcessGuidelines(params: {
   ref: string;
 }): Promise<ProcessGuideline[]> {
   const { baseUrl, projectId, gitlabToken, ref } = params;
-  const cacheKey = `${baseUrl}:${projectId}@${ref}`;
-  const now = Date.now();
-  pruneExpiredCache(guidelineCache, now);
-  const cached = getFreshCacheValue(guidelineCache, cacheKey, now);
-  if (cached) {
-    return cached;
-  }
-
-  const guidelines: ProcessGuideline[] = [];
-  const visited = new Set<string>();
-
-  for (const path of GITLAB_GUIDELINE_FILE_PATHS) {
-    await tryAddGitLabGuideline({
-      baseUrl,
-      projectId,
-      gitlabToken,
-      ref,
-      path,
-      guidelines,
-      visited,
-    });
-  }
-
-  for (const dir of GITLAB_GUIDELINE_DIRECTORIES) {
-    const entries = await tryListGitLabDirectory({
-      baseUrl,
-      projectId,
-      gitlabToken,
-      ref,
-      path: dir,
-    });
-
-    for (const entry of entries.slice(0, MAX_GUIDELINES_PER_DIRECTORY)) {
-      if (!isProcessTemplateFile(entry.path, "gitlab")) {
-        continue;
-      }
-
-      await tryAddGitLabGuideline({
+  return loadProcessGuidelinesWithCache({
+    scope: GITLAB_GUIDELINE_CACHE_SCOPE,
+    cacheKey: `${baseUrl}:${projectId}@${ref}`,
+    ttlMs: readNumberEnv(
+      "GITLAB_GUIDELINE_CACHE_TTL_MS",
+      DEFAULT_GUIDELINE_CACHE_TTL_MS,
+    ),
+    maxEntries: MAX_GUIDELINE_CACHE_ENTRIES,
+    filePaths: GITLAB_GUIDELINE_FILE_PATHS,
+    directories: GITLAB_GUIDELINE_DIRECTORIES,
+    maxGuidelines: MAX_GUIDELINES,
+    maxGuidelinesPerDirectory: MAX_GUIDELINES_PER_DIRECTORY,
+    isTemplateFile: (path) => isProcessTemplateFile(path, "gitlab"),
+    readFile: async (path) =>
+      readGitLabGuidelineFile({
         baseUrl,
         projectId,
         gitlabToken,
         ref,
-        path: entry.path,
-        guidelines,
-        visited,
-      });
-    }
-  }
-
-  const result = guidelines.slice(0, MAX_GUIDELINES);
-  guidelineCache.set(cacheKey, {
-    expiresAt:
-      now +
-      readNumberEnv("GITLAB_GUIDELINE_CACHE_TTL_MS", DEFAULT_GUIDELINE_CACHE_TTL_MS),
-    value: result,
+        path,
+      }),
+    listDirectory: async (path) =>
+      listGitLabDirectory({
+        baseUrl,
+        projectId,
+        gitlabToken,
+        ref,
+        path,
+      }),
   });
-  trimCache(guidelineCache, MAX_GUIDELINE_CACHE_ENTRIES);
-
-  return result;
 }
 
-async function tryAddGitLabGuideline(params: {
+async function readGitLabGuidelineFile(params: {
   baseUrl: string;
   projectId: number;
   gitlabToken: string;
   ref: string;
   path: string;
-  guidelines: ProcessGuideline[];
-  visited: Set<string>;
-}): Promise<void> {
-  const normalizedPath = params.path.trim();
-  if (!normalizedPath || params.visited.has(normalizedPath.toLowerCase())) {
-    return;
-  }
-
-  params.visited.add(normalizedPath.toLowerCase());
-
+}): Promise<ProcessGuideline | undefined> {
   let response: Response;
   try {
-    response = await fetchWithRetry(
-      `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/files/${encodeURIComponent(normalizedPath)}/raw?ref=${encodeURIComponent(params.ref)}`,
-      {
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-        },
-      },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    response = await gitLabApiRequest({
+      url: `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/files/${encodeURIComponent(params.path)}/raw?ref=${encodeURIComponent(params.ref)}`,
+      token: params.gitlabToken,
+    });
   } catch {
-    return;
+    return undefined;
   }
 
   if (!response.ok) {
-    return;
+    return undefined;
   }
 
   const content = (await response.text()).trim();
   if (!content) {
-    return;
+    return undefined;
   }
 
-  params.guidelines.push({
-    path: normalizedPath,
+  return {
+    path: params.path,
     content: content.slice(0, 4_000),
-  });
+  };
 }
 
-async function tryListGitLabDirectory(params: {
+async function listGitLabDirectory(params: {
   baseUrl: string;
   projectId: number;
   gitlabToken: string;
@@ -2436,19 +1842,10 @@ async function tryListGitLabDirectory(params: {
 }): Promise<Array<{ path: string; type: string }>> {
   let response: Response;
   try {
-    response = await fetchWithRetry(
-      `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/tree?path=${encodeURIComponent(params.path)}&ref=${encodeURIComponent(params.ref)}&per_page=20`,
-      {
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-        },
-      },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    response = await gitLabApiRequest({
+      url: `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/tree?path=${encodeURIComponent(params.path)}&ref=${encodeURIComponent(params.ref)}&per_page=20`,
+      token: params.gitlabToken,
+    });
   } catch {
     return [];
   }
@@ -2486,22 +1883,11 @@ function resolveGitLabChangeStatus(change: GitLabChange): string {
   return "modified";
 }
 
-function resolveGitLabDedupeTtl(trigger: GitLabReviewTrigger, mode: ReviewMode): number {
-  if (trigger === "merged" && mode === "report") {
-    return readNumberEnv(
-      "GITLAB_MERGED_DEDUPE_TTL_MS",
-      DEFAULT_MERGED_REPORT_DEDUPE_TTL_MS,
-    );
-  }
-
-  return DEFAULT_DEDUPE_TTL_MS;
-}
-
 function requireGitLabToken(headers: Record<string, string | undefined>): string {
-  const token = headers["x-gitlab-api-token"] ?? process.env.GITLAB_TOKEN;
+  const token = headers["x-gitlab-api-token"] ?? readOptionalStringEnv("GITLAB_TOKEN");
   if (!token) {
     throw new BadWebhookRequestError(
-      "gitlab api token 不能为空（x-gitlab-api-token 或 GITLAB_TOKEN）",
+      "Missing GitLab API token (x-gitlab-api-token or GITLAB_TOKEN)",
     );
   }
   return token;
@@ -2545,48 +1931,33 @@ function shouldRunGitLabAutoReview(
   return true;
 }
 
-function shouldUseIncrementalReview(trigger: GitLabReviewTrigger): boolean {
-  return trigger === "pr-synchronize" || trigger === "pr-edited";
-}
-
 function getIncrementalHead(reviewMrKey: string): string | undefined {
-  const now = Date.now();
-  pruneExpiredCache(incrementalHeadCache, now);
-  return (
-    getFreshCacheValue(incrementalHeadCache, reviewMrKey, now) ??
-    loadRuntimeStateValue<string>(GITLAB_INCREMENTAL_STATE_SCOPE, reviewMrKey, now)
-  );
+  return loadIncrementalReviewHead({
+    scope: GITLAB_INCREMENTAL_STATE_SCOPE,
+    key: reviewMrKey,
+  });
 }
 
 function rememberIncrementalHead(reviewMrKey: string, headSha: string): void {
-  const now = Date.now();
-  const ttlMs = readNumberEnv(
-    "GITLAB_INCREMENTAL_STATE_TTL_MS",
-    DEFAULT_INCREMENTAL_STATE_TTL_MS,
-  );
-  incrementalHeadCache.set(reviewMrKey, {
-    expiresAt: now + ttlMs,
-    value: headSha,
-  });
-  trimCache(incrementalHeadCache, MAX_INCREMENTAL_STATE_ENTRIES);
-  saveRuntimeStateValue({
+  rememberIncrementalReviewHead({
     scope: GITLAB_INCREMENTAL_STATE_SCOPE,
     key: reviewMrKey,
-    value: headSha,
-    expiresAt: now + ttlMs,
+    headSha,
+    ttlMs: readNumberEnv(
+      "GITLAB_INCREMENTAL_STATE_TTL_MS",
+      DEFAULT_INCREMENTAL_STATE_TTL_MS,
+    ),
     maxEntries: MAX_INCREMENTAL_STATE_ENTRIES,
   });
 }
 
 function loadGitLabFeedbackSignals(projectId: number): string[] {
   const key = `${projectId}`;
-  const now = Date.now();
-  pruneExpiredCache(feedbackSignalCache, now);
-  return (
-    getFreshCacheValue(feedbackSignalCache, key, now) ??
-    loadRuntimeStateValue<string[]>(GITLAB_FEEDBACK_SIGNAL_SCOPE, key, now) ??
-    []
-  );
+  return readMergedFeedbackSignals({
+    scope: GITLAB_FEEDBACK_SIGNAL_SCOPE,
+    scopedKey: key,
+    maxSignals: MAX_FEEDBACK_SIGNALS,
+  });
 }
 
 async function resolveGitLabReviewPolicy(params: {
@@ -2596,9 +1967,12 @@ async function resolveGitLabReviewPolicy(params: {
   ref: string;
 }): Promise<GitLabReviewPolicy> {
   const cacheKey = `${params.baseUrl}:${params.projectId}@${params.ref}`;
-  const now = Date.now();
-  pruneExpiredCache(gitlabPolicyCache, now);
-  const cached = getFreshCacheValue(gitlabPolicyCache, cacheKey, now);
+  const now = nowMs();
+  const cached = loadRuntimeStateValue<GitLabReviewPolicy>(
+    GITLAB_POLICY_CACHE_SCOPE,
+    cacheKey,
+    now,
+  );
   if (cached) {
     return cached;
   }
@@ -2628,7 +2002,9 @@ async function resolveGitLabReviewPolicy(params: {
           ...defaultGitLabReviewPolicy.secretScanCustomPatterns,
         ],
       };
-  gitlabPolicyCache.set(cacheKey, {
+  saveRuntimeStateValue({
+    scope: GITLAB_POLICY_CACHE_SCOPE,
+    key: cacheKey,
     value: resolved,
     expiresAt:
       now +
@@ -2636,240 +2012,52 @@ async function resolveGitLabReviewPolicy(params: {
         "GITLAB_POLICY_CONFIG_CACHE_TTL_MS",
         DEFAULT_POLICY_CONFIG_CACHE_TTL_MS,
       ),
+    maxEntries: 500,
   });
-  trimCache(gitlabPolicyCache, 500);
 
   return resolved;
 }
 
 export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
-  const policy: GitLabReviewPolicy = {
+  const basePolicy: GitLabReviewPolicy = {
     ...defaultGitLabReviewPolicy,
     customRules: [...defaultGitLabReviewPolicy.customRules],
     secretScanCustomPatterns: [...defaultGitLabReviewPolicy.secretScanCustomPatterns],
   };
-  const lines = raw.split(/\r?\n/);
-  let inReview = false;
-  let reviewIndent = 0;
-  let readingRules = false;
-  let rulesIndent = 0;
-  let readingSecretPatterns = false;
-  let secretPatternsIndent = 0;
-
-  for (const originalLine of lines) {
-    const line = stripInlineYamlComment(originalLine);
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const indent = line.match(/^ */)?.[0].length ?? 0;
-
-    if (!inReview) {
-      if (/^review\s*:\s*$/i.test(trimmed)) {
-        inReview = true;
-        reviewIndent = indent;
-      }
-      continue;
-    }
-
-    if (indent <= reviewIndent && !trimmed.startsWith("-")) {
-      inReview = false;
-      readingRules = false;
-      readingSecretPatterns = false;
-      continue;
-    }
-
-    if (readingRules) {
-      if (indent > rulesIndent && trimmed.startsWith("- ")) {
-        policy.customRules.push(stripYamlQuotes(trimmed.slice(2).trim()));
-        continue;
-      }
-      readingRules = false;
-    }
-
-    if (readingSecretPatterns) {
-      if (indent > secretPatternsIndent && trimmed.startsWith("- ")) {
-        policy.secretScanCustomPatterns.push(
-          stripYamlQuotes(trimmed.slice(2).trim()),
-        );
-        continue;
-      }
-      readingSecretPatterns = false;
-    }
-
-    const pair = trimmed.match(/^([A-Za-z0-9_]+)\s*:\s*(.*)$/);
-    if (!pair) {
-      continue;
-    }
-
-    const key = pair[1]?.trim() ?? "";
-    const valueRaw = pair[2]?.trim() ?? "";
-    const keyLower = key.toLowerCase();
-
-    if (keyLower === "customrules" || keyLower === "custom_rules") {
-      if (!valueRaw) {
-        readingRules = true;
-        rulesIndent = indent;
-        continue;
-      }
-      if (valueRaw.startsWith("[")) {
-        policy.customRules = valueRaw
-          .replace(/^\[/, "")
-          .replace(/\]$/, "")
-          .split(",")
-          .map((item) => stripYamlQuotes(item.trim()))
-          .filter(Boolean)
-          .slice(0, 30);
-      }
-      continue;
-    }
-
-    if (
-      keyLower === "secretscancustompatterns" ||
-      keyLower === "secret_scan_custom_patterns"
-    ) {
-      if (!valueRaw) {
-        readingSecretPatterns = true;
-        secretPatternsIndent = indent;
-        continue;
-      }
-      if (valueRaw.startsWith("[")) {
-        policy.secretScanCustomPatterns = valueRaw
-          .replace(/^\[/, "")
-          .replace(/\]$/, "")
-          .split(",")
-          .map((item) => stripYamlQuotes(item.trim()))
-          .filter(Boolean)
-          .slice(0, 20);
-      }
-      continue;
-    }
-
-    const bool = parseYamlBoolean(valueRaw);
-    if (keyLower === "enabled" && bool !== undefined) {
-      policy.enabled = bool;
-      continue;
-    }
-    if (keyLower === "mode") {
-      const normalizedMode = stripYamlQuotes(valueRaw).trim().toLowerCase();
-      if (normalizedMode === "comment" || normalizedMode === "report") {
-        policy.mode = normalizedMode;
-      }
-      continue;
-    }
-    if ((keyLower === "onopened" || keyLower === "on_opened") && bool !== undefined) {
-      policy.onOpened = bool;
-      continue;
-    }
-    if ((keyLower === "onedited" || keyLower === "on_edited") && bool !== undefined) {
-      policy.onEdited = bool;
-      continue;
-    }
-    if (
-      (keyLower === "onsynchronize" || keyLower === "on_synchronize") &&
-      bool !== undefined
-    ) {
-      policy.onSynchronize = bool;
-      continue;
-    }
-    if (
-      (keyLower === "describeenabled" || keyLower === "describe_enabled") &&
-      bool !== undefined
-    ) {
-      policy.describeEnabled = bool;
-      continue;
-    }
-    if (
-      (keyLower === "describeallowapply" || keyLower === "describe_allow_apply") &&
-      bool !== undefined
-    ) {
-      policy.describeAllowApply = bool;
-      continue;
-    }
-    if (
-      (keyLower === "checkscommandenabled" || keyLower === "checks_command_enabled") &&
-      bool !== undefined
-    ) {
-      policy.checksCommandEnabled = bool;
-      continue;
-    }
-    if (
-      (keyLower === "includecichecks" || keyLower === "include_ci_checks") &&
-      bool !== undefined
-    ) {
-      policy.includeCiChecks = bool;
-      continue;
-    }
-    if (
-      (keyLower === "secretscanenabled" || keyLower === "secret_scan_enabled") &&
-      bool !== undefined
-    ) {
-      policy.secretScanEnabled = bool;
-      continue;
-    }
-    if (
-      (keyLower === "autolabelenabled" || keyLower === "auto_label_enabled") &&
-      bool !== undefined
-    ) {
-      policy.autoLabelEnabled = bool;
-      continue;
-    }
-    if ((keyLower === "askcommandenabled" || keyLower === "ask_command_enabled") && bool !== undefined) {
-      policy.askCommandEnabled = bool;
-      continue;
-    }
-    if (
-      (keyLower === "generatetestscommandenabled" ||
-        keyLower === "generate_tests_command_enabled") &&
-      bool !== undefined
-    ) {
-      policy.generateTestsCommandEnabled = bool;
-      continue;
-    }
-    if (
-      (keyLower === "changelogcommandenabled" ||
-        keyLower === "changelog_command_enabled") &&
-      bool !== undefined
-    ) {
-      policy.changelogCommandEnabled = bool;
-      continue;
-    }
-    if (
-      (keyLower === "changelogallowapply" || keyLower === "changelog_allow_apply") &&
-      bool !== undefined
-    ) {
-      policy.changelogAllowApply = bool;
-      continue;
-    }
-    if (
-      (keyLower === "feedbackcommandenabled" || keyLower === "feedback_command_enabled") &&
-      bool !== undefined
-    ) {
-      policy.feedbackCommandEnabled = bool;
-      continue;
-    }
+  let overrides: ReturnType<typeof parseReviewPolicyOverridesFromConfigText>;
+  try {
+    overrides = parseReviewPolicyOverridesFromConfigText(raw);
+  } catch {
+    return basePolicy;
   }
 
-  policy.customRules = policy.customRules
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 30);
-  policy.secretScanCustomPatterns = policy.secretScanCustomPatterns
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 20);
-  return policy;
-}
-
-function parseYamlBoolean(raw: string): boolean | undefined {
-  const normalized = stripYamlQuotes(raw).trim().toLowerCase();
-  if (["true", "yes", "on", "1"].includes(normalized)) {
-    return true;
-  }
-  if (["false", "no", "off", "0"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
+  return {
+    ...basePolicy,
+    enabled: overrides.enabled ?? basePolicy.enabled,
+    mode: overrides.mode ?? basePolicy.mode,
+    onOpened: overrides.onOpened ?? basePolicy.onOpened,
+    onEdited: overrides.onEdited ?? basePolicy.onEdited,
+    onSynchronize: overrides.onSynchronize ?? basePolicy.onSynchronize,
+    describeEnabled: overrides.describeEnabled ?? basePolicy.describeEnabled,
+    describeAllowApply: overrides.describeAllowApply ?? basePolicy.describeAllowApply,
+    checksCommandEnabled: overrides.checksCommandEnabled ?? basePolicy.checksCommandEnabled,
+    includeCiChecks: overrides.includeCiChecks ?? basePolicy.includeCiChecks,
+    secretScanEnabled: overrides.secretScanEnabled ?? basePolicy.secretScanEnabled,
+    secretScanCustomPatterns: normalizePolicyStringList(
+      overrides.secretScanCustomPatterns,
+      20,
+    ),
+    autoLabelEnabled: overrides.autoLabelEnabled ?? basePolicy.autoLabelEnabled,
+    askCommandEnabled: overrides.askCommandEnabled ?? basePolicy.askCommandEnabled,
+    generateTestsCommandEnabled:
+      overrides.generateTestsCommandEnabled ?? basePolicy.generateTestsCommandEnabled,
+    changelogCommandEnabled:
+      overrides.changelogCommandEnabled ?? basePolicy.changelogCommandEnabled,
+    changelogAllowApply: overrides.changelogAllowApply ?? basePolicy.changelogAllowApply,
+    feedbackCommandEnabled:
+      overrides.feedbackCommandEnabled ?? basePolicy.feedbackCommandEnabled,
+    customRules: normalizePolicyStringList(overrides.customRules, 30),
+  };
 }
 
 export function isGitLabBotUserName(userName: string | undefined): boolean {
@@ -2886,28 +2074,11 @@ export function isGitLabBotUserName(userName: string | undefined): boolean {
   );
 }
 
-function stripInlineYamlComment(line: string): string {
-  const hashIndex = line.indexOf("#");
-  if (hashIndex === -1) {
-    return line;
+function normalizePolicyStringList(items: string[] | undefined, limit: number): string[] {
+  if (!items || items.length === 0) {
+    return [];
   }
-
-  const before = line.slice(0, hashIndex);
-  const quotes = before.match(/['"]/g)?.length ?? 0;
-  if (quotes % 2 === 1) {
-    return line;
-  }
-  return before;
-}
-
-function stripYamlQuotes(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
+  return items.map((item) => item.trim()).filter(Boolean).slice(0, limit);
 }
 
 async function tryLoadGitLabTextFile(params: {
@@ -2919,19 +2090,10 @@ async function tryLoadGitLabTextFile(params: {
 }): Promise<string | undefined> {
   let response: Response;
   try {
-    response = await fetchWithRetry(
-      `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/files/${encodeURIComponent(params.path)}/raw?ref=${encodeURIComponent(params.ref)}`,
-      {
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-        },
-      },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    response = await gitLabApiRequest({
+      url: `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/files/${encodeURIComponent(params.path)}/raw?ref=${encodeURIComponent(params.ref)}`,
+      token: params.gitlabToken,
+    });
   } catch {
     return undefined;
   }
@@ -3015,20 +2177,10 @@ async function loadGitLabIncrementalChanges(params: {
 }): Promise<GitLabChange[]> {
   let response: Response;
   try {
-    response = await fetchWithRetry(
-      `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/compare?from=${encodeURIComponent(params.incrementalBaseSha)}&to=${encodeURIComponent(params.headSha)}`,
-      {
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-          "content-type": "application/json",
-        },
-      },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    response = await gitLabApiRequest({
+      url: `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/compare?from=${encodeURIComponent(params.incrementalBaseSha)}&to=${encodeURIComponent(params.headSha)}`,
+      token: params.gitlabToken,
+    });
   } catch {
     return [];
   }
@@ -3057,20 +2209,10 @@ async function loadGitLabHeadChecks(params: {
 > {
   let response: Response;
   try {
-    response = await fetchWithRetry(
-      `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/commits/${encodeURIComponent(params.headSha)}/statuses?per_page=100`,
-      {
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-          "content-type": "application/json",
-        },
-      },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    response = await gitLabApiRequest({
+      url: `${params.baseUrl}/api/v4/projects/${encodeURIComponent(params.projectId)}/repository/commits/${encodeURIComponent(params.headSha)}/statuses?per_page=100`,
+      token: params.gitlabToken,
+    });
   } catch {
     return [];
   }
@@ -3131,242 +2273,24 @@ export function mapGitLabStatusToConclusion(statusRaw: string | undefined): stri
   return "unknown";
 }
 
-function findPotentialSecrets(
-  files: DiffFileContext[],
-  customPatterns: string[] = [],
-): SecretFinding[] {
-  const findings: SecretFinding[] = [];
-  const seen = new Set<string>();
-  const compiledCustomPatterns = compileCustomSecretPatterns(customPatterns);
-  for (const file of files) {
-    for (const candidate of extractAddedLines(file.patch, file.newPath)) {
-      const secret = detectSecretOnLine(candidate.text, compiledCustomPatterns);
-      if (!secret) {
-        continue;
-      }
-      if (isLikelyPlaceholder(candidate.text)) {
-        continue;
-      }
-      const key = `${candidate.path}:${candidate.line}:${secret.kind}:${secret.sample}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      findings.push({
-        path: candidate.path,
-        line: candidate.line,
-        kind: secret.kind,
-        sample: secret.sample,
-      });
-    }
-  }
-
-  return findings.slice(0, 20);
-}
-
-function extractAddedLines(
-  patch: string,
-  path: string,
-): Array<{ path: string; line: number; text: string }> {
-  const lines = patch.split("\n");
-  const items: Array<{ path: string; line: number; text: string }> = [];
-  let currentNew = 0;
-
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      const match = line.match(/^\@\@ -\d+,?\d* \+(\d+),?\d* \@\@/);
-      currentNew = match?.[1] ? Number(match[1]) : currentNew;
-      continue;
-    }
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      items.push({
-        path,
-        line: currentNew,
-        text: line.slice(1),
-      });
-      currentNew += 1;
-      continue;
-    }
-    if (line.startsWith(" ") || line === "") {
-      currentNew += 1;
-      continue;
-    }
-  }
-
-  return items;
-}
-
-function detectSecretOnLine(
-  line: string,
-  customPatterns: RegExp[] = [],
-): { kind: string; sample: string } | undefined {
-  const patterns: Array<{ kind: string; re: RegExp }> = [
-    {
-      kind: "AWS Access Key",
-      re: /\bAKIA[0-9A-Z]{16}\b/,
-    },
-    {
-      kind: "GitHub Token",
-      re: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
-    },
-    {
-      kind: "GitLab Token",
-      re: /\bglpat-[A-Za-z0-9_-]{20,}\b/,
-    },
-    {
-      kind: "Google API Key",
-      re: /\bAIza[0-9A-Za-z\-_]{35}\b/,
-    },
-    {
-      kind: "Google OAuth Token",
-      re: /\bya29\.[0-9A-Za-z\-_]+\b/,
-    },
-    {
-      kind: "Slack Token",
-      re: /\bxox(?:a|b|p|r|s)-[A-Za-z0-9-]{10,}\b/,
-    },
-    {
-      kind: "Stripe Live Key",
-      re: /\bsk_live_[0-9A-Za-z]{16,}\b/,
-    },
-    {
-      kind: "NPM Token",
-      re: /\bnpm_[A-Za-z0-9]{36}\b/,
-    },
-    {
-      kind: "Twilio Secret Key",
-      re: /\bSK[0-9a-fA-F]{32}\b/,
-    },
-    {
-      kind: "Azure Storage Connection String",
-      re:
-        /\bDefaultEndpointsProtocol=https;AccountName=[^;\s]+;AccountKey=[^;\s]+;EndpointSuffix=[^;\s]+\b/i,
-    },
-    {
-      kind: "Database URL Credential",
-      re:
-        /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqps?):\/\/[^:\s/]+:[^@\s]+@[^\s]+/i,
-    },
-    {
-      kind: "Private Key",
-      re: /-----BEGIN (?:RSA|EC|OPENSSH|DSA|PGP) PRIVATE KEY-----/,
-    },
-    {
-      kind: "Generic Secret Assignment",
-      re: /\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*["'][^"'\\n]{8,}["']/i,
-    },
-    {
-      kind: "JWT",
-      re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]{10,}\.[A-Za-z0-9._-]{10,}\b/,
-    },
-    ...customPatterns.map((pattern, index) => ({
-      kind: `Custom Secret Pattern #${index + 1}`,
-      re: pattern,
-    })),
-  ];
-
-  for (const pattern of patterns) {
-    const matched = line.match(pattern.re);
-    if (matched) {
-      return {
-        kind: pattern.kind,
-        sample: matched[0].slice(0, 24),
-      };
-    }
-  }
-  return undefined;
-}
-
-function isLikelyPlaceholder(line: string): boolean {
-  return /\b(example|sample|placeholder|dummy|changeme|your_?)\b/i.test(line);
-}
-
-function buildGitLabSecretWarningComment(
-  findings: SecretFinding[],
-  locale: "zh" | "en" = resolveUiLocale(),
-): string {
-  const rows = findings
-    .slice(0, 10)
-    .map(
-      (item) =>
-        localizeText(
-          {
-            zh: `- \`${item.path}:${item.line}\` (${item.kind}) 片段: \`${item.sample}\``,
-            en: `- \`${item.path}:${item.line}\` (${item.kind}) sample: \`${item.sample}\``,
-          },
-          locale,
-        ),
-    )
-    .join("\n");
-  return [
-    localizeText(
-      {
-        zh: "## 安全提醒：疑似密钥泄露",
-        en: "## Security Alert: Potential Secret Leak",
-      },
-      locale,
-    ),
-    "",
-    localizeText(
-      {
-        zh: "以下变更行可能包含敏感信息，请尽快轮换并移除：",
-        en: "The following changed lines may contain sensitive information. Please rotate and remove them as soon as possible:",
-      },
-      locale,
-    ),
-    rows || localizeText({ zh: "- (无)", en: "- (none)" }, locale),
-    "",
-    localizeText(
-      {
-        zh: "建议：启用 GitLab Secret Detection 作为长期防线。",
-        en: "Recommendation: enable GitLab Secret Detection as a long-term safeguard.",
-      },
-      locale,
-    ),
-  ].join("\n");
-}
-
 export function inferMergeRequestLabels(params: {
   title: string;
   files: DiffFileContext[];
   reviewResult: PullRequestReviewResult;
   hasSecretFinding: boolean;
 }): string[] {
-  const labels = new Set<string>();
-  const title = params.title.toLowerCase();
-  if (/\b(fix|bug|hotfix)\b/.test(title)) {
-    labels.add("bugfix");
-  }
-  if (/\b(feat|feature)\b/.test(title)) {
-    labels.add("feature");
-  }
-  if (/\brefactor\b/.test(title)) {
-    labels.add("refactor");
-  }
-  if (/\b(doc|readme)\b/.test(title)) {
-    labels.add("docs");
-  }
-  if (params.hasSecretFinding) {
-    labels.add("security");
-  }
-
-  for (const file of params.files) {
-    const path = file.newPath.toLowerCase();
-    if (path.includes("/test") || path.endsWith(".spec.ts") || path.endsWith(".test.ts")) {
-      labels.add("tests");
-    }
-    if (path.includes("workflow") || path.includes("ci")) {
-      labels.add("ci");
-    }
-    if (path.endsWith(".md")) {
-      labels.add("docs");
-    }
-  }
-
-  if (params.reviewResult.riskLevel === "high") {
-    labels.add("high-risk");
-  }
-  return Array.from(labels).slice(0, 10);
+  return inferReviewLabels({
+    title: params.title,
+    files: params.files,
+    reviewResult: params.reviewResult,
+    hasSecretFinding: params.hasSecretFinding,
+    docsFromTitle: true,
+    docsFromFiles: "any-markdown",
+    includeTestLabelFromFiles: true,
+    includeCiLabelFromFiles: true,
+    highRiskLabel: "high-risk",
+    maxLabels: 10,
+  });
 }
 
 export async function tryAddGitLabMergeRequestLabels(params: {
@@ -3380,24 +2304,14 @@ export async function tryAddGitLabMergeRequestLabels(params: {
   }
 
   try {
-    const response = await fetchWithRetry(
-      `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/merge_requests/${params.collected.mrId}`,
-      {
-        method: "PUT",
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          add_labels: params.labels.join(","),
-        }),
+    const response = await gitLabApiRequest({
+      url: `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/merge_requests/${params.collected.mrId}`,
+      token: params.gitlabToken,
+      method: "PUT",
+      body: {
+        add_labels: params.labels.join(","),
       },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    });
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(
@@ -3422,154 +2336,82 @@ async function updateGitLabMergeRequestDescription(params: {
   collected: GitLabCollectedContext;
   description: string;
 }): Promise<void> {
-  const response = await fetchWithRetry(
-    `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/merge_requests/${params.collected.mrId}`,
-    {
-      method: "PUT",
-      headers: {
-        "PRIVATE-TOKEN": params.gitlabToken,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        description: params.description,
-      }),
+  const response = await gitLabApiRequest({
+    url: `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/merge_requests/${params.collected.mrId}`,
+    token: params.gitlabToken,
+    method: "PUT",
+    body: {
+      description: params.description,
     },
-    {
-      timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-      retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-      backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-    },
-  );
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
-      `更新 GitLab MR 描述失败 (${response.status}): ${text.slice(0, 300)}`,
+      `Failed to update GitLab MR description (${response.status}): ${text.slice(0, 300)}`,
     );
   }
 }
 
 export function buildGitLabChangelogQuestion(
   focus: string | undefined,
-  locale: "zh" | "en" = resolveUiLocale(),
+  locale: UiLocale = resolveUiLocale(),
 ): string {
-  const normalizedFocus = focus?.trim() ?? "";
-  if (locale === "en") {
-    if (normalizedFocus) {
-      return `Generate a Markdown changelog entry (Keep a Changelog style) for the current MR changes, with extra focus on: ${normalizedFocus}. Output only the changelog content body without extra explanation.`;
-    }
-    return "Generate a Markdown changelog entry (Keep a Changelog style) for the current MR changes. Output only the changelog content body without extra explanation.";
-  }
-
-  if (normalizedFocus) {
-    return `请根据当前 MR 改动生成可直接放入 CHANGELOG.md 的 Markdown 条目（Keep a Changelog 风格），重点覆盖：${normalizedFocus}。仅输出 changelog 内容本体，不要额外说明。`;
-  }
-
-  return "请根据当前 MR 改动生成可直接放入 CHANGELOG.md 的 Markdown 条目（Keep a Changelog 风格）。仅输出 changelog 内容本体，不要额外说明。";
+  return buildChangelogQuestion("MR", focus, locale);
 }
 
 export function buildGitLabDescribeQuestion(
-  locale: "zh" | "en" = resolveUiLocale(),
+  locale: UiLocale = resolveUiLocale(),
 ): string {
-  if (locale === "en") {
-    return [
-      "Based on current MR changes, generate a Markdown draft that can be pasted directly into the MR description.",
-      "Structure requirements: include the following headings in this exact order:",
-      "## Summary",
-      "## Change Overview",
-      "## File Walkthrough",
-      "## Test Plan",
-      "Content requirements:",
-      "1) Summarize the objective, impact scope, and major risk points;",
-      "2) In Change Overview, include source/target branches and change size;",
-      "3) In File Walkthrough, cover key files and change intent;",
-      "4) In Test Plan, provide an executable verification checklist.",
-      "Output requirement: return Markdown body only. No JSON, no code fences, no extra explanation.",
-    ].join("\n");
-  }
-
-  return [
-    "请基于当前 MR 的变更内容，生成一份可直接粘贴到 MR 描述区的 Markdown 草稿。",
-    "结构要求：必须包含以下标题（按顺序）：",
-    "## Summary",
-    "## Change Overview",
-    "## File Walkthrough",
-    "## Test Plan",
-    "内容要求：",
-    "1) 总结本次变更目标、影响范围与风险点；",
-    "2) Change Overview 里说明 source/target 分支和变更规模；",
-    "3) File Walkthrough 覆盖关键文件与改动意图；",
-    "4) Test Plan 给出可执行的验证清单。",
-    "输出要求：只输出 Markdown 本体，不要 JSON，不要代码块，不要额外解释。",
-  ].join("\n");
+  return buildDescribeQuestion("MR", locale);
 }
 
 function buildGitLabImproveRule(focus: string): string {
-  const normalizedFocus = focus.trim();
-  if (normalizedFocus) {
-    return `Focus mode: improvement suggestions only. Prioritize high-impact fixes related to: ${normalizedFocus}. Prefer concrete code suggestions when possible.`;
-  }
-  return "Focus mode: improvement suggestions only. Prioritize high-impact fixes and include concrete code suggestions when possible.";
+  return buildImproveRule(focus);
 }
 
 function buildGitLabAddDocRule(focus: string): string {
-  const normalizedFocus = focus.trim();
-  if (normalizedFocus) {
-    return `Focus mode: docstrings/comments only. Improve developer-facing documentation for: ${normalizedFocus}. Output only doc-related findings with concrete snippets.`;
-  }
-  return "Focus mode: docstrings/comments only. Output only documentation-related findings with concrete doc snippet suggestions.";
+  return buildAddDocRule(focus);
 }
 
-function buildGitLabReflectQuestion(request: string): string {
-  const normalizedRequest = request.trim();
-  if (normalizedRequest) {
-    return `请基于当前 MR 改动与以下目标，给出 3-5 个澄清问题，帮助作者明确需求与验收标准。目标：${normalizedRequest}。要求：每个问题一句话，按优先级排序，并附带“为什么要确认”。`;
-  }
-  return "请基于当前 MR 改动给出 3-5 个澄清问题，帮助作者明确需求与验收标准。要求：每个问题一句话，按优先级排序，并附带“为什么要确认”。";
+function buildGitLabReflectQuestion(
+  request: string,
+  locale: UiLocale = resolveUiLocale(),
+): string {
+  return buildReflectQuestion("MR", request, locale);
 }
 
 async function runGitLabSimilarIssueCommand(params: {
   payload: GitLabMrWebhookBody;
   gitlabToken: string;
   query: string;
-  locale: "zh" | "en";
+  locale: UiLocale;
 }): Promise<void> {
   const target = buildGitLabCommentTargetFromPayload({
     payload: params.payload,
-    baseUrl: process.env.GITLAB_BASE_URL,
+    baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
   });
-  const query = resolveGitLabSimilarIssueQuery(params.payload, params.query);
+  const query = resolveSimilarIssueQuery({
+    query: params.query,
+    title: params.payload.object_attributes.title,
+    description: params.payload.object_attributes.description,
+  });
   if (!query) {
     await publishGitLabGeneralComment(
       params.gitlabToken,
       target,
-      localizeText(
-        {
-          zh: "无法提取用于相似 Issue 检索的查询文本，请在命令后追加关键词，例如：`/similar_issue timeout race condition`。",
-          en: "Unable to derive a search query for similar issues. Add keywords, for example: `/similar_issue timeout race condition`.",
-        },
-        params.locale,
-      ),
+      buildSimilarIssueQueryMissingMessage(params.locale),
     );
     return;
   }
 
-  const response = await fetchWithRetry(
-    `${target.baseUrl}/api/v4/projects/${encodeURIComponent(target.projectId)}/issues?state=all&order_by=updated_at&sort=desc&per_page=100`,
-    {
-      headers: {
-        "PRIVATE-TOKEN": params.gitlabToken,
-      },
-    },
-    {
-      timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-      retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-      backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-    },
-  );
+  const response = await gitLabApiRequest({
+    url: `${target.baseUrl}/api/v4/projects/${encodeURIComponent(target.projectId)}/issues?state=all&order_by=updated_at&sort=desc&per_page=100`,
+    token: params.gitlabToken,
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
-      `加载 GitLab Issues 失败 (${response.status}): ${text.slice(0, 300)}`,
+      `Failed to load GitLab issues (${response.status}): ${text.slice(0, 300)}`,
     );
   }
 
@@ -3601,76 +2443,8 @@ async function runGitLabSimilarIssueCommand(params: {
   await publishGitLabGeneralComment(
     params.gitlabToken,
     target,
-    buildGitLabSimilarIssueComment(query, matches, params.locale),
+    buildSimilarIssueComment(query, matches, params.locale),
   );
-}
-
-function resolveGitLabSimilarIssueQuery(
-  payload: GitLabMrWebhookBody,
-  query: string,
-): string {
-  const fromCommand = query.trim();
-  if (fromCommand) {
-    return fromCommand;
-  }
-
-  return [payload.object_attributes.title ?? "", payload.object_attributes.description ?? ""]
-    .join(" ")
-    .trim();
-}
-
-function buildGitLabSimilarIssueComment(
-  query: string,
-  matches: Array<{
-    id: number | string;
-    title: string;
-    url: string;
-    state?: string | null;
-    score: number;
-    matchedTerms: string[];
-  }>,
-  locale: "zh" | "en",
-): string {
-  if (matches.length === 0) {
-    return localizeText(
-      {
-        zh:
-          "## AI Similar Issue Finder\n\n未发现高相关 Issue。\n\n可尝试提供更具体关键词，例如：`/similar_issue auth token refresh race`。",
-        en:
-          "## AI Similar Issue Finder\n\nNo highly related issues found.\n\nTry more specific keywords, for example: `/similar_issue auth token refresh race`.",
-      },
-      locale,
-    );
-  }
-
-  return [
-    "## AI Similar Issue Finder",
-    "",
-    `${localizeText({ zh: "查询", en: "Query" }, locale)}: \`${query}\``,
-    "",
-    ...matches.map((item, index) => {
-      const terms = item.matchedTerms.length > 0 ? item.matchedTerms.join(", ") : "-";
-      const state = (item.state ?? "unknown").toString();
-      return `${index + 1}. [#${item.id}](${item.url}) ${item.title} (state=${state}, score=${item.score}, terms=${terms})`;
-    }),
-  ].join("\n");
-}
-
-function getPublicErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const allowList = [
-    /^Missing\s+[A-Z0-9_]+/,
-    /^Unsupported AI_PROVIDER/,
-    /^Model returned empty/,
-    /^Model response is not valid JSON/,
-    /^Request timed out\.?/i,
-  ];
-
-  if (allowList.some((pattern) => pattern.test(message))) {
-    return message;
-  }
-
-  return "内部执行错误（详情请查看服务日志）";
 }
 
 async function applyGitLabChangelogUpdate(params: {
@@ -3680,24 +2454,15 @@ async function applyGitLabChangelogUpdate(params: {
   draft: string;
 }): Promise<{ message: string }> {
   const locale = resolveUiLocale();
-  const path = process.env.GITLAB_CHANGELOG_PATH?.trim() || "CHANGELOG.md";
+  const path = readStringEnv("GITLAB_CHANGELOG_PATH", "CHANGELOG.md");
   let existing = "";
   let action: "create" | "update" = "create";
 
   try {
-    const response = await fetchWithRetry(
-      `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(params.collected.sourceBranch)}`,
-      {
-        headers: {
-          "PRIVATE-TOKEN": params.gitlabToken,
-        },
-      },
-      {
-        timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-        retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-        backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-      },
-    );
+    const response = await gitLabApiRequest({
+      url: `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/repository/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(params.collected.sourceBranch)}`,
+      token: params.gitlabToken,
+    });
     if (response.ok) {
       existing = await response.text();
       action = "update";
@@ -3711,36 +2476,26 @@ async function applyGitLabChangelogUpdate(params: {
     params.draft,
     `MR !${params.pullNumber}`,
   );
-  const commitResponse = await fetchWithRetry(
-    `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/repository/commits`,
-    {
-      method: "POST",
-      headers: {
-        "PRIVATE-TOKEN": params.gitlabToken,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        branch: params.collected.sourceBranch,
-        commit_message: `chore(changelog): update from MR !${params.pullNumber}`,
-        actions: [
-          {
-            action,
-            file_path: path,
-            content: merged,
-          },
-        ],
-      }),
+  const commitResponse = await gitLabApiRequest({
+    url: `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/repository/commits`,
+    token: params.gitlabToken,
+    method: "POST",
+    body: {
+      branch: params.collected.sourceBranch,
+      commit_message: `chore(changelog): update from MR !${params.pullNumber}`,
+      actions: [
+        {
+          action,
+          file_path: path,
+          content: merged,
+        },
+      ],
     },
-    {
-      timeoutMs: readNumberEnv("GITLAB_HTTP_TIMEOUT_MS", 30_000),
-      retries: readNumberEnv("GITLAB_HTTP_RETRIES", 2),
-      backoffMs: readNumberEnv("GITLAB_HTTP_RETRY_BACKOFF_MS", 400),
-    },
-  );
+  });
   if (!commitResponse.ok) {
     const text = await commitResponse.text();
     throw new Error(
-      `更新 GitLab CHANGELOG 失败 (${commitResponse.status}): ${text.slice(0, 300)}`,
+      `Failed to update GitLab CHANGELOG (${commitResponse.status}): ${text.slice(0, 300)}`,
     );
   }
 
@@ -3760,35 +2515,5 @@ export function mergeGitLabChangelogContent(
   draft: string,
   title: string,
 ): string {
-  const normalizedDraft = draft.trim();
-  const safeTitle = title.trim();
-  const body = currentContent.trim();
-  if (body && hasGitLabChangelogTitle(body, safeTitle)) {
-    return `${body.trimEnd()}\n`;
-  }
-
-  const entry = [`### ${safeTitle}`, "", normalizedDraft].join("\n");
-
-  if (!body) {
-    return ["# Changelog", "", "## Unreleased", "", entry, ""].join("\n");
-  }
-
-  const unreleasedRe = /^##\s+Unreleased\s*$/im;
-  const match = unreleasedRe.exec(body);
-  if (!match || match.index === undefined) {
-    return [body, "", "## Unreleased", "", entry, ""].join("\n");
-  }
-
-  const insertAt = match.index + match[0].length;
-  return `${body.slice(0, insertAt)}\n\n${entry}\n${body.slice(insertAt)}`.trimEnd() + "\n";
-}
-
-function hasGitLabChangelogTitle(content: string, title: string): boolean {
-  const safeTitle = title.trim();
-  if (!safeTitle) {
-    return false;
-  }
-
-  const escapedTitle = safeTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^###\\s+${escapedTitle}\\s*$`, "im").test(content);
+  return mergeSharedChangelogContent(currentContent, draft, title);
 }

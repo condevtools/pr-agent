@@ -1,4 +1,10 @@
-import { fetchWithRetry, readNumberEnv } from "#core";
+import {
+  fetchWithRetry,
+  localizeText,
+  readNumberEnv,
+  readOptionalStringEnv,
+  resolveUiLocale,
+} from "#core";
 
 interface PublishNotificationParams {
   pushUrl?: string;
@@ -20,10 +26,17 @@ export async function publishNotification(
     return;
   }
 
+  const locale = resolveUiLocale();
   const markdown =
-    `**${params.author}** 在项目 **${params.repository}** 发起了评审\n` +
-    `源分支：**${params.sourceBranch}**\n` +
-    `目标分支：**${params.targetBranch}**\n\n` +
+    `**${params.author}** ${localizeText(
+      {
+        zh: `在项目 **${params.repository}** 发起了评审`,
+        en: `started a review in **${params.repository}**`,
+      },
+      locale,
+    )}\n` +
+    `${localizeText({ zh: "源分支：", en: "Source branch:" }, locale)} **${params.sourceBranch}**\n` +
+    `${localizeText({ zh: "目标分支：", en: "Target branch:" }, locale)} **${params.targetBranch}**\n\n` +
     params.content;
   const payload = buildNotificationPayload(markdown, resolveNotificationWebhookFormat());
 
@@ -62,7 +75,7 @@ export async function publishNotification(
 }
 
 function resolveNotificationWebhookFormat(): NotificationWebhookFormat {
-  const raw = (process.env.NOTIFY_WEBHOOK_FORMAT ?? "").trim().toLowerCase();
+  const raw = (readOptionalStringEnv("NOTIFY_WEBHOOK_FORMAT") ?? "").toLowerCase();
   if (raw === "slack") {
     return "slack";
   }

@@ -262,6 +262,8 @@ export function buildIssueCommentMarkdown(
   options?: { platform?: "github" | "gitlab"; locale?: UiLocale },
 ): string {
   const locale = options?.locale ?? resolveUiLocale();
+  const issueHeader = escapeHtmlText(review.issueHeader);
+  const issueContent = escapeHtmlText(review.issueContent);
   const content = [
     "<table>",
     `<thead><tr><td><strong>${localizeText(
@@ -272,7 +274,7 @@ export function buildIssueCommentMarkdown(
       locale,
     )}</strong></td></tr></thead>`,
     "<tbody>",
-    `<tr><td>[${riskLabel(review.severity, locale)}] ${review.issueHeader}</td><td>${review.issueContent}</td></tr>`,
+    `<tr><td>[${riskLabel(review.severity, locale)}] ${issueHeader}</td><td>${issueContent}</td></tr>`,
     "</tbody>",
     "</table>",
   ];
@@ -360,12 +362,14 @@ function renderIssuesTable(
   for (const review of result.reviews) {
     const file = findFileForReview(files, review);
     const location = renderIssueLocation(review, file, context, locale);
+    const issueHeader = escapeHtmlText(review.issueHeader);
+    const issueContent = escapeHtmlText(review.issueContent);
 
     rows += [
       "<tr>",
-      `  <td>[${riskLabel(review.severity, locale)}] ${review.issueHeader}</td>`,
+      `  <td>[${riskLabel(review.severity, locale)}] ${issueHeader}</td>`,
       `  <td>${location}</td>`,
-      `  <td>${review.issueContent}</td>`,
+      `  <td>${issueContent}</td>`,
       "</tr>",
       "",
     ].join("\n");
@@ -525,4 +529,13 @@ function buildChangedFilesMermaid(files: DiffFileContext[]): string | undefined 
 
 function escapeMermaidLabel(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
