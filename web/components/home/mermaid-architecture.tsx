@@ -19,7 +19,7 @@ const diagram = `flowchart LR
         A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
         A3["resolveGitHubPullRequestAutoReviewPolicy"]
         A4["pull_request.closed (merged)<br/>resolveGitHubReviewBehaviorPolicy"]
-        A5["issue_comment.created (PR only)<br/>handleGitHubIssueCommentCommand"]
+        A5["issue_comment.created (PR + Issue)<br/>handleGitHubIssueCommentCommand"]
         A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
     end
 
@@ -41,7 +41,7 @@ const diagram = `flowchart LR
 
     subgraph CMD["Command Parsing Surface"]
         D1["parseReviewCommand"]
-        D2["parseAsk / parseChecks / parseGenerateTests"]
+        D2["parseAsk / parseMention / parseChecks / parseGenerateTests"]
         D3["parseDescribe / parseChangelog"]
         D4["parseImprove / parseAddDoc / parseReflect / parseSimilarIssue / parseFeedback"]
     end

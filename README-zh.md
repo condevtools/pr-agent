@@ -58,9 +58,10 @@
 - 仓库缺少 `.mr-agent.yml` 时，Issue 自动分诊（可行性/建议/相似 Issue/自动标签）
 
 **多平台支持**
-- GitHub App（推荐）
-- 普通 GitHub Webhook
-- GitLab Webhook
+- GitHub App（推荐，已完整测试）
+- 普通 GitHub Webhook（未完整测试）
+- GitLab Webhook（未完整测试）
+- GitHub Actions — 暂不支持
 
 **多模型 Provider**
 - OpenAI
@@ -788,29 +789,32 @@ GitLab 特有请求头：
 
 ## 评论命令
 
-所有命令通过 PR/MR 评论触发：
+所有命令通过 PR/MR 评论触发。标记 **(仅 PR)** 的命令需要 Pull Request 上下文（diff、CI 检查），在 Issue 评论中不可用。
 
 | 命令 | 说明 |
 |---|---|
-| `/ai-review` | 触发 AI 评审（未显式指定时默认 `report`） |
-| `/ai-review report` | 强制 Report 模式（汇总评论） |
-| `/ai-review comment` | 强制 Comment 模式（行内评论） |
-| `/ai-review --mode=report` / `--mode=comment` | 参数方式指定评审模式（与位置参数等价） |
-| `/ask <问题>` | 针对 PR 代码提问（支持多轮对话） |
-| `/checks [问题]` | 分析 CI 检查失败原因 |
-| `/generate_tests [重点]` | 为变更生成测试代码 |
-| `/changelog [重点]` | 生成 Changelog 条目 |
-| `/changelog --apply [重点]` | 生成并提交 Changelog 到仓库 |
-| `/describe` | 生成 PR/MR 描述 |
-| `/describe --apply` | 生成并更新 PR/MR 描述 |
-| `/improve [重点]` | 以改进建议为主进行评审 |
-| `/add_doc [重点]` / `/add-doc [重点]` | 仅输出文档/注释改进建议 |
-| `/reflect [目标]` | 生成需求澄清与验收标准问题 |
+| `/ai-review` **(仅 PR)** | 触发 AI 评审（未显式指定时默认 `report`） |
+| `/ai-review report` **(仅 PR)** | 强制 Report 模式（汇总评论） |
+| `/ai-review comment` **(仅 PR)** | 强制 Comment 模式（行内评论） |
+| `/ai-review --mode=report` / `--mode=comment` **(仅 PR)** | 参数方式指定评审模式（与位置参数等价） |
+| `/ask <问题>` | 针对 PR 或 Issue 提问（支持多轮对话） |
+| `@bot-name <问题>` | @提及 Bot 进行提问（需设置 `GITHUB_APP_SLUG`） |
+| `/checks [问题]` **(仅 PR)** | 分析 CI 检查失败原因 |
+| `/generate_tests [重点]` **(仅 PR)** | 为变更生成测试代码 |
+| `/changelog [重点]` **(仅 PR)** | 生成 Changelog 条目 |
+| `/changelog --apply [重点]` **(仅 PR)** | 生成并提交 Changelog 到仓库 |
+| `/describe` **(仅 PR)** | 生成 PR/MR 描述 |
+| `/describe --apply` **(仅 PR)** | 生成并更新 PR/MR 描述 |
+| `/improve [重点]` **(仅 PR)** | 以改进建议为主进行评审 |
+| `/add_doc [重点]` / `/add-doc [重点]` **(仅 PR)** | 仅输出文档/注释改进建议 |
+| `/reflect [目标]` **(仅 PR)** | 生成需求澄清与验收标准问题 |
 | `/similar_issue [关键词]` / `/similar-issue [关键词]` | 检索同仓库相似 Issue |
 | `/feedback resolved\|dismissed\|up\|down [备注]` | 评审质量反馈 |
 
 支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
 `.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`；`/reflect` 依赖 `askCommandEnabled`。
+
+> **提示：** `/ask`、`/feedback`、`/similar_issue` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，AI 仅基于问题本身回答。设置 `GITHUB_APP_SLUG` 为你的 GitHub App slug（小写名称）以启用 `@提及` 检测。
 
 ---
 

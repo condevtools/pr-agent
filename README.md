@@ -58,9 +58,10 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 - Default issue auto-triage (feasibility + suggestions + similar issues + labels) when `.mr-agent.yml` is absent
 
 **Multi-Platform**
-- GitHub App (recommended)
-- Plain GitHub Webhook
-- GitLab Webhook
+- GitHub App (recommended, fully tested)
+- Plain GitHub Webhook (not fully tested)
+- GitLab Webhook (not fully tested)
+- GitHub Actions — not supported
 
 **Multi-Provider AI**
 - OpenAI
@@ -788,29 +789,32 @@ GitLab-specific headers:
 
 ## Commands
 
-All commands are triggered via PR/MR comments:
+All commands are triggered via PR/MR comments. Commands marked with **(PR only)** require Pull Request context (diff, CI checks) and will not work in Issue comments.
 
 | Command | Description |
 |---|---|
-| `/ai-review` | Trigger AI review (defaults to `report` when no mode is provided) |
-| `/ai-review report` | Force report mode (summary comment) |
-| `/ai-review comment` | Force comment mode (inline comments) |
-| `/ai-review --mode=report` / `--mode=comment` | Flag-style mode override (same effect as positional mode) |
-| `/ask <question>` | Ask about the PR code (multi-turn conversation) |
-| `/checks [question]` | Analyze CI check failures |
-| `/generate_tests [focus]` | Generate test code for changes |
-| `/changelog [focus]` | Generate changelog entry |
-| `/changelog --apply [focus]` | Generate and commit changelog to repo |
-| `/describe` | Generate PR/MR description |
-| `/describe --apply` | Generate and update PR/MR description |
-| `/improve [focus]` | Run review in improvement-only mode |
-| `/add_doc [focus]` / `/add-doc [focus]` | Generate documentation-only suggestions |
-| `/reflect [goal]` | Generate clarifying requirement/acceptance questions |
+| `/ai-review` **(PR only)** | Trigger AI review (defaults to `report` when no mode is provided) |
+| `/ai-review report` **(PR only)** | Force report mode (summary comment) |
+| `/ai-review comment` **(PR only)** | Force comment mode (inline comments) |
+| `/ai-review --mode=report` / `--mode=comment` **(PR only)** | Flag-style mode override (same effect as positional mode) |
+| `/ask <question>` | Ask about the PR or Issue (multi-turn conversation) |
+| `@bot-name <question>` | @mention the bot to ask a question (requires `GITHUB_APP_SLUG`) |
+| `/checks [question]` **(PR only)** | Analyze CI check failures |
+| `/generate_tests [focus]` **(PR only)** | Generate test code for changes |
+| `/changelog [focus]` **(PR only)** | Generate changelog entry |
+| `/changelog --apply [focus]` **(PR only)** | Generate and commit changelog to repo |
+| `/describe` **(PR only)** | Generate PR/MR description |
+| `/describe --apply` **(PR only)** | Generate and update PR/MR description |
+| `/improve [focus]` **(PR only)** | Run review in improvement-only mode |
+| `/add_doc [focus]` / `/add-doc [focus]` **(PR only)** | Generate documentation-only suggestions |
+| `/reflect [goal]` **(PR only)** | Generate clarifying requirement/acceptance questions |
 | `/similar_issue [query]` / `/similar-issue [query]` | Search related issues in the same repository |
 | `/feedback resolved\|dismissed\|up\|down [note]` | Provide review quality feedback |
 
 Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
 Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`; `/reflect` depends on `askCommandEnabled`.
+
+> **Note:** `/ask`, `/feedback`, `/similar_issue`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided — the AI answers based on the question alone. Set `GITHUB_APP_SLUG` to your GitHub App's slug (lowercase name) to enable `@mention` detection.
 
 ---
 
