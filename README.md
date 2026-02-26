@@ -1,4 +1,4 @@
-# MR Agent
+# PR Agent
 
 AI-powered code review service built with TypeScript + NestJS. Automatically reviews Pull Requests and Merge Requests using LLM providers, with support for GitHub (App & Webhook) and GitLab.
 
