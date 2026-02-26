@@ -58,6 +58,7 @@ export interface GitHubAskWorkflowParams {
   commentTitle?: string;
   displayQuestion?: string;
   enableConversationContext?: boolean;
+  isPullRequest?: boolean;
   throwOnError?: boolean;
 }
 
@@ -290,6 +291,7 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
         commentTitle = "AI Ask",
         displayQuestion,
         enableConversationContext = false,
+        isPullRequest = true,
         throwOnError = false,
       } = params;
       const { owner, repo } = context.repo();
@@ -321,21 +323,41 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
       }
 
       try {
-        const feedbackSignals = deps.loadFeedbackSignals(owner, repo, pullNumber);
-        const collected = await deps.collectPullRequestContext({
-          context,
-          owner,
-          repo,
-          pullNumber,
-          customRules,
-          includeCiChecks,
-          feedbackSignals,
-        });
+        let input: PullRequestReviewInput;
+        if (isPullRequest) {
+          const feedbackSignals = deps.loadFeedbackSignals(owner, repo, pullNumber);
+          const collected = await deps.collectPullRequestContext({
+            context,
+            owner,
+            repo,
+            pullNumber,
+            customRules,
+            includeCiChecks,
+            feedbackSignals,
+          });
+          input = collected.input;
+        } else {
+          input = {
+            platform: "github",
+            repository: `${owner}/${repo}`,
+            number: pullNumber,
+            title: "",
+            body: "",
+            author: "",
+            baseBranch: "",
+            headBranch: "",
+            additions: 0,
+            deletions: 0,
+            changedFilesCount: 0,
+            changedFiles: [],
+            customRules,
+          };
+        }
         const sessionKey = `github:${owner}/${repo}#${pullNumber}`;
         const conversation = enableConversationContext
           ? loadAskConversationTurns(sessionKey)
           : [];
-        const answer = await answerPullRequestQuestion(collected.input, question, {
+        const answer = await answerPullRequestQuestion(input, question, {
           conversation,
         });
         if (enableConversationContext) {

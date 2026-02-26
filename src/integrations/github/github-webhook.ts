@@ -22,8 +22,6 @@ import {
 import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
 import {
   handleGitHubIssueCommentCommand,
-  isGitHubBotCommentUser,
-  isGitHubCommandRateLimited,
 } from "./github-issue-comment-command.js";
 export { createRestBackedOctokit } from "./github-rest-client.js";
 export {
@@ -333,9 +331,7 @@ async function handleIssueCommentEvent(
     return { ok: true, message: "ignored issue_comment action" };
   }
 
-  if (!payload.issue?.pull_request) {
-    return { ok: true, message: "ignored issue_comment content" };
-  }
+  const isPullRequest = Boolean(payload.issue?.pull_request);
   const owner = resolveOwner(payload.repository);
   const repo = payload.repository.name;
   if (!owner || !repo || !payload.issue.number) {
@@ -350,6 +346,7 @@ async function handleIssueCommentEvent(
     issueNumber: payload.issue.number,
     body: payload.comment?.body?.trim() ?? "",
     commentUser: payload.comment?.user,
+    isPullRequest,
     rateLimitPlatform: params.runtimeMode,
     throwOnError: params.runtimeMode === "github-webhook",
   });

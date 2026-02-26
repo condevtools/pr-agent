@@ -267,6 +267,7 @@ export interface GitHubAskRunParams {
   commentTitle?: string;
   displayQuestion?: string;
   enableConversationContext?: boolean;
+  isPullRequest?: boolean;
   throwOnError?: boolean;
 }
 

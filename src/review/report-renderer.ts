@@ -99,6 +99,28 @@ export function parseAskCommand(rawBody: string): {
   return { matched: true, question };
 }
 
+export function parseMentionCommand(
+  rawBody: string,
+  botLogin: string,
+): { matched: boolean; question: string } {
+  if (!botLogin) {
+    return { matched: false, question: "" };
+  }
+  const body = rawBody.trim();
+  // Match @botLogin (case-insensitive) followed by the question text
+  const escaped = botLogin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^@${escaped}\\s+([\\s\\S]+)$`, "i");
+  const matched = body.match(re);
+  if (!matched) {
+    return { matched: false, question: "" };
+  }
+  const question = matched[1]?.trim() ?? "";
+  if (!question) {
+    return { matched: false, question: "" };
+  }
+  return { matched: true, question };
+}
+
 export function parseChecksCommand(rawBody: string): {
   matched: boolean;
   question: string;

@@ -3,6 +3,7 @@ export type ReviewMode = "report" | "comment";
 export type ReviewTrigger =
   | "merged"
   | "comment-command"
+  | "mention-command"
   | "describe-command"
   | "pr-opened"
   | "pr-edited"

@@ -3,6 +3,7 @@ import {
   localizeText,
   normalizeRateLimitPart,
   readNumberEnv,
+  readOptionalStringEnv,
   resolveUiLocale,
   type UiLocale,
 } from "#core";
@@ -26,6 +27,7 @@ import {
   parseFeedbackCommand,
   parseGenerateTestsCommand,
   parseImproveCommand,
+  parseMentionCommand,
   parseReflectCommand,
   parseReviewCommand,
   parseSimilarIssueCommand,
@@ -68,6 +70,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         login?: string;
       }
     | null;
+  isPullRequest?: boolean;
   rateLimitPlatform: "github-app" | "github-webhook";
   throwOnError?: boolean;
 }): Promise<{ ok: boolean; message: string }> {
@@ -79,6 +82,9 @@ export async function handleGitHubIssueCommentCommand(params: {
   const locale = resolveUiLocale();
   const commentUserLogin = params.commentUser?.login;
   const throwOnError = Boolean(params.throwOnError);
+  const isPullRequest = params.isPullRequest !== false;
+  const appSlug = readOptionalStringEnv("GITHUB_APP_SLUG");
+  const botLogin = appSlug ? `${appSlug}[bot]` : "";
   let reviewBehaviorPromise:
     | Promise<Awaited<ReturnType<typeof resolveGitHubReviewBehaviorPolicy>>>
     | undefined;
@@ -116,6 +122,22 @@ export async function handleGitHubIssueCommentCommand(params: {
   ): CommandRegistration<unknown> => ({
     name,
     parse: parse as () => unknown | undefined,
+    execute: execute as (parsed: unknown) => Promise<CommandDispatchResult>,
+  });
+
+  // For PR-only commands, wrap the parse function to also check isPullRequest
+  const registerPrCommand = <TParsed>(
+    name: string,
+    parse: () => TParsed | undefined,
+    execute: (parsed: TParsed) => Promise<CommandDispatchResult>,
+  ): CommandRegistration<unknown> => ({
+    name,
+    parse: () => {
+      if (!isPullRequest) {
+        return undefined;
+      }
+      return parse() as unknown | undefined;
+    },
     execute: execute as (parsed: unknown) => Promise<CommandDispatchResult>,
   });
 
@@ -169,7 +191,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "feedback command recorded" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "describe",
       () => {
         const parsed = parseDescribeCommand(body);
@@ -248,14 +270,15 @@ export async function handleGitHubIssueCommentCommand(params: {
           managedCommentKey: buildManagedCommandCommentKey("ask", ask.question),
           trigger: "comment-command",
           customRules: reviewBehavior.customRules,
-          includeCiChecks: reviewBehavior.includeCiChecks,
+          includeCiChecks: isPullRequest ? reviewBehavior.includeCiChecks : false,
           enableConversationContext: true,
+          isPullRequest,
           throwOnError,
         });
         return { ok: true, message: "ask command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "checks",
       () => {
         const parsed = parseChecksCommand(body);
@@ -294,7 +317,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "checks command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "generate-tests",
       () => {
         const parsed = parseGenerateTestsCommand(body);
@@ -343,7 +366,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "generate_tests command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "changelog",
       () => {
         const parsed = parseChangelogCommand(body);
@@ -393,7 +416,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "changelog command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "improve",
       () => {
         const parsed = parseImproveCommand(body);
@@ -435,7 +458,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "improve command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "add-doc",
       () => {
         const parsed = parseAddDocCommand(body);
@@ -476,7 +499,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "add_doc command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "reflect",
       () => {
         const parsed = parseReflectCommand(body);
@@ -540,7 +563,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         return { ok: true, message: "similar_issue command triggered" };
       },
     ),
-    registerCommand(
+    registerPrCommand(
       "ai-review",
       () => {
         const parsed = parseReviewCommand(body);
@@ -567,6 +590,46 @@ export async function handleGitHubIssueCommentCommand(params: {
         });
 
         return { ok: true, message: "issue_comment review triggered" };
+      },
+    ),
+    // @mention handler — treat "@bot-name <question>" as "/ask <question>"
+    registerCommand(
+      "mention",
+      () => {
+        const parsed = parseMentionCommand(body, botLogin);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (mention) => {
+        if (await hitRateLimit("ask")) {
+          return { ok: true, message: "mention-ask command rate limited" };
+        }
+        const reviewBehavior = await getReviewBehavior();
+        if (!reviewBehavior.askCommandEnabled) {
+          await params.context.octokit.issues.createComment({
+            owner: params.owner,
+            repo: params.repo,
+            issue_number: params.issueNumber,
+            body: buildCommandDisabledByPolicyMessage({
+              command: "ask",
+              policyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
+              locale,
+            }),
+          });
+          return { ok: true, message: "mention-ask command ignored by policy" };
+        }
+        await runGitHubAsk({
+          context: params.context,
+          pullNumber: params.issueNumber,
+          question: mention.question,
+          managedCommentKey: buildManagedCommandCommentKey("ask", mention.question),
+          trigger: "mention-command",
+          customRules: reviewBehavior.customRules,
+          includeCiChecks: isPullRequest ? reviewBehavior.includeCiChecks : false,
+          enableConversationContext: true,
+          isPullRequest,
+          throwOnError,
+        });
+        return { ok: true, message: "mention-ask command triggered" };
       },
     ),
   ];
