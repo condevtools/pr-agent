@@ -45,6 +45,9 @@ const SIMILAR_ISSUE_COMMAND_RE =
   /^\/(?:similar[_-]?issue|ai-review\s+similar[_-]?issue)(?:\s+([\s\S]+))?\s*$/i;
 const FEEDBACK_COMMAND_RE =
   /^\/(?:feedback|ai-review\s+feedback)\s+(resolved|dismissed|up|down)(?:\s+([\s\S]+))?\s*$/i;
+const HELP_COMMAND_RE = /^\/(?:help|ai-review\s+help)\s*$/i;
+const CONFIG_COMMAND_RE = /^\/(?:config|ai-review\s+config)\s*$/i;
+const IMPLEMENT_COMMAND_RE = /^\/(?:implement|ai-review\s+implement)\s*$/i;
 
 export function parseReviewCommand(rawBody: string): {
   matched: boolean;
@@ -277,6 +280,18 @@ export function parseFeedbackCommand(rawBody: string): {
     action,
     note: matched[2]?.trim() ?? "",
   };
+}
+
+export function parseHelpCommand(rawBody: string): { matched: boolean } {
+  return { matched: HELP_COMMAND_RE.test(rawBody.trim()) };
+}
+
+export function parseConfigCommand(rawBody: string): { matched: boolean } {
+  return { matched: CONFIG_COMMAND_RE.test(rawBody.trim()) };
+}
+
+export function parseImplementCommand(rawBody: string): { matched: boolean } {
+  return { matched: IMPLEMENT_COMMAND_RE.test(rawBody.trim()) };
 }
 
 export function buildIssueCommentMarkdown(

@@ -17,16 +17,20 @@ import {
   type GitHubReviewContext,
 } from "./github-review.js";
 import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
+import { runGitHubImplementCommand } from "./github-implement.js";
 import {
   findSimilarIssues,
   parseAddDocCommand,
   parseAskCommand,
   parseChangelogCommand,
   parseChecksCommand,
+  parseConfigCommand,
   parseDescribeCommand,
   parseFeedbackCommand,
   parseGenerateTestsCommand,
+  parseHelpCommand,
   parseImproveCommand,
+  parseImplementCommand,
   parseMentionCommand,
   parseReflectCommand,
   parseReviewCommand,
@@ -50,6 +54,15 @@ import {
   buildFeedbackSignalRecordedMessage,
   buildReflectDependsOnAskMessage,
 } from "../shared/command-messages.js";
+import { buildHelpMessage } from "../shared/command-help.js";
+import {
+  buildConfigFoundMessage,
+  buildConfigNotFoundMessage,
+} from "../shared/command-config.js";
+import {
+  loadRepositoryPolicyConfig,
+  hasRepositoryPolicyConfigFile,
+} from "./github-policy-config.js";
 import {
   buildSimilarIssueComment,
   buildSimilarIssueQueryMissingMessage,
@@ -185,6 +198,58 @@ export async function handleGitHubIssueCommentCommand(params: {
   };
 
   const commandRegistry: CommandRegistration<unknown>[] = [
+    registerCommand(
+      "help",
+      () => {
+        const parsed = parseHelpCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        if (await hitRateLimit("help")) {
+          return { ok: true, message: "help command rate limited" };
+        }
+        await params.context.octokit.issues.createComment({
+          owner: params.owner,
+          repo: params.repo,
+          issue_number: params.issueNumber,
+          body: buildHelpMessage({ target: "PR", locale, includeImplement: true }),
+        });
+        return { ok: true, message: "help command triggered" };
+      },
+    ),
+    registerCommand(
+      "config",
+      () => {
+        const parsed = parseConfigCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        if (await hitRateLimit("config")) {
+          return { ok: true, message: "config command rate limited" };
+        }
+        const [config, hasFile] = await Promise.all([
+          loadRepositoryPolicyConfig({
+            context: params.context,
+            owner: params.owner,
+            repo: params.repo,
+          }),
+          hasRepositoryPolicyConfigFile({
+            context: params.context,
+            owner: params.owner,
+            repo: params.repo,
+          }),
+        ]);
+        await params.context.octokit.issues.createComment({
+          owner: params.owner,
+          repo: params.repo,
+          issue_number: params.issueNumber,
+          body: hasFile
+            ? buildConfigFoundMessage({ config, locale })
+            : buildConfigNotFoundMessage(locale),
+        });
+        return { ok: true, message: "config command triggered" };
+      },
+    ),
     registerCommand(
       "feedback",
       () => {
@@ -573,6 +638,27 @@ export async function handleGitHubIssueCommentCommand(params: {
           locale,
         });
         return { ok: true, message: "similar_issue command triggered" };
+      },
+    ),
+    registerPrCommand(
+      "implement",
+      () => {
+        const parsed = parseImplementCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        if (await hitRateLimit("implement")) {
+          return { ok: true, message: "implement command rate limited" };
+        }
+        await runGitHubImplementCommand({
+          context: params.context,
+          owner: params.owner,
+          repo: params.repo,
+          pullNumber: params.issueNumber,
+          locale,
+          throwOnError,
+        });
+        return { ok: true, message: "implement command triggered" };
       },
     ),
     registerPrCommand(

@@ -7,6 +7,7 @@ import {
   type GitHubPullsListFilesMethod,
   type GitHubPullSummary,
   type GitHubRepositoryContentFile,
+  type GitHubReviewCommentSummary,
   type MinimalGitHubOctokit,
 } from "./github-review.js";
 import { buildGitHubHttpRetryOptions } from "../shared/http-retry-options.js";
@@ -119,6 +120,27 @@ export function createRestBackedOctokit(
           },
         });
         return {};
+      },
+      listReviewComments: async (params) => {
+        const perPage = Math.max(1, Math.min(Number(params.per_page ?? 100), 100));
+        const page = Math.max(1, Number(params.page ?? 1));
+        const data = await requestJsonRequired<GitHubReviewCommentSummary[]>(config, {
+          method: "GET",
+          path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/pulls/${params.pull_number}/comments?per_page=${perPage}&page=${page}`,
+        });
+        return {
+          data: Array.isArray(data)
+            ? data.map((item) => ({
+                id: Number(item.id),
+                body: typeof item.body === "string" ? item.body : null,
+                path: typeof item.path === "string" ? item.path : null,
+                line: typeof item.line === "number" ? item.line : null,
+                start_line: typeof item.start_line === "number" ? item.start_line : null,
+                commit_id: typeof item.commit_id === "string" ? item.commit_id : null,
+                user: item.user ?? null,
+              }))
+            : [],
+        };
       },
     },
     issues: {

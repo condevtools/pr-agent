@@ -83,6 +83,7 @@ export type {
   GitHubPullsListFilesMethod,
   GitHubPullSummary,
   GitHubRepositoryContentFile,
+  GitHubReviewCommentSummary,
   GitHubReviewContext,
   GitHubReviewRunParams,
   LoggerLike,

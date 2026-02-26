@@ -36,9 +36,11 @@ import {
   parseAskCommand,
   parseChangelogCommand,
   parseChecksCommand,
+  parseConfigCommand,
   parseDescribeCommand,
   parseFeedbackCommand,
   parseGenerateTestsCommand,
+  parseHelpCommand,
   parseImproveCommand,
   parseReflectCommand,
   parseReviewCommand,
@@ -74,6 +76,11 @@ import {
   buildFeedbackSignalRecordedMessage,
   buildReflectDependsOnAskMessage,
 } from "../shared/command-messages.js";
+import { buildHelpMessage } from "../shared/command-help.js";
+import {
+  buildConfigFoundMessage,
+  buildConfigNotFoundMessage,
+} from "../shared/command-config.js";
 import { mergeChangelogContent as mergeSharedChangelogContent } from "../shared/changelog.js";
 import { recordFeedbackSignal } from "../shared/feedback-signals.js";
 import {
@@ -1179,6 +1186,8 @@ async function handleGitLabNoteWebhook(params: {
 
   const hitRateLimit = async (
     command:
+      | "help"
+      | "config"
       | "feedback"
       | "describe"
       | "ask"
@@ -1219,6 +1228,49 @@ async function handleGitLabNoteWebhook(params: {
   });
 
   const commandRegistry: CommandRegistration<unknown>[] = [
+    registerCommand(
+      "help",
+      () => {
+        const parsed = parseHelpCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        const limited = await hitRateLimit("help", "help command rate limited");
+        if (limited) {
+          return limited;
+        }
+        await publishGitLabGeneralComment(
+          gitlabToken,
+          target,
+          buildHelpMessage({ target: "MR", locale }),
+        );
+        return { ok: true, message: "help command triggered" };
+      },
+    ),
+    registerCommand(
+      "config",
+      () => {
+        const parsed = parseConfigCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        const limited = await hitRateLimit("config", "config command rate limited");
+        if (limited) {
+          return limited;
+        }
+        const hasConfigFile = await hasGitLabConfigFile({
+          baseUrl,
+          projectId: payload.project.id,
+          gitlabToken,
+          ref: mergePayload.object_attributes.target_branch,
+        });
+        const configBody = hasConfigFile
+          ? buildConfigFoundMessage({ config: { review: policy }, locale })
+          : buildConfigNotFoundMessage(locale);
+        await publishGitLabGeneralComment(gitlabToken, target, configBody);
+        return { ok: true, message: "config command triggered" };
+      },
+    ),
     registerCommand(
       "feedback",
       () => {
@@ -2213,6 +2265,30 @@ async function resolveGitLabReviewPolicy(params: {
   });
 
   return resolved;
+}
+
+async function hasGitLabConfigFile(params: {
+  baseUrl: string;
+  projectId: number;
+  gitlabToken: string;
+  ref: string;
+}): Promise<boolean> {
+  const raw =
+    (await tryLoadGitLabTextFile({
+      baseUrl: params.baseUrl,
+      projectId: params.projectId,
+      gitlabToken: params.gitlabToken,
+      ref: params.ref,
+      path: ".mr-agent.yml",
+    })) ??
+    (await tryLoadGitLabTextFile({
+      baseUrl: params.baseUrl,
+      projectId: params.projectId,
+      gitlabToken: params.gitlabToken,
+      ref: params.ref,
+      path: ".mr-agent.yaml",
+    }));
+  return raw != null;
 }
 
 export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {

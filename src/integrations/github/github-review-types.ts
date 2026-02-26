@@ -110,6 +110,16 @@ export type GitHubPullsListFilesMethod = (
   params: GitHubPullFilesListParams,
 ) => Promise<{ data: GitHubPullFile[] }>;
 
+export interface GitHubReviewCommentSummary {
+  id: number;
+  body?: string | null;
+  path?: string | null;
+  line?: number | null;
+  start_line?: number | null;
+  commit_id?: string | null;
+  user?: { login?: string; type?: string } | null;
+}
+
 export interface MinimalGitHubOctokit {
   repos: {
     getContent(params: {
@@ -163,6 +173,13 @@ export interface MinimalGitHubOctokit {
       pull_number: number;
       body: string;
     }): Promise<unknown>;
+    listReviewComments?(params: {
+      owner: string;
+      repo: string;
+      pull_number: number;
+      per_page?: number;
+      page?: number;
+    }): Promise<{ data: GitHubReviewCommentSummary[] }>;
   };
   issues: {
     listForRepo?(params: {
