@@ -262,16 +262,23 @@ mr-agent/
 │   ├── app.ts                      # Probot event handlers (GitHub App)
 │   │
 │   ├── core/                       # Shared infrastructure
+│   │   ├── ask-session.ts          #   Ask multi-turn session management
 │   │   ├── cache.ts                #   TTL-based in-memory cache
 │   │   ├── clock.ts                #   Clock abstraction (testable time)
 │   │   ├── dedupe.ts               #   FNV hash request deduplication
 │   │   ├── env.ts                  #   Environment variable helpers
 │   │   ├── errors.ts               #   Typed error classes (4xx/5xx)
+│   │   ├── fnv.ts                  #   FNV-1a hash implementation
 │   │   ├── http.ts                 #   HTTP client with retry & backoff
 │   │   ├── i18n.ts                 #   Locale detection (zh/en)
 │   │   ├── logger.ts               #   Core structured logging
+│   │   ├── path.ts                 #   Path encoding utilities
 │   │   ├── rate-limit.ts           #   Per-scope rate limiting
 │   │   ├── runtime-state.ts        #   Pluggable state backend
+│   │   ├── runtime-state-file.ts   #   File-based state persistence
+│   │   ├── runtime-state-in-memory.ts # In-memory state store
+│   │   ├── runtime-state-snapshot.ts #  State snapshot merge utilities
+│   │   ├── runtime-state-sqlite.ts #   SQLite state persistence
 │   │   └── secret-patterns.ts      #   Regex-based secret detection
 │   │
 │   ├── review/                     # AI review domain
@@ -281,21 +288,34 @@ mr-agent/
 │   │   ├── ai-client-cache.ts      #   OpenAI client instance cache
 │   │   ├── ai-provider-anthropic.ts #  Anthropic provider adapter
 │   │   ├── ai-provider-gemini.ts   #   Gemini provider adapter
+│   │   ├── ai-provider-json.ts     #   JSON response parser
+│   │   ├── ai-result-normalization.ts # Result normalization & severity
 │   │   ├── patch.ts                #   Git diff parsing & line mapping
 │   │   ├── report-renderer.ts      #   Markdown report formatting
 │   │   ├── review-policy.ts        #   Code file detection & line mapping
-│   │   └── review-types.ts         #   Data models
+│   │   ├── review-types.ts         #   Data models
+│   │   ├── review-utils.ts         #   Review helper utilities
+│   │   └── similar-issue.ts        #   Similar issue search logic
 │   │
 │   ├── integrations/
 │   │   ├── github/                 #   GitHub review, policy, content
 │   │   │   ├── github-review.ts    #     Review orchestration
 │   │   │   ├── github-review-types.ts #  Interfaces & type definitions
+│   │   │   ├── github-command-workflows.ts # /ask, /describe, /changelog workflows
+│   │   │   ├── github-issue-comment-command.ts # Comment command dispatch
+│   │   │   ├── github-issue-triage.ts #  Issue auto-triage
+│   │   │   ├── github-rest-client.ts #   REST-based Octokit client
+│   │   │   ├── github-content.ts   #     File content fetching
 │   │   │   ├── github-policy.ts    #     Policy checks & validation
 │   │   │   ├── github-policy-config.ts # Policy YAML parsing & caching
 │   │   │   ├── github-policy-templates.ts # Template discovery & sections
 │   │   │   ├── github-webhook.ts   #     Webhook event dispatching
 │   │   │   └── github-lifecycle.ts #     PR/Issue lifecycle workflows
 │   │   ├── gitlab/                 #   GitLab review & command handling
+│   │   │   ├── gitlab-review.ts    #     Review orchestration
+│   │   │   ├── gitlab-command-workflows.ts # /ask, /describe workflows
+│   │   │   ├── gitlab-http.ts      #     GitLab API HTTP client
+│   │   │   └── gitlab-webhook-security.ts # Webhook signature verification
 │   │   ├── shared/                 #   Cross-platform shared utilities
 │   │   │   ├── managed-comments.ts #     Comment upsert & dedup markers
 │   │   │   ├── review-triggers.ts  #     Trigger classification & TTL
@@ -303,7 +323,20 @@ mr-agent/
 │   │   │   ├── secret-scan.ts      #     Secret leak scanning
 │   │   │   ├── auto-labels.ts      #     Auto-labeling inference
 │   │   │   ├── similar-issue.ts    #     Similar issue search
-│   │   │   └── process-guidelines.ts #   Guideline file loading
+│   │   │   ├── process-guidelines.ts #   Guideline file loading
+│   │   │   ├── command-builders.ts #     Slash command rule builders
+│   │   │   ├── command-dispatch.ts #     Registry-based command dispatch
+│   │   │   ├── command-messages.ts #     Command response message templates
+│   │   │   ├── changelog.ts        #     Changelog generation logic
+│   │   │   ├── describe-question.ts #    Describe prompt construction
+│   │   │   ├── diff-context.ts     #     Diff context extraction
+│   │   │   ├── http-retry-options.ts #   Shared HTTP retry options
+│   │   │   ├── public-error.ts     #     Safe error message sanitization
+│   │   │   ├── review-messages.ts  #     Review comment formatting
+│   │   │   ├── review-policy-parser.ts # Policy file parsing
+│   │   │   ├── review-state.ts     #     Review state management
+│   │   │   ├── secret-warning.ts   #     Secret detection warnings
+│   │   │   └── yaml.ts             #     YAML parsing utilities
 │   │   └── notify/                 #   Webhook notifications
 │   │
 │   ├── modules/
@@ -313,10 +346,12 @@ mr-agent/
 │   │   └── webhook/                #   Health, metrics, shutdown, replay
 │   │
 │   └── common/
-│       └── filters/
-│           └── http-error.filter.ts  # Global exception filter
+│       ├── filters/
+│       │   └── http-error.filter.ts  # Global exception filter
+│       └── types/
+│           └── raw-body-request.ts   # Shared RawBodyRequest interface
 │
-├── tests/                          # Node.js test runner (20+ test files)
+├── tests/                          # Node.js test runner (35+ test files)
 ├── README-zh.md                    # Chinese version of this documentation
 ├── docs/                           # Design docs & roadmap
 ├── Dockerfile                      # Multi-stage Docker build
@@ -814,7 +849,7 @@ All commands are triggered via PR/MR comments. Commands marked with **(PR only)*
 Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
 Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`; `/reflect` depends on `askCommandEnabled`.
 
-> **Note:** `/ask`, `/feedback`, `/similar_issue`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided — the AI answers based on the question alone. Set `GITHUB_APP_SLUG` to your GitHub App's slug (lowercase name) to enable `@mention` detection.
+> **Note:** `/ask`, `/feedback`, `/similar_issue`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` to your GitHub App's slug (lowercase name) to enable `@mention` detection.
 
 ---
 
@@ -933,14 +968,14 @@ Prometheus-format metrics are exposed at `GET /metrics`:
 
 ### Error Handling
 
-Webhook errors return structured JSON:
+Webhook errors return structured JSON. Known webhook errors (e.g. `BadWebhookRequestError`, `WebhookAuthError`) include a descriptive message; unrecognized internal errors are sanitized to `"internal server error"` to prevent information leakage.
 
 ```json
 {
   "ok": false,
-  "error": "Detailed error message",
-  "type": "BadWebhookRequestError",
-  "status": 400,
+  "error": "webhook secret verification failed",
+  "type": "WebhookAuthError",
+  "status": 401,
   "path": "/github/trigger",
   "method": "POST",
   "timestamp": "2026-01-01T00:00:00.000Z"

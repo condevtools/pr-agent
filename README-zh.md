@@ -262,16 +262,23 @@ mr-agent/
 │   ├── app.ts                      # Probot 事件处理（GitHub App）
 │   │
 │   ├── core/                       # 公共基础设施
+│   │   ├── ask-session.ts          #   Ask 多轮会话管理
 │   │   ├── cache.ts                #   TTL 内存缓存
 │   │   ├── clock.ts                #   时钟抽象（可测试时间）
 │   │   ├── dedupe.ts               #   FNV 哈希请求去重
 │   │   ├── env.ts                  #   环境变量工具
 │   │   ├── errors.ts               #   类型化错误类（4xx/5xx）
+│   │   ├── fnv.ts                  #   FNV-1a 哈希实现
 │   │   ├── http.ts                 #   HTTP 客户端（重试 & 退避）
 │   │   ├── i18n.ts                 #   语言检测（中文/英文）
 │   │   ├── logger.ts               #   核心结构化日志
+│   │   ├── path.ts                 #   路径编码工具
 │   │   ├── rate-limit.ts           #   按作用域限流
 │   │   ├── runtime-state.ts        #   可插拔状态后端
+│   │   ├── runtime-state-file.ts   #   文件持久化状态存储
+│   │   ├── runtime-state-in-memory.ts # 内存状态存储
+│   │   ├── runtime-state-snapshot.ts #  状态快照合并工具
+│   │   ├── runtime-state-sqlite.ts #   SQLite 状态持久化
 │   │   └── secret-patterns.ts      #   正则密钥检测
 │   │
 │   ├── review/                     # AI 评审领域
@@ -281,21 +288,34 @@ mr-agent/
 │   │   ├── ai-client-cache.ts      #   OpenAI 客户端实例缓存
 │   │   ├── ai-provider-anthropic.ts #  Anthropic 提供商适配器
 │   │   ├── ai-provider-gemini.ts   #   Gemini 提供商适配器
+│   │   ├── ai-provider-json.ts     #   JSON 响应解析器
+│   │   ├── ai-result-normalization.ts # 结果标准化 & 严重等级
 │   │   ├── patch.ts                #   Git diff 解析 & 行号映射
 │   │   ├── report-renderer.ts      #   Markdown 报告格式化
 │   │   ├── review-policy.ts        #   代码文件检测 & 行号解析
-│   │   └── review-types.ts         #   数据模型
+│   │   ├── review-types.ts         #   数据模型
+│   │   ├── review-utils.ts         #   评审辅助工具
+│   │   └── similar-issue.ts        #   相似 Issue 搜索逻辑
 │   │
 │   ├── integrations/
 │   │   ├── github/                 #   GitHub 评审、策略、内容获取
 │   │   │   ├── github-review.ts    #     评审编排
 │   │   │   ├── github-review-types.ts #  接口 & 类型定义
+│   │   │   ├── github-command-workflows.ts # /ask、/describe、/changelog 工作流
+│   │   │   ├── github-issue-comment-command.ts # 评论命令分发
+│   │   │   ├── github-issue-triage.ts #  Issue 自动分诊
+│   │   │   ├── github-rest-client.ts #   REST Octokit 客户端
+│   │   │   ├── github-content.ts   #     文件内容获取
 │   │   │   ├── github-policy.ts    #     策略检查 & 校验
 │   │   │   ├── github-policy-config.ts # 策略 YAML 解析 & 缓存
 │   │   │   ├── github-policy-templates.ts # 模板发现 & 段落提取
 │   │   │   ├── github-webhook.ts   #     Webhook 事件分发
 │   │   │   └── github-lifecycle.ts #     PR/Issue 生命周期工作流
 │   │   ├── gitlab/                 #   GitLab 评审 & 命令处理
+│   │   │   ├── gitlab-review.ts    #     评审编排
+│   │   │   ├── gitlab-command-workflows.ts # /ask、/describe 工作流
+│   │   │   ├── gitlab-http.ts      #     GitLab API HTTP 客户端
+│   │   │   └── gitlab-webhook-security.ts # Webhook 签名验证
 │   │   ├── shared/                 #   跨平台共享工具
 │   │   │   ├── managed-comments.ts #     评论去重 & 更新标记
 │   │   │   ├── review-triggers.ts  #     触发分类 & TTL 计算
@@ -303,7 +323,20 @@ mr-agent/
 │   │   │   ├── secret-scan.ts      #     密钥泄露扫描
 │   │   │   ├── auto-labels.ts      #     自动标签推断
 │   │   │   ├── similar-issue.ts    #     相似 Issue 搜索
-│   │   │   └── process-guidelines.ts #   流程规范文件加载
+│   │   │   ├── process-guidelines.ts #   流程规范文件加载
+│   │   │   ├── command-builders.ts #     斜杠命令规则构建器
+│   │   │   ├── command-dispatch.ts #     注册式命令分发
+│   │   │   ├── command-messages.ts #     命令响应消息模板
+│   │   │   ├── changelog.ts        #     Changelog 生成逻辑
+│   │   │   ├── describe-question.ts #    Describe Prompt 构建
+│   │   │   ├── diff-context.ts     #     Diff 上下文提取
+│   │   │   ├── http-retry-options.ts #   共享 HTTP 重试选项
+│   │   │   ├── public-error.ts     #     安全错误消息过滤
+│   │   │   ├── review-messages.ts  #     评审评论格式化
+│   │   │   ├── review-policy-parser.ts # 策略文件解析
+│   │   │   ├── review-state.ts     #     评审状态管理
+│   │   │   ├── secret-warning.ts   #     密钥检测警告
+│   │   │   └── yaml.ts             #     YAML 解析工具
 │   │   └── notify/                 #   Webhook 通知推送
 │   │
 │   ├── modules/
@@ -313,10 +346,12 @@ mr-agent/
 │   │   └── webhook/                #   健康检查、指标、关停、回放
 │   │
 │   └── common/
-│       └── filters/
-│           └── http-error.filter.ts  # 全局异常过滤器
+│       ├── filters/
+│       │   └── http-error.filter.ts  # 全局异常过滤器
+│       └── types/
+│           └── raw-body-request.ts   # 共享 RawBodyRequest 接口
 │
-├── tests/                          # Node.js 测试（20+ 测试文件）
+├── tests/                          # Node.js 测试（35+ 测试文件）
 ├── README.md                       # 当前文档的英文版本
 ├── docs/                           # 设计文档 & 路线图
 ├── Dockerfile                      # 多阶段 Docker 构建
@@ -814,7 +849,7 @@ GitLab 特有请求头：
 支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
 `.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`；`/reflect` 依赖 `askCommandEnabled`。
 
-> **提示：** `/ask`、`/feedback`、`/similar_issue` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，AI 仅基于问题本身回答。设置 `GITHUB_APP_SLUG` 为你的 GitHub App slug（小写名称）以启用 `@提及` 检测。
+> **提示：** `/ask`、`/feedback`、`/similar_issue` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。设置 `GITHUB_APP_SLUG` 为你的 GitHub App slug（小写名称）以启用 `@提及` 检测。
 
 ---
 
@@ -933,14 +968,14 @@ Prometheus 格式指标通过 `GET /metrics` 暴露：
 
 ### 错误处理
 
-Webhook 错误返回结构化 JSON：
+Webhook 错误返回结构化 JSON。已知 Webhook 错误（如 `BadWebhookRequestError`、`WebhookAuthError`）包含描述性消息；未识别的内部错误会被过滤为 `"internal server error"` 以防止信息泄露。
 
 ```json
 {
   "ok": false,
-  "error": "详细错误信息",
-  "type": "BadWebhookRequestError",
-  "status": 400,
+  "error": "webhook secret verification failed",
+  "type": "WebhookAuthError",
+  "status": 401,
   "path": "/github/trigger",
   "method": "POST",
   "timestamp": "2026-01-01T00:00:00.000Z"
