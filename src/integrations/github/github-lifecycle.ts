@@ -4,6 +4,7 @@ import {
   runGitHubIssuePolicyCheck,
   runGitHubPullRequestPolicyCheck,
 } from "./github-policy.js";
+import { runGitHubIssueAutoTriageWorkflow } from "./github-issue-triage.js";
 import { runGitHubReview, type GitHubReviewContext } from "./github-review.js";
 
 type PullRequestAutoReviewAction = Parameters<
@@ -21,6 +22,7 @@ export async function runGitHubIssuePolicyWorkflow(params: {
   title?: string;
   body?: string;
   defaultBranch?: string;
+  author?: string;
 }): Promise<void> {
   await runGitHubIssuePolicyCheck({
     context: params.context,
@@ -28,6 +30,14 @@ export async function runGitHubIssuePolicyWorkflow(params: {
     title: params.title ?? "",
     body: params.body ?? "",
     ref: params.defaultBranch,
+  });
+  await runGitHubIssueAutoTriageWorkflow({
+    context: params.context,
+    issueNumber: params.issueNumber,
+    title: params.title ?? "",
+    body: params.body ?? "",
+    defaultBranch: params.defaultBranch,
+    author: params.author,
   });
 }
 

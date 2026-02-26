@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { nowMs } from "./clock.js";
+import { logCore } from "./logger.js";
 
 interface SqliteStatementLike {
   get(...params: unknown[]): unknown;
@@ -82,7 +83,12 @@ export class SqliteRuntimeStateStore {
 
     try {
       return JSON.parse(row.value) as T;
-    } catch {
+    } catch (error) {
+      logCore("warn", "runtime_state.sqlite.load_parse_error", {
+        scope,
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
       statements.delete.run(scope, key);
       return undefined;
     }
@@ -101,7 +107,12 @@ export class SqliteRuntimeStateStore {
     let serializedValue = "";
     try {
       serializedValue = JSON.stringify(params.value);
-    } catch {
+    } catch (error) {
+      logCore("warn", "runtime_state.sqlite.save_serialize_error", {
+        scope: params.scope,
+        key: params.key,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return;
     }
 

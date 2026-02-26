@@ -18,6 +18,7 @@ import {
   saveRuntimeStateValue,
   type UiLocale,
 } from "#core";
+import { z } from "zod";
 import { publishNotification } from "#integrations/notify";
 import {
   analyzePullRequest,
@@ -99,6 +100,10 @@ import {
 } from "../shared/similar-issue.js";
 import { createGitLabCommandWorkflows } from "./gitlab-command-workflows.js";
 import { gitLabApiRequest } from "./gitlab-http.js";
+import {
+  verifyGitLabWebhookBodySize,
+  verifyGitLabWebhookToken,
+} from "./gitlab-webhook-security.js";
 import {
   buildManagedCommandCommentKey,
   buildManagedCommentBody,
@@ -238,6 +243,108 @@ export interface GitLabNoteWebhookBody {
 
 export type GitLabWebhookBody = GitLabMrWebhookBody | GitLabNoteWebhookBody;
 
+// ---------------------------------------------------------------------------
+// Zod payload schemas for GitLab webhooks
+// ---------------------------------------------------------------------------
+
+const gitlabProjectSchema = z.object({
+  id: z.number(),
+  web_url: z.string(),
+  name: z.string().optional(),
+  path_with_namespace: z.string().optional(),
+});
+
+const gitlabMrWebhookPayloadSchema = z.object({
+  object_kind: z.string().optional(),
+  event_type: z.string().optional(),
+  user: z
+    .object({
+      username: z.string().optional(),
+    })
+    .optional(),
+  project: gitlabProjectSchema,
+  object_attributes: z.object({
+    iid: z.number().int().positive(),
+    action: z.string().optional(),
+    state: z.string().optional(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    url: z.string().optional(),
+    source_branch: z.string().optional(),
+    target_branch: z.string().optional(),
+    draft: z.boolean().optional(),
+    work_in_progress: z.boolean().optional(),
+    last_commit: z
+      .object({
+        id: z.string().optional(),
+      })
+      .optional(),
+  }),
+  merge_request: z
+    .object({
+      iid: z.number().optional(),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      work_in_progress: z.boolean().optional(),
+      draft: z.boolean().optional(),
+      source_branch: z.string().optional(),
+      target_branch: z.string().optional(),
+      url: z.string().optional(),
+      state: z.string().optional(),
+    })
+    .optional(),
+  repository: z
+    .object({
+      name: z.string().optional(),
+    })
+    .optional(),
+});
+
+const gitlabNoteWebhookPayloadSchema = z.object({
+  object_kind: z.string().optional(),
+  event_type: z.string().optional(),
+  user: z
+    .object({
+      username: z.string().optional(),
+    })
+    .optional(),
+  project: gitlabProjectSchema,
+  object_attributes: z.object({
+    note: z.string().optional(),
+    action: z.string().optional(),
+    noteable_type: z.string().optional(),
+    noteable_iid: z.union([z.number(), z.string()]).optional(),
+    url: z.string().optional(),
+  }),
+  merge_request: z
+    .object({
+      iid: z.number().optional(),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      source_branch: z.string().optional(),
+      target_branch: z.string().optional(),
+      url: z.string().optional(),
+      state: z.string().optional(),
+    })
+    .optional(),
+});
+
+function parseGitLabPayload<T>(
+  schema: z.ZodType<T>,
+  payload: unknown,
+  eventKind: string,
+): T {
+  const parsed = schema.safeParse(payload);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const firstIssue = parsed.error.issues[0];
+  const issuePath = firstIssue?.path.join(".") || "payload";
+  throw new BadWebhookRequestError(
+    `invalid gitlab ${eventKind} payload: ${issuePath} ${firstIssue?.message ?? "schema validation failed"}`,
+  );
+}
+
 interface GitLabChange {
   new_path: string;
   old_path: string;
@@ -354,6 +461,8 @@ interface GitLabReviewPolicy {
   changelogCommandEnabled: boolean;
   changelogAllowApply: boolean;
   feedbackCommandEnabled: boolean;
+  improveCommandEnabled: boolean;
+  addDocCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -375,6 +484,8 @@ const defaultGitLabReviewPolicy: GitLabReviewPolicy = {
   changelogCommandEnabled: true,
   changelogAllowApply: false,
   feedbackCommandEnabled: true,
+  improveCommandEnabled: true,
+  addDocCommandEnabled: true,
   customRules: [],
 };
 
@@ -608,10 +719,28 @@ export async function runGitLabWebhook(params: {
   payload: GitLabWebhookBody;
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
+  rawBody?: string | Buffer;
+  skipSecurityVerification?: boolean;
 }): Promise<{ ok: boolean; message: string }> {
+  if (!params.skipSecurityVerification) {
+    if (params.rawBody) {
+      verifyGitLabWebhookBodySize(params.rawBody);
+    }
+    const warnLogger =
+      "warn" in params.logger &&
+      typeof (params.logger as Record<string, unknown>).warn === "function"
+        ? (params.logger as unknown as { warn: (message: string) => void })
+        : undefined;
+    verifyGitLabWebhookToken(params.headers, warnLogger);
+  }
+
   const kind = (params.payload.object_kind ?? "merge_request").toLowerCase();
   if (kind === "merge_request") {
-    const payload = params.payload as GitLabMrWebhookBody;
+    const payload = parseGitLabPayload(
+      gitlabMrWebhookPayloadSchema,
+      params.payload,
+      "merge_request",
+    ) as GitLabMrWebhookBody;
     const actionRaw = payload.object_attributes?.action;
     const action =
       typeof actionRaw === "string" ? actionRaw.toLowerCase() : undefined;
@@ -901,6 +1030,47 @@ export async function runGitLabReview(
     const publicReason = getPublicErrorMessage(originalError);
 
     logger.error({ error: reason }, "GitLab AI review failed");
+
+    try {
+      const failureTarget = buildGitLabCommentTargetFromPayload({
+        payload,
+        baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
+      });
+      await publishGitLabGeneralComment(
+        gitlabToken,
+        failureTarget,
+        [
+          reviewMessage("reviewFailureTitle", locale),
+          "",
+          "<details>",
+          localizeText(
+            {
+              zh: `<summary>错误详情</summary>`,
+              en: `<summary>Error details</summary>`,
+            },
+            locale,
+          ),
+          "",
+          `\`${publicReason}\``,
+          "",
+          "</details>",
+          "",
+          localizeText(
+            {
+              zh: "请重试或联系仓库管理员。",
+              en: "Please retry or contact the repository administrator.",
+            },
+            locale,
+          ),
+        ].join("\n"),
+      );
+    } catch (commentError) {
+      logger.error(
+        { error: commentError instanceof Error ? commentError.message : String(commentError) },
+        "Failed to publish GitLab failure comment to MR",
+      );
+    }
+
     const pushUrl =
       headers["x-push-url"] ??
       headers["x-qwx-robot-url"] ??
@@ -960,7 +1130,11 @@ async function handleGitLabNoteWebhook(params: {
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
 }): Promise<{ ok: boolean; message: string }> {
-  const payload = params.payload as GitLabNoteWebhookBody;
+  const payload = parseGitLabPayload(
+    gitlabNoteWebhookPayloadSchema,
+    params.payload,
+    "note",
+  ) as GitLabNoteWebhookBody;
   const noteableType = String(
     payload.object_attributes.noteable_type ?? "",
   ).toLowerCase();
@@ -1334,6 +1508,18 @@ async function handleGitLabNoteWebhook(params: {
         if (limited) {
           return limited;
         }
+        if (!policy.improveCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "improve",
+              policyPath: ".mr-agent.yml -> review.improveCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "improve command ignored by policy" };
+        }
 
         await runGitLabReview({
           payload: mergePayload,
@@ -1360,6 +1546,18 @@ async function handleGitLabNoteWebhook(params: {
         const limited = await hitRateLimit("add-doc", "add_doc command rate limited");
         if (limited) {
           return limited;
+        }
+        if (!policy.addDocCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "add_doc",
+              policyPath: ".mr-agent.yml -> review.addDocCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "add_doc command ignored by policy" };
         }
 
         await runGitLabReview({
@@ -1754,12 +1952,11 @@ function readBoolEnv(key: string): boolean {
 }
 
 function parseMode(modeRaw: string | undefined): ReviewMode | undefined {
-  if (!modeRaw?.trim()) {
-    return undefined;
-  }
-
-  const mode = modeRaw?.trim().toLowerCase();
-  return mode === "comment" ? "comment" : "report";
+  if (!modeRaw?.trim()) return undefined;
+  const mode = modeRaw.trim().toLowerCase();
+  if (mode === "comment") return "comment";
+  if (mode === "report") return "report";
+  return undefined;
 }
 
 async function loadGitLabRepositoryProcessGuidelines(params: {
@@ -2056,6 +2253,10 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
     changelogAllowApply: overrides.changelogAllowApply ?? basePolicy.changelogAllowApply,
     feedbackCommandEnabled:
       overrides.feedbackCommandEnabled ?? basePolicy.feedbackCommandEnabled,
+    improveCommandEnabled:
+      overrides.improveCommandEnabled ?? basePolicy.improveCommandEnabled,
+    addDocCommandEnabled:
+      overrides.addDocCommandEnabled ?? basePolicy.addDocCommandEnabled,
     customRules: normalizePolicyStringList(overrides.customRules, 30),
   };
 }

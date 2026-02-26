@@ -18,3 +18,4 @@ export {
   runGitHubIssuePolicyWorkflow,
   runGitHubPullRequestLifecycleWorkflow,
 } from "./github-lifecycle.js";
+export { runGitHubIssueAutoTriageWorkflow } from "./github-issue-triage.js";

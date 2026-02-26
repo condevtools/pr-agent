@@ -338,16 +338,18 @@ function resolveModel(provider: AIProvider): string {
   return readStringEnv("GEMINI_MODEL", "gemini-2.0-flash");
 }
 
+function resolveOpenAIApiKey(provider: AIProvider): string | undefined {
+  return provider === "openai-compatible"
+    ? (readOptionalStringEnv("OPENAI_COMPATIBLE_API_KEY") ?? readOptionalStringEnv("OPENAI_API_KEY"))
+    : readOptionalStringEnv("OPENAI_API_KEY");
+}
+
 function resolveOpenAIClientForProvider(params: {
   provider: "openai" | "openai-compatible";
   timeoutMs: number;
   runtime: AiReviewerRuntime;
 }): OpenAI {
-  const apiKey =
-    params.provider === "openai-compatible"
-      ? (readOptionalStringEnv("OPENAI_COMPATIBLE_API_KEY") ??
-          readOptionalStringEnv("OPENAI_API_KEY"))
-      : readOptionalStringEnv("OPENAI_API_KEY");
+  const apiKey = resolveOpenAIApiKey(params.provider);
   if (!apiKey) {
     throw new Error(
       params.provider === "openai-compatible"
@@ -400,7 +402,7 @@ async function requestOpenAICompletionText(params: {
       signal: getHttpShutdownSignal(),
     },
   );
-  return extractModelText(completion.choices[0]?.message.content);
+  return extractModelText(completion.choices?.[0]?.message?.content);
 }
 
 function buildOpenAIJsonOnlyHintPrompt(prompt: string): string {
@@ -771,11 +773,7 @@ function shouldUseLiveAiHealthProbe(
 
 function probeProviderConfig(provider: AIProvider): number {
   if (provider === "openai" || provider === "openai-compatible") {
-    const apiKey =
-      provider === "openai-compatible"
-        ? (readOptionalStringEnv("OPENAI_COMPATIBLE_API_KEY") ??
-            readOptionalStringEnv("OPENAI_API_KEY"))
-        : readOptionalStringEnv("OPENAI_API_KEY");
+    const apiKey = resolveOpenAIApiKey(provider);
     if (!apiKey) {
       throw new Error(
         provider === "openai-compatible"
@@ -811,11 +809,7 @@ async function probeProviderRequest(
   timeoutMs: number,
 ): Promise<number> {
   if (provider === "openai" || provider === "openai-compatible") {
-    const apiKey =
-      provider === "openai-compatible"
-        ? (readOptionalStringEnv("OPENAI_COMPATIBLE_API_KEY") ??
-            readOptionalStringEnv("OPENAI_API_KEY"))
-        : readOptionalStringEnv("OPENAI_API_KEY");
+    const apiKey = resolveOpenAIApiKey(provider);
     if (!apiKey) {
       throw new Error(
         provider === "openai-compatible"
@@ -875,9 +869,12 @@ async function probeProviderRequest(
     throw new Error("Missing GEMINI_API_KEY");
   }
   const response = await fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}?key=${encodeURIComponent(apiKey)}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}`,
     {
       method: "GET",
+      headers: {
+        "x-goog-api-key": apiKey,
+      },
     },
     {
       timeoutMs,

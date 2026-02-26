@@ -55,6 +55,7 @@
 - GitHub Check 集成，可接 Branch Protection（`enforce` 模式）
 - `.github/.gitlab` 模板/流程文件识别（workflow/template/CODEOWNERS/CONTRIBUTING）并给出流程建议
 - Issue 创建/编辑时流程预检、PR 创建/编辑/同步时合并前预检（GitHub）
+- 仓库缺少 `.mr-agent.yml` 时，Issue 自动分诊（可行性/建议/相似 Issue/自动标签）
 
 **多平台支持**
 - GitHub App（推荐）
@@ -79,7 +80,7 @@
 | `/ai-review report` | report | 5 分钟 |
 | `/ai-review comment` | comment | 5 分钟 |
 | Webhook Header `x-ai-mode`（仅 GitLab） | report / comment | 5 分钟 |
-| Issue 创建 / 编辑 | 流程预检（GitHub） | — |
+| Issue 创建 / 编辑 | 流程预检（GitHub）+ 缺省策略自动分诊（无策略文件时） | 5 分钟 |
 | PR 创建 / 编辑 / 同步 | 合并前预检（GitHub） | — |
 
 ### 路线图与流程资产
@@ -484,6 +485,11 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审 SHA 缓存有效期 |
 | `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.mr-agent.yml` 策略/评审配置缓存 |
 | `GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS` | `600000`（10 分钟） | 流程提醒评论去重窗口 |
+| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | 当仓库缺少 `.mr-agent.yml` 时，在 `issues.opened/edited` 自动执行 Issue 分诊 |
+| `GITHUB_ISSUE_AUTO_TRIAGE_AUTO_LABELS` | `true` | Issue 自动分诊后自动追加推断标签 |
+| `GITHUB_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS` | `300000`（5 分钟） | Issue 自动分诊评论去重窗口 |
+| `GITHUB_ISSUE_AUTO_TRIAGE_SIMILAR_LIMIT` | `5` | 自动分诊输出中最多展示的相似 Issue 数量 |
+| `GITHUB_ISSUE_TRIAGE_DISABLE_AI` | `false` | 关闭 AI 调用，仅使用内置兜底分诊文案 |
 | `GITHUB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/github/trigger` 的额外请求体硬上限 |
 | `GITHUB_WEBHOOK_SKIP_SIGNATURE` | `false` | 仅调试可用；`NODE_ENV=production` 时禁止开启 |
 
@@ -804,7 +810,7 @@ GitLab 特有请求头：
 | `/feedback resolved\|dismissed\|up\|down [备注]` | 评审质量反馈 |
 
 支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
-`.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`；`/reflect` 依赖 `askCommandEnabled`。
+`.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`；`/reflect` 依赖 `askCommandEnabled`。
 
 ---
 
@@ -846,6 +852,8 @@ review:
   changelogCommandEnabled: true
   changelogAllowApply: false
   feedbackCommandEnabled: true
+  improveCommandEnabled: true
+  addDocCommandEnabled: true
   secretScanEnabled: true
   autoLabelEnabled: true
   secretScanCustomPatterns:  # 可选：仓库自定义密钥正则
@@ -882,6 +890,8 @@ GitLab 当前只读取 `.mr-agent.yml` 中的 `review:` 段。顶层 `mode`、`i
 | `changelogCommandEnabled` | 是否启用 `/changelog` 命令 |
 | `changelogAllowApply` | 是否允许 `/changelog --apply` 直接写回仓库 Changelog |
 | `feedbackCommandEnabled` | 是否启用 `/feedback` 命令 |
+| `improveCommandEnabled` | 是否启用 `/improve` 命令 |
+| `addDocCommandEnabled` | 是否启用 `/add_doc`（`/add-doc`）命令 |
 | `secretScanEnabled` | 是否扫描 diff 中疑似密钥泄露并发布安全提示 |
 | `secretScanCustomPatterns` | 仓库自定义密钥正则补充规则 |
 | `autoLabelEnabled` | 是否根据变更内容自动追加 PR 标签 |

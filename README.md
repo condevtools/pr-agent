@@ -55,6 +55,7 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 - GitHub Check integration for branch protection (`enforce` mode)
 - Process guideline detection (`.github/.gitlab` workflows, templates, CODEOWNERS, CONTRIBUTING) with compliance suggestions
 - Issue creation/edit pre-check and PR pre-merge validation (GitHub)
+- Default issue auto-triage (feasibility + suggestions + similar issues + labels) when `.mr-agent.yml` is absent
 
 **Multi-Platform**
 - GitHub App (recommended)
@@ -79,7 +80,7 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 | `/ai-review report` | report | 5 min |
 | `/ai-review comment` | comment | 5 min |
 | Webhook header `x-ai-mode` (GitLab only) | report / comment | 5 min |
-| Issue created / edited | pre-check (GitHub) | — |
+| Issue created / edited | pre-check (GitHub) + default auto-triage when policy file is missing | 5 min |
 | PR created / edited / synced | pre-merge check (GitHub) | — |
 
 ### Roadmap & Process Assets
@@ -484,6 +485,11 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache lifetime |
 | `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.mr-agent.yml` cache for policy/review behavior |
 | `GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS` | `600000` (10min) | Dedup window for policy reminder comments |
+| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | Enable default issue auto-triage on `issues.opened/edited` when no `.mr-agent.yml` exists |
+| `GITHUB_ISSUE_AUTO_TRIAGE_AUTO_LABELS` | `true` | Add inferred labels for default issue auto-triage |
+| `GITHUB_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS` | `300000` (5min) | Dedup window for issue auto-triage comments |
+| `GITHUB_ISSUE_AUTO_TRIAGE_SIMILAR_LIMIT` | `5` | Max number of similar issues shown in auto-triage output |
+| `GITHUB_ISSUE_TRIAGE_DISABLE_AI` | `false` | Skip AI call and use fallback triage summary only |
 | `GITHUB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/github/trigger` payload size |
 | `GITHUB_WEBHOOK_SKIP_SIGNATURE` | `false` | Debug-only signature bypass; forbidden when `NODE_ENV=production` |
 
@@ -804,7 +810,7 @@ All commands are triggered via PR/MR comments:
 | `/feedback resolved\|dismissed\|up\|down [note]` | Provide review quality feedback |
 
 Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
-Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`; `/reflect` depends on `askCommandEnabled`.
+Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`; `/reflect` depends on `askCommandEnabled`.
 
 ---
 
@@ -846,6 +852,8 @@ review:
   changelogCommandEnabled: true
   changelogAllowApply: false
   feedbackCommandEnabled: true
+  improveCommandEnabled: true
+  addDocCommandEnabled: true
   secretScanEnabled: true
   autoLabelEnabled: true
   secretScanCustomPatterns:  # optional extra secret regex patterns
@@ -882,6 +890,8 @@ GitLab currently reads only the `review:` section from `.mr-agent.yml`. Top-leve
 | `changelogCommandEnabled` | Enable `/changelog` command |
 | `changelogAllowApply` | Allow `/changelog --apply` to commit directly to the repo |
 | `feedbackCommandEnabled` | Enable `/feedback` command |
+| `improveCommandEnabled` | Enable `/improve` command |
+| `addDocCommandEnabled` | Enable `/add_doc` (`/add-doc`) command |
 | `secretScanEnabled` | Scan diffs for potential secret leaks and post security warnings |
 | `secretScanCustomPatterns` | Additional repository-specific secret regex patterns |
 | `autoLabelEnabled` | Auto-add PR labels based on change content |

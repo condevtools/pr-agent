@@ -28,7 +28,18 @@ export async function dispatchCommandRegistrations(
   fallback: CommandDispatchResult,
 ): Promise<CommandDispatchResult> {
   for (const registration of registrations) {
-    const parsed = registration.parse();
+    let parsed: unknown;
+    try {
+      parsed = registration.parse();
+    } catch (error) {
+      if (typeof console !== "undefined") {
+        console.warn(
+          `[command-dispatch] parse() threw for command "${registration.name}":`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      continue;
+    }
     if (typeof parsed === "undefined") {
       continue;
     }

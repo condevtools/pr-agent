@@ -53,6 +53,8 @@ export interface ReviewPolicyConfig {
   changelogCommandEnabled: boolean;
   changelogAllowApply: boolean;
   feedbackCommandEnabled: boolean;
+  improveCommandEnabled: boolean;
+  addDocCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -102,6 +104,8 @@ const repoPolicyReviewSchema = z
     changelogCommandEnabled: z.boolean().optional(),
     changelogAllowApply: z.boolean().optional(),
     feedbackCommandEnabled: z.boolean().optional(),
+    improveCommandEnabled: z.boolean().optional(),
+    addDocCommandEnabled: z.boolean().optional(),
     customRules: z.array(z.string()).optional(),
   })
   .strict()
@@ -156,6 +160,8 @@ export const defaultPolicyConfig: RepoPolicyConfig = {
     changelogCommandEnabled: true,
     changelogAllowApply: false,
     feedbackCommandEnabled: true,
+    improveCommandEnabled: true,
+    addDocCommandEnabled: true,
     customRules: [],
   },
 };
@@ -165,8 +171,10 @@ export const defaultPolicyConfig: RepoPolicyConfig = {
 // ---------------------------------------------------------------------------
 
 interface RepoPolicyConfigCacheEntry extends ExpiringCacheEntry<RepoPolicyConfig> {}
+interface RepoPolicyConfigPresenceCacheEntry extends ExpiringCacheEntry<boolean> {}
 
 const policyConfigCache = new Map<string, RepoPolicyConfigCacheEntry>();
+const policyConfigPresenceCache = new Map<string, RepoPolicyConfigPresenceCacheEntry>();
 
 // ---------------------------------------------------------------------------
 // Config loading
@@ -231,6 +239,54 @@ export async function loadRepositoryPolicyConfig(params: {
   trimCache(policyConfigCache, 500);
 
   return resolved;
+}
+
+export async function hasRepositoryPolicyConfigFile(params: {
+  context: GitHubReviewContext;
+  owner: string;
+  repo: string;
+  ref?: string;
+}): Promise<boolean> {
+  const { context, owner, repo, ref } = params;
+  const cacheKey = `${owner}/${repo}@${ref ?? "__default__"}:presence`;
+  const now = nowMs();
+  pruneExpiredCache(policyConfigPresenceCache, now);
+  const cached = getFreshCacheValue(policyConfigPresenceCache, cacheKey, now);
+  if (typeof cached === "boolean") {
+    return cached;
+  }
+
+  let found = false;
+  for (const path of CONFIG_PATH_CANDIDATES) {
+    const content = await tryLoadRepositoryContent({
+      context,
+      owner,
+      repo,
+      path,
+      ref,
+    });
+    if (!content || Array.isArray(content)) {
+      continue;
+    }
+    if ((content.type ?? "file") === "dir") {
+      continue;
+    }
+    found = true;
+    break;
+  }
+
+  policyConfigPresenceCache.set(cacheKey, {
+    expiresAt:
+      now +
+      readNumberEnv(
+        "GITHUB_POLICY_CONFIG_CACHE_TTL_MS",
+        DEFAULT_POLICY_CONFIG_CACHE_TTL_MS,
+      ),
+    value: found,
+  });
+  trimCache(policyConfigPresenceCache, 500);
+
+  return found;
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +397,8 @@ function normalizeRepoPolicyConfig(raw: Partial<RepoPolicyConfig>): RepoPolicyCo
       changelogCommandEnabled: review.changelogCommandEnabled !== false,
       changelogAllowApply: Boolean(review.changelogAllowApply),
       feedbackCommandEnabled: review.feedbackCommandEnabled !== false,
+      improveCommandEnabled: review.improveCommandEnabled !== false,
+      addDocCommandEnabled: review.addDocCommandEnabled !== false,
       customRules: normalizeStringList(review.customRules).slice(0, 30),
     },
   };
@@ -587,6 +645,20 @@ function normalizeYamlReviewConfig(
       }
       continue;
     }
+    if (key === "improvecommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.improveCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "adddoccommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.addDocCommandEnabled = bool;
+      }
+      continue;
+    }
     if (key === "customrules") {
       const list = coerceStringList(rawValue);
       if (list) {
@@ -646,7 +718,7 @@ function coerceStringList(value: unknown): string[] | undefined {
     const list = value
       .map((item) => (typeof item === "string" ? item.trim() : ""))
       .filter(Boolean);
-    return list.length > 0 ? list : undefined;
+    return list;
   }
   if (typeof value === "string") {
     const trimmed = stripYamlQuotes(value).trim();

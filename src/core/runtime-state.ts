@@ -12,6 +12,7 @@ const DEFAULT_RUNTIME_STATE_SQLITE_FILE = ".mr-agent-runtime-state.sqlite3";
 const DEFAULT_RUNTIME_STATE_PRUNE_INTERVAL_MS = 1_000;
 const DEFAULT_RUNTIME_STATE_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const DEFAULT_RUNTIME_STATE_FILE_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_RUNTIME_STATE_FILE_STALE_LOCK_TIMEOUT_MS = 30_000;
 const RUNTIME_STATE_FILE_LOCK_RETRY_MS = 25;
 
 interface RuntimeStateRegistry {
@@ -121,6 +122,8 @@ export function clearRuntimeStateStore(): void {
     registry.sqliteStorePath = undefined;
   } else if (backend === "file" || backend === "fs") {
     getFileStore().clearAllAndDispose();
+    registry.fileStore = undefined;
+    registry.fileStorePath = undefined;
   } else {
     getMemoryStore().clearAll();
   }
@@ -175,6 +178,10 @@ function getFileStore(): FileRuntimeStateStore {
         DEFAULT_RUNTIME_STATE_FILE_LOCK_TIMEOUT_MS,
       ),
       lockRetryMs: RUNTIME_STATE_FILE_LOCK_RETRY_MS,
+      staleLockTimeoutMs: readNumberEnv(
+        "RUNTIME_STATE_FILE_STALE_LOCK_TIMEOUT_MS",
+        DEFAULT_RUNTIME_STATE_FILE_STALE_LOCK_TIMEOUT_MS,
+      ),
     });
     registry.fileStorePath = nextPath;
   }

@@ -28,9 +28,11 @@ import {
 } from "../src/integrations/github/github-webhook.ts";
 import {
   GitlabWebhookService,
-  isGitLabWebhookTokenValid,
   shouldRequireGitLabWebhookSecret,
 } from "../src/modules/gitlab/gitlab.webhook.service.ts";
+import {
+  isGitLabWebhookTokenValid,
+} from "../src/integrations/gitlab/gitlab-webhook-security.ts";
 import {
   buildGitLabChangelogQuestion,
   buildGitLabDescribeQuestion,

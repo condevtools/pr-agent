@@ -27,7 +27,11 @@ import {
   scheduleWebhookEventRecord,
   resolveStoredWebhookReplayPayload,
 } from "../webhook/webhook-replay.js";
-import { readHeaderValue, safeJsonStringify } from "../webhook/webhook.utils.js";
+import { readHeaderValue, readRawBody, safeJsonStringify } from "../webhook/webhook.utils.js";
+
+interface RawBodyRequest extends Request {
+  rawBody?: Buffer | string;
+}
 
 @Controller("gitlab")
 export class GitlabWebhookController {
@@ -50,7 +54,7 @@ export class GitlabWebhookController {
 
   @Post("trigger")
   async trigger(
-    @Req() request: Request,
+    @Req() request: RawBodyRequest,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
     const eventName = (readHeaderValue(headers, "x-gitlab-event") ?? "unknown").toLowerCase();
@@ -64,6 +68,7 @@ export class GitlabWebhookController {
       const result = await this.gitlabWebhookService.handleTrigger({
         payload: request.body as GitLabWebhookBody | undefined,
         headers,
+        rawBody: request.rawBody,
       });
       incrementMetricCounter("mr_agent_webhook_results_total", {
         platform: "gitlab",
@@ -75,9 +80,10 @@ export class GitlabWebhookController {
         headers,
         payload: request.body as GitLabWebhookBody | undefined,
         rawBody:
-          typeof request.body === "undefined"
+          readRawBody(request.rawBody) ??
+          (typeof request.body === "undefined"
             ? undefined
-            : safeJsonStringify(request.body, ""),
+            : safeJsonStringify(request.body, "")),
       });
       return result;
     } catch (error) {

@@ -1,21 +1,21 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 import {
   BadWebhookRequestError,
-  WebhookAuthError,
-  parseBooleanEnv,
-  readNumberEnv,
   readOptionalStringEnv,
 } from "#core";
 import {
   runGitLabWebhook,
+  verifyGitLabWebhookBodySize,
+  verifyGitLabWebhookToken,
+  shouldRequireGitLabWebhookSecret,
   type GitLabWebhookBody,
 } from "#integrations/gitlab";
 import {
   formatLogMessage,
   normalizeHeaderRecord,
+  readRawBody,
 } from "../webhook/webhook.utils.js";
 
 const gitlabWebhookPayloadSchema = z.object({
@@ -36,9 +36,6 @@ const gitlabWebhookPayloadSchema = z.object({
   merge_request: z.record(z.unknown()).optional(),
 });
 
-let hasWarnedMissingGitLabWebhookSecret = false;
-const DEFAULT_GITLAB_WEBHOOK_MAX_BODY_BYTES = 10 * 1024 * 1024;
-
 @Injectable()
 export class GitlabWebhookService {
   private readonly logger = new Logger(GitlabWebhookService.name);
@@ -50,19 +47,32 @@ export class GitlabWebhookService {
     error: (metadata: unknown, message: string) => {
       this.logger.error(formatLogMessage(message, metadata));
     },
+    warn: (message: string) => {
+      this.logger.warn(formatLogMessage(message, {}));
+    },
   };
 
   async handleTrigger(params: {
     payload: GitLabWebhookBody | undefined;
     headers: Record<string, string | string[] | undefined>;
+    rawBody?: Buffer | string;
     trustReplay?: boolean;
   }): Promise<{ ok: boolean; message: string }> {
-    verifyGitLabWebhookPayloadSize(params.payload);
+    const resolvedRawBody = readRawBody(params.rawBody);
+
+    // Verify body size using the raw body when available (accurate byte
+    // count); fall back to estimating from the parsed payload otherwise.
+    if (resolvedRawBody) {
+      verifyGitLabWebhookBodySize(resolvedRawBody);
+    } else {
+      verifyGitLabWebhookPayloadSizeFallback(params.payload);
+    }
+
     const payload = parseGitLabPayload(params.payload);
 
     const normalizedHeaders = normalizeHeaderRecord(params.headers);
     if (!params.trustReplay) {
-      verifyGitLabWebhookToken(normalizedHeaders, this.logger);
+      verifyGitLabWebhookToken(normalizedHeaders, this.serviceLogger);
     }
 
     // Backward compatibility: if webhook secret is not enabled,
@@ -79,45 +89,43 @@ export class GitlabWebhookService {
       payload,
       headers: normalizedHeaders,
       logger: this.serviceLogger,
+      rawBody: resolvedRawBody,
+      // Security was already verified above; skip the duplicate check
+      // inside runGitLabWebhook to avoid double-reading env vars and
+      // double-logging warnings.
+      skipSecurityVerification: true,
     });
   }
 }
 
-function verifyGitLabWebhookPayloadSize(payload: unknown): void {
-  const maxBodyBytes = Math.max(
-    1,
-    readNumberEnv(
-      "GITLAB_WEBHOOK_MAX_BODY_BYTES",
-      DEFAULT_GITLAB_WEBHOOK_MAX_BODY_BYTES,
-    ),
-  );
-  const payloadBytes = estimatePayloadSizeBytes(payload);
-  if (payloadBytes <= maxBodyBytes) {
+/**
+ * Fallback body-size estimation when the raw body buffer is not
+ * available (e.g. during replay). Re-serializes the parsed payload
+ * to approximate the wire size.
+ */
+function verifyGitLabWebhookPayloadSizeFallback(payload: unknown): void {
+  if (payload === null || payload === undefined) {
     return;
   }
 
-  throw new BadWebhookRequestError(
-    `gitlab webhook payload too large: ${payloadBytes} bytes exceeds GITLAB_WEBHOOK_MAX_BODY_BYTES=${maxBodyBytes}`,
-  );
-}
-
-function estimatePayloadSizeBytes(payload: unknown): number {
+  let payloadBytes: number;
   if (typeof payload === "string") {
-    return Buffer.byteLength(payload, "utf8");
-  }
-  if (payload === null || payload === undefined) {
-    return 0;
+    payloadBytes = Buffer.byteLength(payload, "utf8");
+  } else {
+    try {
+      const serialized = JSON.stringify(payload);
+      if (typeof serialized !== "string") {
+        return;
+      }
+      payloadBytes = Buffer.byteLength(serialized, "utf8");
+    } catch {
+      return;
+    }
   }
 
-  try {
-    const serialized = JSON.stringify(payload);
-    if (typeof serialized !== "string") {
-      return 0;
-    }
-    return Buffer.byteLength(serialized, "utf8");
-  } catch {
-    return 0;
-  }
+  // Delegate the actual threshold check to the canonical implementation.
+  // Pass the byte count directly to avoid allocating a large buffer/string.
+  verifyGitLabWebhookBodySize(payloadBytes);
 }
 
 function parseGitLabPayload(payload: unknown): GitLabWebhookBody {
@@ -133,47 +141,4 @@ function parseGitLabPayload(payload: unknown): GitLabWebhookBody {
   );
 }
 
-function verifyGitLabWebhookToken(
-  headers: Record<string, string | undefined>,
-  logger?: Pick<Logger, "warn">,
-): void {
-  const expected = readOptionalStringEnv("GITLAB_WEBHOOK_SECRET");
-  if (!expected) {
-    if (shouldRequireGitLabWebhookSecret()) {
-      throw new BadWebhookRequestError(
-        "GITLAB_WEBHOOK_SECRET is required when GITLAB_REQUIRE_WEBHOOK_SECRET=true",
-      );
-    }
-    if (!hasWarnedMissingGitLabWebhookSecret) {
-      hasWarnedMissingGitLabWebhookSecret = true;
-      logger?.warn(
-        "GITLAB_WEBHOOK_SECRET is not configured; GitLab webhook signature verification is disabled.",
-      );
-    }
-    return;
-  }
-
-  const actual = headers["x-gitlab-token"]?.trim();
-  if (!actual) {
-    throw new WebhookAuthError("invalid gitlab webhook token", 403);
-  }
-
-  if (!isGitLabWebhookTokenValid(expected, actual)) {
-    throw new WebhookAuthError("invalid gitlab webhook token", 403);
-  }
-}
-
-export function shouldRequireGitLabWebhookSecret(
-  rawValue: string | undefined = readOptionalStringEnv("GITLAB_REQUIRE_WEBHOOK_SECRET"),
-): boolean {
-  return parseBooleanEnv(rawValue);
-}
-
-export function isGitLabWebhookTokenValid(
-  expected: string,
-  actual: string,
-): boolean {
-  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
-  const actualDigest = createHash("sha256").update(actual, "utf8").digest();
-  return timingSafeEqual(expectedDigest, actualDigest);
-}
+export { shouldRequireGitLabWebhookSecret } from "#integrations/gitlab";

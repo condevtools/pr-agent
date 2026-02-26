@@ -75,6 +75,11 @@ const issuesWebhookPayloadSchema = z.object({
     title: z.string().optional(),
     body: z.string().optional(),
     pull_request: z.unknown().optional(),
+    user: z
+      .object({
+        login: z.string().optional(),
+      })
+      .optional(),
   }),
 });
 
@@ -105,6 +110,10 @@ const pullRequestReviewThreadPayloadSchema = z.object({
     })
     .optional(),
 });
+
+function resolveOwner(repository: { owner: { login?: string; name?: string } }): string {
+  return repository.owner.login ?? repository.owner.name ?? "";
+}
 
 export async function handlePlainGitHubWebhook(params: {
   payload: unknown;
@@ -196,7 +205,7 @@ async function handlePullRequestEvent(
     params.payload,
     "pull_request",
   );
-  const owner = payload.repository.owner.login ?? payload.repository.owner.name;
+  const owner = resolveOwner(payload.repository);
   const repo = payload.repository.name;
   if (!owner || !repo || !payload.pull_request.number) {
     throw new BadWebhookRequestError("invalid pull_request payload");
@@ -261,7 +270,7 @@ async function handleIssuesEvent(
     return { ok: true, message: "ignored issue converted from pull request" };
   }
 
-  const owner = payload.repository.owner.login ?? payload.repository.owner.name;
+  const owner = resolveOwner(payload.repository);
   const repo = payload.repository.name;
   if (!owner || !repo || !payload.issue.number) {
     throw new BadWebhookRequestError("invalid issues payload");
@@ -274,6 +283,7 @@ async function handleIssuesEvent(
     title: payload.issue.title ?? "",
     body: payload.issue.body ?? "",
     defaultBranch: payload.repository.default_branch,
+    author: payload.issue.user?.login ?? undefined,
   });
   return { ok: true, message: "issue policy check triggered" };
 }
@@ -286,7 +296,7 @@ async function handlePullRequestReviewThreadEvent(
     params.payload,
     "pull_request_review_thread",
   );
-  const owner = payload.repository.owner.login ?? payload.repository.owner.name;
+  const owner = resolveOwner(payload.repository);
   const repo = payload.repository.name;
   if (!owner || !repo) {
     throw new BadWebhookRequestError("invalid pull_request_review_thread payload");
@@ -326,7 +336,7 @@ async function handleIssueCommentEvent(
   if (!payload.issue?.pull_request) {
     return { ok: true, message: "ignored issue_comment content" };
   }
-  const owner = payload.repository.owner.login ?? payload.repository.owner.name;
+  const owner = resolveOwner(payload.repository);
   const repo = payload.repository.name;
   if (!owner || !repo || !payload.issue.number) {
     throw new BadWebhookRequestError("invalid issue_comment payload");

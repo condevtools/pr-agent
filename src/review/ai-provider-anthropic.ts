@@ -5,6 +5,8 @@ import {
 } from "#core";
 import { parseJsonFromModelText } from "./ai-provider-json.js";
 
+const MAX_ERROR_BODY_PREVIEW_CHARS = 300;
+
 type AnthropicResponsePayload = {
   content?: Array<{ type?: string; text?: string; input?: unknown }>;
 };
@@ -66,7 +68,7 @@ export async function callAnthropicJson(params: {
       response = await sendRequest(false);
     } else {
       throw new Error(
-        `Anthropic API error (${response.status}): ${body.slice(0, 300)}`,
+        `Anthropic API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
       );
     }
   }
@@ -74,7 +76,7 @@ export async function callAnthropicJson(params: {
   if (!response.ok) {
     const body = await response.text();
     throw new Error(
-      `Anthropic API error (${response.status}): ${body.slice(0, 300)}`,
+      `Anthropic API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
     );
   }
 

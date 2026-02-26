@@ -271,6 +271,8 @@ export async function resolveGitHubReviewBehaviorPolicy(params: {
   changelogCommandEnabled: boolean;
   changelogAllowApply: boolean;
   feedbackCommandEnabled: boolean;
+  improveCommandEnabled: boolean;
+  addDocCommandEnabled: boolean;
 }> {
   const { context } = params;
   const { owner, repo } = context.repo();
@@ -295,6 +297,8 @@ export async function resolveGitHubReviewBehaviorPolicy(params: {
     changelogCommandEnabled: config.review.changelogCommandEnabled,
     changelogAllowApply: config.review.changelogAllowApply,
     feedbackCommandEnabled: config.review.feedbackCommandEnabled,
+    improveCommandEnabled: config.review.improveCommandEnabled,
+    addDocCommandEnabled: config.review.addDocCommandEnabled,
   };
 }
 

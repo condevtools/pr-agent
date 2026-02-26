@@ -404,6 +404,19 @@ export async function handleGitHubIssueCommentCommand(params: {
           return { ok: true, message: "improve command rate limited" };
         }
         const reviewBehavior = await getReviewBehavior();
+        if (!reviewBehavior.improveCommandEnabled) {
+          await params.context.octokit.issues.createComment({
+            owner: params.owner,
+            repo: params.repo,
+            issue_number: params.issueNumber,
+            body: buildCommandDisabledByPolicyMessage({
+              command: "improve",
+              policyPath: ".mr-agent.yml -> review.improveCommandEnabled=false",
+              locale,
+            }),
+          });
+          return { ok: true, message: "improve command ignored by policy" };
+        }
         await runGitHubReview({
           context: params.context,
           pullNumber: params.issueNumber,
@@ -433,6 +446,19 @@ export async function handleGitHubIssueCommentCommand(params: {
           return { ok: true, message: "add_doc command rate limited" };
         }
         const reviewBehavior = await getReviewBehavior();
+        if (!reviewBehavior.addDocCommandEnabled) {
+          await params.context.octokit.issues.createComment({
+            owner: params.owner,
+            repo: params.repo,
+            issue_number: params.issueNumber,
+            body: buildCommandDisabledByPolicyMessage({
+              command: "add_doc",
+              policyPath: ".mr-agent.yml -> review.addDocCommandEnabled=false",
+              locale,
+            }),
+          });
+          return { ok: true, message: "add_doc command ignored by policy" };
+        }
         await runGitHubReview({
           context: params.context,
           pullNumber: params.issueNumber,

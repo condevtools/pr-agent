@@ -22,6 +22,8 @@ const reviewPolicyOverridesSchema = z
     changelogCommandEnabled: z.boolean().optional(),
     changelogAllowApply: z.boolean().optional(),
     feedbackCommandEnabled: z.boolean().optional(),
+    improveCommandEnabled: z.boolean().optional(),
+    addDocCommandEnabled: z.boolean().optional(),
     customRules: z.array(z.string()).optional(),
   })
   .strict()
@@ -188,6 +190,20 @@ function normalizeReviewPolicyOverrides(
       }
       continue;
     }
+    if (key === "improvecommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.improveCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "adddoccommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.addDocCommandEnabled = bool;
+      }
+      continue;
+    }
     if (key === "customrules") {
       const list = coerceStringList(rawValue);
       if (list) {
@@ -242,9 +258,10 @@ function coerceMode(value: unknown): "comment" | "report" | undefined {
 
 function coerceStringList(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {
-    return value
+    const list = value
       .map((item) => (typeof item === "string" ? item.trim() : ""))
       .filter(Boolean);
+    return list;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();

@@ -15,7 +15,9 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
   private readonly filePath: string;
   private readonly lockTimeoutMs: number;
   private readonly lockRetryMs: number;
+  private readonly staleLockTimeoutMs: number;
   private readonly bootstrapPromise: Promise<void>;
+  private bootstrapCompleted = false;
   private persistQueue: Promise<void> = Promise.resolve();
 
   constructor(params: {
@@ -23,11 +25,13 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
     pruneIntervalMs: number;
     lockTimeoutMs: number;
     lockRetryMs: number;
+    staleLockTimeoutMs?: number;
   }) {
     super(params.pruneIntervalMs, createEmptyRuntimeStateSnapshot());
     this.filePath = params.filePath;
     this.lockTimeoutMs = Math.max(1, Math.floor(params.lockTimeoutMs));
     this.lockRetryMs = Math.max(1, Math.floor(params.lockRetryMs));
+    this.staleLockTimeoutMs = Math.max(1, Math.floor(params.staleLockTimeoutMs ?? 30_000));
     this.bootstrapPromise = this.loadInitialSnapshot();
   }
 
@@ -44,7 +48,13 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
     await this.persistQueue;
   }
 
+  private mutationsDuringBootstrap = false;
+
   protected override onStateChanged(): void {
+    if (!this.bootstrapCompleted) {
+      this.mutationsDuringBootstrap = true;
+      return;
+    }
     const serialized = JSON.stringify(this.getSnapshot());
     this.persistQueue = this.persistQueue
       .then(async () => {
@@ -77,16 +87,25 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
 
   private async withFileLock<T>(task: () => Promise<T>): Promise<T> {
     const lockPath = `${this.filePath}.lock`;
+    const lockInfoPath = `${lockPath}/lock-info.json`;
     const deadline = nowMs() + this.lockTimeoutMs;
     await mkdir(dirname(this.filePath), { recursive: true });
 
     while (true) {
       try {
         await mkdir(lockPath);
+        await writeFile(
+          lockInfoPath,
+          JSON.stringify({ pid: process.pid, createdAt: nowMs() }),
+          "utf8",
+        );
         break;
       } catch (error) {
         if (!isFileLockContentionError(error)) {
           throw error;
+        }
+        if (await this.tryRemoveStaleLock(lockPath, lockInfoPath)) {
+          continue;
         }
         if (nowMs() >= deadline) {
           throw error;
@@ -104,6 +123,42 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    }
+  }
+
+  private async tryRemoveStaleLock(lockPath: string, lockInfoPath: string): Promise<boolean> {
+    try {
+      const raw = await readFile(lockInfoPath, "utf8");
+      const info = JSON.parse(raw) as { pid?: number; createdAt?: number };
+      const createdAt = typeof info.createdAt === "number" ? info.createdAt : 0;
+      const lockAge = nowMs() - createdAt;
+      if (lockAge < this.staleLockTimeoutMs) {
+        return false;
+      }
+      logCore("warn", "runtime_state.file.stale_lock_removed", {
+        lockPath,
+        lockPid: info.pid,
+        lockAge,
+      });
+      await rm(lockPath, { recursive: true, force: true });
+      // Re-verify: another process may have already cleaned and re-acquired
+      // the lock between our check and rm (TOCTOU). If a fresh lock now
+      // exists, we did NOT successfully clear a stale lock — return false so
+      // the caller retries normally instead of immediately re-acquiring.
+      try {
+        const recheck = await readFile(lockInfoPath, "utf8");
+        const recheckInfo = JSON.parse(recheck) as { createdAt?: number };
+        const recheckAge = nowMs() - (typeof recheckInfo.createdAt === "number" ? recheckInfo.createdAt : 0);
+        if (recheckAge < this.staleLockTimeoutMs) {
+          // A fresh lock was re-created by another process — do not treat as cleared.
+          return false;
+        }
+      } catch {
+        // Lock dir no longer exists — our rm succeeded cleanly.
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -137,6 +192,10 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
         filePath: this.filePath,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+    this.bootstrapCompleted = true;
+    if (this.mutationsDuringBootstrap) {
+      this.onStateChanged();
     }
   }
 }
