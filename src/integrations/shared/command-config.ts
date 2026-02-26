@@ -17,6 +17,13 @@ interface ConfigDisplayPolicy {
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
   implementCommandEnabled: boolean;
+  customPromptCommandEnabled: boolean;
+  helpDocsCommandEnabled: boolean;
+  analyzeCommandEnabled: boolean;
+  complianceCommandEnabled: boolean;
+  similarCodeCommandEnabled: boolean;
+  autoApproveCommandEnabled: boolean;
+  scanRepoDiscussionsCommandEnabled: boolean;
   feedbackCommandEnabled: boolean;
   secretScanEnabled: boolean;
   secretScanCustomPatterns: string[];
@@ -56,6 +63,13 @@ export function buildConfigFoundMessage(params: {
     `review.improveCommandEnabled: ${r.improveCommandEnabled}`,
     `review.addDocCommandEnabled: ${r.addDocCommandEnabled}`,
     `review.implementCommandEnabled: ${r.implementCommandEnabled}`,
+    `review.customPromptCommandEnabled: ${r.customPromptCommandEnabled}`,
+    `review.helpDocsCommandEnabled: ${r.helpDocsCommandEnabled}`,
+    `review.analyzeCommandEnabled: ${r.analyzeCommandEnabled}`,
+    `review.complianceCommandEnabled: ${r.complianceCommandEnabled}`,
+    `review.similarCodeCommandEnabled: ${r.similarCodeCommandEnabled}`,
+    `review.autoApproveCommandEnabled: ${r.autoApproveCommandEnabled}`,
+    `review.scanRepoDiscussionsCommandEnabled: ${r.scanRepoDiscussionsCommandEnabled}`,
     `review.feedbackCommandEnabled: ${r.feedbackCommandEnabled}`,
     `review.secretScanEnabled: ${r.secretScanEnabled}`,
     `review.autoLabelEnabled: ${r.autoLabelEnabled}`,

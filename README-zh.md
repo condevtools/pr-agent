@@ -47,6 +47,15 @@
 - `/add_doc [重点]`（`/add-doc`）— 仅输出文档/注释改进建议
 - `/reflect [目标]` — 生成需求澄清与验收标准问题
 - `/similar_issue [关键词]`（`/similar-issue`）— 检索同仓库相似 Issue
+- `/custom_prompt <提示词>` — 使用自定义 AI 提示词分析 PR 变更
+- `/help_docs <问题>` — 基于项目 `/docs` 目录内容进行文档问答
+- `/analyze` — 列出所有变更代码组件并按风险评级
+- `/compliance [重点]` — 合规与安全审查
+- `/improve_component <组件>` — 针对指定组件的改进评审
+- `/generate_labels` — 基于 diff 内容自动生成并应用 PR 标签
+- `/similar_code [关键词]` — 检测 diff 中重复或相似的代码模式
+- `/auto_approve` — 基于 AI 风险评估的条件自动 Approve（默认关闭）
+- `/scan_repo_discussions` — 从最近已合并 PR 的评审讨论中提取最佳实践
 - `/feedback` — 评审质量反馈，持续优化后续评审
 
 **流程守卫**
@@ -802,7 +811,7 @@ GITHUB_WEBHOOK_SKIP_SIGNATURE=false
 1. 在项目 Settings > Webhooks 中添加 `https://<域名>/gitlab/trigger`
 2. 选择触发事件：
    - `Merge request events`（open / reopen / update / merge）
-   - `Note events`（在 MR 评论里触发 `/ai-review`、`/ask`、`/checks`、`/describe`、`/generate_tests`、`/changelog`、`/improve`、`/add_doc`、`/reflect`、`/similar_issue`、`/feedback`）
+   - `Note events`（在 MR 评论里触发 `/ai-review`、`/ask`、`/checks`、`/describe`、`/generate_tests`、`/changelog`、`/improve`、`/add_doc`、`/reflect`、`/similar_issue`、`/feedback`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/improve_component`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`）
 3. 可选配置 Secret Token
 4. 配置环境变量：
 
@@ -844,12 +853,21 @@ GitLab 特有请求头：
 | `/add_doc [重点]` / `/add-doc [重点]` **(仅 PR)** | 仅输出文档/注释改进建议 |
 | `/reflect [目标]` **(仅 PR)** | 生成需求澄清与验收标准问题 |
 | `/similar_issue [关键词]` / `/similar-issue [关键词]` | 检索同仓库相似 Issue |
+| `/custom_prompt <提示词>` **(仅 PR)** | 使用自定义 AI 提示词分析 PR 变更 |
+| `/help_docs <问题>` | 基于项目 `/docs` 目录内容进行文档问答 |
+| `/analyze` **(仅 PR)** | 列出所有变更代码组件并按风险评级 |
+| `/compliance [重点]` **(仅 PR)** | 合规与安全审查 |
+| `/improve_component <组件>` **(仅 PR)** | 针对指定组件的改进评审 |
+| `/generate_labels` **(仅 PR)** | 基于 diff 内容自动生成并应用 PR 标签 |
+| `/similar_code [关键词]` **(仅 PR)** | 检测 diff 中重复或相似的代码模式 |
+| `/auto_approve` **(仅 PR)** | 基于 AI 风险评估的条件自动 Approve（默认关闭） |
+| `/scan_repo_discussions` **(仅 PR)** | 从最近已合并 PR 的评审讨论中提取最佳实践 |
 | `/feedback resolved\|dismissed\|up\|down [备注]` | 评审质量反馈 |
 
 支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
-`.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`；`/reflect` 依赖 `askCommandEnabled`。
+`.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`；`/reflect` 依赖 `askCommandEnabled`；`/improve_component` 依赖 `improveCommandEnabled`；`/generate_labels` 依赖 `autoLabelEnabled`。
 
-> **提示：** `/ask`、`/feedback`、`/similar_issue` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。设置 `GITHUB_APP_SLUG` 为你的 GitHub App slug（小写名称）以启用 `@提及` 检测。
+> **提示：** `/ask`、`/feedback`、`/similar_issue`、`/help_docs` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。设置 `GITHUB_APP_SLUG` 为你的 GitHub App slug（小写名称）以启用 `@提及` 检测。
 
 ---
 
@@ -893,6 +911,13 @@ review:
   feedbackCommandEnabled: true
   improveCommandEnabled: true
   addDocCommandEnabled: true
+  customPromptCommandEnabled: true
+  helpDocsCommandEnabled: true
+  analyzeCommandEnabled: true
+  complianceCommandEnabled: true
+  similarCodeCommandEnabled: true
+  autoApproveCommandEnabled: false   # 默认关闭，安全考虑
+  scanRepoDiscussionsCommandEnabled: true
   secretScanEnabled: true
   autoLabelEnabled: true
   secretScanCustomPatterns:  # 可选：仓库自定义密钥正则
@@ -931,6 +956,13 @@ GitLab 当前只读取 `.mr-agent.yml` 中的 `review:` 段。顶层 `mode`、`i
 | `feedbackCommandEnabled` | 是否启用 `/feedback` 命令 |
 | `improveCommandEnabled` | 是否启用 `/improve` 命令 |
 | `addDocCommandEnabled` | 是否启用 `/add_doc`（`/add-doc`）命令 |
+| `customPromptCommandEnabled` | 是否启用 `/custom_prompt` 命令 |
+| `helpDocsCommandEnabled` | 是否启用 `/help_docs` 命令 |
+| `analyzeCommandEnabled` | 是否启用 `/analyze` 命令 |
+| `complianceCommandEnabled` | 是否启用 `/compliance` 命令 |
+| `similarCodeCommandEnabled` | 是否启用 `/similar_code` 命令 |
+| `autoApproveCommandEnabled` | 是否启用 `/auto_approve` 命令（默认**关闭**，安全考虑） |
+| `scanRepoDiscussionsCommandEnabled` | 是否启用 `/scan_repo_discussions` 命令 |
 | `secretScanEnabled` | 是否扫描 diff 中疑似密钥泄露并发布安全提示 |
 | `secretScanCustomPatterns` | 仓库自定义密钥正则补充规则 |
 | `autoLabelEnabled` | 是否根据变更内容自动追加 PR 标签 |

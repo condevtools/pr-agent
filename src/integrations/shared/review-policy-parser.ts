@@ -25,6 +25,13 @@ const reviewPolicyOverridesSchema = z
     improveCommandEnabled: z.boolean().optional(),
     addDocCommandEnabled: z.boolean().optional(),
     implementCommandEnabled: z.boolean().optional(),
+    customPromptCommandEnabled: z.boolean().optional(),
+    helpDocsCommandEnabled: z.boolean().optional(),
+    analyzeCommandEnabled: z.boolean().optional(),
+    complianceCommandEnabled: z.boolean().optional(),
+    similarCodeCommandEnabled: z.boolean().optional(),
+    autoApproveCommandEnabled: z.boolean().optional(),
+    scanRepoDiscussionsCommandEnabled: z.boolean().optional(),
     customRules: z.array(z.string()).optional(),
   })
   .strict()
@@ -209,6 +216,55 @@ function normalizeReviewPolicyOverrides(
       const bool = coerceBoolean(rawValue);
       if (bool !== undefined) {
         target.implementCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "custompromptcommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.customPromptCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "helpdocscommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.helpDocsCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "analyzecommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.analyzeCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "compliancecommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.complianceCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "similarcodecommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.similarCodeCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "autoapprovecommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.autoApproveCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "scanrepodiscussionscommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.scanRepoDiscussionsCommandEnabled = bool;
       }
       continue;
     }

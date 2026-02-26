@@ -48,6 +48,22 @@ const FEEDBACK_COMMAND_RE =
 const HELP_COMMAND_RE = /^\/(?:help|ai-review\s+help)\s*$/i;
 const CONFIG_COMMAND_RE = /^\/(?:config|ai-review\s+config)\s*$/i;
 const IMPLEMENT_COMMAND_RE = /^\/(?:implement|ai-review\s+implement)\s*$/i;
+const CUSTOM_PROMPT_COMMAND_RE =
+  /^\/(?:custom[_-]?prompt|ai-review\s+custom[_-]?prompt)\s+([\s\S]+)$/i;
+const HELP_DOCS_COMMAND_RE =
+  /^\/(?:help[_-]?docs|ai-review\s+help[_-]?docs)\s+([\s\S]+)$/i;
+const ANALYZE_COMMAND_RE = /^\/(?:analyze|ai-review\s+analyze)\s*$/i;
+const COMPLIANCE_COMMAND_RE =
+  /^\/(?:compliance|ai-review\s+compliance)(?:\s+([\s\S]+))?\s*$/i;
+const IMPROVE_COMPONENT_COMMAND_RE =
+  /^\/(?:improve[_-]?component|ai-review\s+improve[_-]?component)\s+([\s\S]+)$/i;
+const GENERATE_LABELS_COMMAND_RE =
+  /^\/(?:generate[_-]?labels|ai-review\s+generate[_-]?labels)\s*$/i;
+const SIMILAR_CODE_COMMAND_RE =
+  /^\/(?:similar[_-]?code|ai-review\s+similar[_-]?code)(?:\s+([\s\S]+))?\s*$/i;
+const AUTO_APPROVE_COMMAND_RE = /^\/(?:auto[_-]?approve|ai-review\s+auto[_-]?approve)\s*$/i;
+const SCAN_REPO_DISCUSSIONS_COMMAND_RE =
+  /^\/(?:scan[_-]?repo[_-]?discussions|ai-review\s+scan[_-]?repo[_-]?discussions)\s*$/i;
 
 export function parseReviewCommand(rawBody: string): {
   matched: boolean;
@@ -292,6 +308,94 @@ export function parseConfigCommand(rawBody: string): { matched: boolean } {
 
 export function parseImplementCommand(rawBody: string): { matched: boolean } {
   return { matched: IMPLEMENT_COMMAND_RE.test(rawBody.trim()) };
+}
+
+export function parseCustomPromptCommand(rawBody: string): {
+  matched: boolean;
+  prompt: string;
+} {
+  const body = rawBody.trim();
+  const matched = body.match(CUSTOM_PROMPT_COMMAND_RE);
+  if (!matched) {
+    return { matched: false, prompt: "" };
+  }
+  const prompt = matched[1]?.trim() ?? "";
+  if (!prompt) {
+    return { matched: false, prompt: "" };
+  }
+  return { matched: true, prompt };
+}
+
+export function parseHelpDocsCommand(rawBody: string): {
+  matched: boolean;
+  question: string;
+} {
+  const body = rawBody.trim();
+  const matched = body.match(HELP_DOCS_COMMAND_RE);
+  if (!matched) {
+    return { matched: false, question: "" };
+  }
+  const question = matched[1]?.trim() ?? "";
+  if (!question) {
+    return { matched: false, question: "" };
+  }
+  return { matched: true, question };
+}
+
+export function parseAnalyzeCommand(rawBody: string): { matched: boolean } {
+  return { matched: ANALYZE_COMMAND_RE.test(rawBody.trim()) };
+}
+
+export function parseComplianceCommand(rawBody: string): {
+  matched: boolean;
+  focus: string;
+} {
+  const body = rawBody.trim();
+  const matched = body.match(COMPLIANCE_COMMAND_RE);
+  if (!matched) {
+    return { matched: false, focus: "" };
+  }
+  return { matched: true, focus: matched[1]?.trim() ?? "" };
+}
+
+export function parseImproveComponentCommand(rawBody: string): {
+  matched: boolean;
+  component: string;
+} {
+  const body = rawBody.trim();
+  const matched = body.match(IMPROVE_COMPONENT_COMMAND_RE);
+  if (!matched) {
+    return { matched: false, component: "" };
+  }
+  const component = matched[1]?.trim() ?? "";
+  if (!component) {
+    return { matched: false, component: "" };
+  }
+  return { matched: true, component };
+}
+
+export function parseGenerateLabelsCommand(rawBody: string): { matched: boolean } {
+  return { matched: GENERATE_LABELS_COMMAND_RE.test(rawBody.trim()) };
+}
+
+export function parseSimilarCodeCommand(rawBody: string): {
+  matched: boolean;
+  query: string;
+} {
+  const body = rawBody.trim();
+  const matched = body.match(SIMILAR_CODE_COMMAND_RE);
+  if (!matched) {
+    return { matched: false, query: "" };
+  }
+  return { matched: true, query: matched[1]?.trim() ?? "" };
+}
+
+export function parseAutoApproveCommand(rawBody: string): { matched: boolean } {
+  return { matched: AUTO_APPROVE_COMMAND_RE.test(rawBody.trim()) };
+}
+
+export function parseScanRepoDiscussionsCommand(rawBody: string): { matched: boolean } {
+  return { matched: SCAN_REPO_DISCUSSIONS_COMMAND_RE.test(rawBody.trim()) };
 }
 
 export function buildIssueCommentMarkdown(

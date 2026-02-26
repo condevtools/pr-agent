@@ -45,6 +45,15 @@ import {
   parseReflectCommand,
   parseReviewCommand,
   parseSimilarIssueCommand,
+  parseCustomPromptCommand,
+  parseHelpDocsCommand,
+  parseAnalyzeCommand,
+  parseComplianceCommand,
+  parseImproveComponentCommand,
+  parseGenerateLabelsCommand,
+  parseSimilarCodeCommand,
+  parseAutoApproveCommand,
+  parseScanRepoDiscussionsCommand,
   resolveReviewLineForIssue,
 } from "#review";
 import type {
@@ -61,6 +70,13 @@ import {
   buildGenerateTestsQuestion,
   buildImproveRule,
   buildReflectQuestion,
+  buildAnalyzeQuestion,
+  buildComplianceQuestion,
+  buildImproveComponentRule,
+  buildSimilarCodeQuestion,
+  buildAutoApproveQuestion,
+  buildScanRepoDiscussionsQuestion,
+  buildHelpDocsQuestion,
 } from "../shared/command-builders.js";
 import { inferReviewLabels } from "../shared/auto-labels.js";
 import { buildDescribeQuestion } from "../shared/describe-question.js";
@@ -147,6 +163,7 @@ const GITLAB_INCREMENTAL_STATE_SCOPE = "gitlab-incremental-head";
 const GITLAB_FEEDBACK_SIGNAL_SCOPE = "gitlab-feedback-signals";
 const GITLAB_GUIDELINE_CACHE_SCOPE = "gitlab-process-guidelines";
 const GITLAB_POLICY_CACHE_SCOPE = "gitlab-review-policy";
+const GITLAB_DISPLAY_QUESTION_MAX_LENGTH = 80;
 
 export function resolveGitLabPatchCharLimits(): {
   maxPatchCharsPerFile: number;
@@ -471,6 +488,13 @@ interface GitLabReviewPolicy {
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
   implementCommandEnabled: boolean;
+  customPromptCommandEnabled: boolean;
+  helpDocsCommandEnabled: boolean;
+  analyzeCommandEnabled: boolean;
+  complianceCommandEnabled: boolean;
+  similarCodeCommandEnabled: boolean;
+  autoApproveCommandEnabled: boolean;
+  scanRepoDiscussionsCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -495,6 +519,13 @@ const defaultGitLabReviewPolicy: GitLabReviewPolicy = {
   improveCommandEnabled: true,
   addDocCommandEnabled: true,
   implementCommandEnabled: true,
+  customPromptCommandEnabled: true,
+  helpDocsCommandEnabled: true,
+  analyzeCommandEnabled: true,
+  complianceCommandEnabled: true,
+  similarCodeCommandEnabled: true,
+  autoApproveCommandEnabled: false,
+  scanRepoDiscussionsCommandEnabled: true,
   customRules: [],
 };
 
@@ -1200,7 +1231,16 @@ async function handleGitLabNoteWebhook(params: {
       | "add-doc"
       | "reflect"
       | "similar-issue"
-      | "ai-review",
+      | "ai-review"
+      | "custom-prompt"
+      | "help-docs"
+      | "analyze"
+      | "compliance"
+      | "improve-component"
+      | "generate-labels"
+      | "similar-code"
+      | "auto-approve"
+      | "scan-repo-discussions",
     message: string,
   ): Promise<{ ok: boolean; message: string } | undefined> => {
     if (
@@ -1685,6 +1725,328 @@ async function handleGitLabNoteWebhook(params: {
           locale,
         });
         return { ok: true, message: "similar_issue command triggered" };
+      },
+    ),
+    // --- Wave 1: AI Q&A commands ---
+    registerCommand(
+      "custom-prompt",
+      () => {
+        const parsed = parseCustomPromptCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (cmd) => {
+        const limited = await hitRateLimit("custom-prompt", "custom_prompt command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.customPromptCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "custom_prompt",
+              policyPath: ".mr-agent.yml -> review.customPromptCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "custom_prompt command ignored by policy" };
+        }
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: cmd.prompt,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          commentTitle: "AI Custom Prompt",
+          displayQuestion: `/custom_prompt ${cmd.prompt.length > GITLAB_DISPLAY_QUESTION_MAX_LENGTH ? cmd.prompt.slice(0, GITLAB_DISPLAY_QUESTION_MAX_LENGTH) + "…" : cmd.prompt}`,
+          managedCommentKey: buildManagedCommandCommentKey("custom-prompt", cmd.prompt),
+        });
+        return { ok: true, message: "custom_prompt command triggered" };
+      },
+    ),
+    registerCommand(
+      "help-docs",
+      () => {
+        const parsed = parseHelpDocsCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (cmd) => {
+        const limited = await hitRateLimit("help-docs", "help_docs command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.helpDocsCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "help_docs",
+              policyPath: ".mr-agent.yml -> review.helpDocsCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "help_docs command ignored by policy" };
+        }
+        const helpDocsQuestion = buildHelpDocsQuestion(
+          "MR",
+          cmd.question,
+          "(Documentation loading not available for GitLab — answering from MR context only)",
+          locale,
+        );
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: helpDocsQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: false,
+          commentTitle: "AI Help Docs",
+          displayQuestion: `/help_docs ${cmd.question}`,
+          managedCommentKey: buildManagedCommandCommentKey("help-docs", cmd.question),
+        });
+        return { ok: true, message: "help_docs command triggered" };
+      },
+    ),
+    registerCommand(
+      "analyze",
+      () => {
+        const parsed = parseAnalyzeCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        const limited = await hitRateLimit("analyze", "analyze command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.analyzeCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "analyze",
+              policyPath: ".mr-agent.yml -> review.analyzeCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "analyze command ignored by policy" };
+        }
+        const analyzeQuestion = buildAnalyzeQuestion("MR", locale);
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: analyzeQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          commentTitle: "AI Analyze",
+          displayQuestion: "/analyze",
+          managedCommentKey: buildManagedCommandCommentKey("analyze", analyzeQuestion),
+        });
+        return { ok: true, message: "analyze command triggered" };
+      },
+    ),
+    registerCommand(
+      "compliance",
+      () => {
+        const parsed = parseComplianceCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (cmd) => {
+        const limited = await hitRateLimit("compliance", "compliance command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.complianceCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "compliance",
+              policyPath: ".mr-agent.yml -> review.complianceCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "compliance command ignored by policy" };
+        }
+        const complianceQuestion = buildComplianceQuestion("MR", cmd.focus, locale);
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: complianceQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          commentTitle: "AI Compliance",
+          displayQuestion: cmd.focus ? `/compliance ${cmd.focus}` : "/compliance",
+          managedCommentKey: buildManagedCommandCommentKey("compliance", complianceQuestion),
+        });
+        return { ok: true, message: "compliance command triggered" };
+      },
+    ),
+    // --- Wave 2: AI Review + Tool commands ---
+    registerCommand(
+      "improve-component",
+      () => {
+        const parsed = parseImproveComponentCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (cmd) => {
+        const limited = await hitRateLimit("improve-component", "improve_component command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.improveCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "improve_component",
+              policyPath: ".mr-agent.yml -> review.improveCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "improve_component command ignored by policy" };
+        }
+        await runGitLabReview({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          mode: "comment",
+          trigger: "comment-command",
+          customRules: [...policy.customRules, buildImproveComponentRule(cmd.component)],
+          includeCiChecks: policy.includeCiChecks,
+          enableSecretScan: policy.secretScanEnabled,
+          secretScanCustomPatterns: policy.secretScanCustomPatterns,
+          enableAutoLabel: false,
+        });
+        return { ok: true, message: "improve_component command triggered" };
+      },
+    ),
+    registerCommand(
+      "generate-labels",
+      () => {
+        const parsed = parseGenerateLabelsCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        await publishGitLabGeneralComment(
+          gitlabToken,
+          target,
+          localizeText(
+            {
+              zh: "## AI Label Generator\n\nGitLab 上的 `/generate_labels` 暂不支持。请使用 `/ai-review` 触发自动标签。",
+              en: "## AI Label Generator\n\n`/generate_labels` is not yet supported on GitLab. Use `/ai-review` to trigger auto-labeling.",
+            },
+            locale,
+          ),
+        );
+        return { ok: true, message: "generate_labels command triggered (gitlab unsupported)" };
+      },
+    ),
+    // --- Wave 3: Independent backend commands ---
+    registerCommand(
+      "similar-code",
+      () => {
+        const parsed = parseSimilarCodeCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (cmd) => {
+        const limited = await hitRateLimit("similar-code", "similar_code command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.similarCodeCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "similar_code",
+              policyPath: ".mr-agent.yml -> review.similarCodeCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "similar_code command ignored by policy" };
+        }
+        const similarCodeQuestion = buildSimilarCodeQuestion("MR", cmd.query, locale);
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: similarCodeQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: false,
+          commentTitle: "AI Similar Code",
+          displayQuestion: cmd.query ? `/similar_code ${cmd.query}` : "/similar_code",
+          managedCommentKey: buildManagedCommandCommentKey("similar-code", similarCodeQuestion),
+        });
+        return { ok: true, message: "similar_code command triggered" };
+      },
+    ),
+    registerCommand(
+      "auto-approve",
+      () => {
+        const parsed = parseAutoApproveCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        const limited = await hitRateLimit("auto-approve", "auto_approve command rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.autoApproveCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "auto_approve",
+              policyPath: ".mr-agent.yml -> review.autoApproveCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "auto_approve command ignored by policy" };
+        }
+        // GitLab auto-approve: run risk assessment via AI
+        const riskQuestion = buildAutoApproveQuestion("MR", locale);
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: riskQuestion,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          commentTitle: "AI Auto-Approve",
+          displayQuestion: "/auto_approve",
+          managedCommentKey: buildManagedCommandCommentKey("auto-approve", riskQuestion),
+        });
+        return { ok: true, message: "auto_approve command triggered" };
+      },
+    ),
+    registerCommand(
+      "scan-repo-discussions",
+      () => {
+        const parsed = parseScanRepoDiscussionsCommand(body);
+        return parsed.matched ? parsed : undefined;
+      },
+      async () => {
+        await publishGitLabGeneralComment(
+          gitlabToken,
+          target,
+          localizeText(
+            {
+              zh: "## AI Scan Repo Discussions\n\nGitLab 上的 `/scan_repo_discussions` 暂不支持。",
+              en: "## AI Scan Repo Discussions\n\n`/scan_repo_discussions` is not yet supported on GitLab.",
+            },
+            locale,
+          ),
+        );
+        return { ok: true, message: "scan_repo_discussions command triggered (gitlab unsupported)" };
       },
     ),
     registerCommand(
@@ -2309,6 +2671,20 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
       overrides.addDocCommandEnabled ?? basePolicy.addDocCommandEnabled,
     implementCommandEnabled:
       overrides.implementCommandEnabled ?? basePolicy.implementCommandEnabled,
+    customPromptCommandEnabled:
+      overrides.customPromptCommandEnabled ?? basePolicy.customPromptCommandEnabled,
+    helpDocsCommandEnabled:
+      overrides.helpDocsCommandEnabled ?? basePolicy.helpDocsCommandEnabled,
+    analyzeCommandEnabled:
+      overrides.analyzeCommandEnabled ?? basePolicy.analyzeCommandEnabled,
+    complianceCommandEnabled:
+      overrides.complianceCommandEnabled ?? basePolicy.complianceCommandEnabled,
+    similarCodeCommandEnabled:
+      overrides.similarCodeCommandEnabled ?? basePolicy.similarCodeCommandEnabled,
+    autoApproveCommandEnabled:
+      overrides.autoApproveCommandEnabled ?? basePolicy.autoApproveCommandEnabled,
+    scanRepoDiscussionsCommandEnabled:
+      overrides.scanRepoDiscussionsCommandEnabled ?? basePolicy.scanRepoDiscussionsCommandEnabled,
     customRules: normalizePolicyStringList(overrides.customRules, 30),
   };
 }

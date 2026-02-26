@@ -29,6 +29,17 @@ export function buildHelpMessage(params: {
       rows.push(`| \`/implement\` | 应用评审中的 suggestion 代码建议 | 仅 ${t} |`);
     }
     rows.push(
+      `| \`/custom_prompt <指令>\` | 自定义 Prompt 分析 | 仅 ${t} |`,
+      `| \`/help_docs <问题>\` | 文档问答 | ${issueAndTarget} |`,
+      `| \`/analyze\` | 代码组件分析 | 仅 ${t} |`,
+      `| \`/compliance [重点]\` | 合规检查 | 仅 ${t} |`,
+      `| \`/improve_component <组件>\` | 组件级改进 | 仅 ${t} |`,
+      `| \`/generate_labels\` | 智能标签生成 | 仅 ${t} |`,
+      `| \`/similar_code [关键词]\` | 相似代码搜索 | 仅 ${t} |`,
+      `| \`/auto_approve\` | 条件自动 Approve | 仅 ${t} |`,
+      `| \`/scan_repo_discussions\` | 扫描历史讨论 | 仅 ${t} |`,
+    );
+    rows.push(
       `| \`/help\` | 显示本帮助 | ${issueAndTarget} |`,
       `| \`/config\` | 显示仓库配置 | ${issueAndTarget} |`,
     );
@@ -59,6 +70,17 @@ export function buildHelpMessage(params: {
   if (includeImplement) {
     rows.push(`| \`/implement\` | Apply suggestion blocks from reviews | ${t} only |`);
   }
+  rows.push(
+    `| \`/custom_prompt <prompt>\` | Custom prompt analysis | ${t} only |`,
+    `| \`/help_docs <question>\` | Documentation Q&A | ${issueAndTarget} |`,
+    `| \`/analyze\` | Code component analysis | ${t} only |`,
+    `| \`/compliance [focus]\` | Compliance check | ${t} only |`,
+    `| \`/improve_component <component>\` | Component-level improvements | ${t} only |`,
+    `| \`/generate_labels\` | Smart label generation | ${t} only |`,
+    `| \`/similar_code [query]\` | Similar code search | ${t} only |`,
+    `| \`/auto_approve\` | Conditional auto-approve | ${t} only |`,
+    `| \`/scan_repo_discussions\` | Scan historical discussions | ${t} only |`,
+  );
   rows.push(
     `| \`/help\` | Show this help | ${issueAndTarget} |`,
     `| \`/config\` | Show repository config | ${issueAndTarget} |`,

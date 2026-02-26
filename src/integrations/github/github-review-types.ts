@@ -180,6 +180,13 @@ export interface MinimalGitHubOctokit {
       per_page?: number;
       page?: number;
     }): Promise<{ data: GitHubReviewCommentSummary[] }>;
+    createReview?(params: {
+      owner: string;
+      repo: string;
+      pull_number: number;
+      event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+      body?: string;
+    }): Promise<unknown>;
   };
   issues: {
     listForRepo?(params: {

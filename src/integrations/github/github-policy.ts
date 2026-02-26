@@ -274,6 +274,13 @@ export async function resolveGitHubReviewBehaviorPolicy(params: {
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
   implementCommandEnabled: boolean;
+  customPromptCommandEnabled: boolean;
+  helpDocsCommandEnabled: boolean;
+  analyzeCommandEnabled: boolean;
+  complianceCommandEnabled: boolean;
+  similarCodeCommandEnabled: boolean;
+  autoApproveCommandEnabled: boolean;
+  scanRepoDiscussionsCommandEnabled: boolean;
 }> {
   const { context } = params;
   const { owner, repo } = context.repo();
@@ -301,6 +308,13 @@ export async function resolveGitHubReviewBehaviorPolicy(params: {
     improveCommandEnabled: config.review.improveCommandEnabled,
     addDocCommandEnabled: config.review.addDocCommandEnabled,
     implementCommandEnabled: config.review.implementCommandEnabled,
+    customPromptCommandEnabled: config.review.customPromptCommandEnabled,
+    helpDocsCommandEnabled: config.review.helpDocsCommandEnabled,
+    analyzeCommandEnabled: config.review.analyzeCommandEnabled,
+    complianceCommandEnabled: config.review.complianceCommandEnabled,
+    similarCodeCommandEnabled: config.review.similarCodeCommandEnabled,
+    autoApproveCommandEnabled: config.review.autoApproveCommandEnabled,
+    scanRepoDiscussionsCommandEnabled: config.review.scanRepoDiscussionsCommandEnabled,
   };
 }
 

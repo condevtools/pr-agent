@@ -47,6 +47,15 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 - `/add_doc [focus]` (`/add-doc`) — documentation-only review suggestions
 - `/reflect [goal]` — ask AI to generate requirement/acceptance clarifying questions
 - `/similar_issue [query]` (`/similar-issue`) — find related issues in the same repository
+- `/custom_prompt <prompt>` — run a custom AI prompt against PR changes
+- `/help_docs <question>` — ask questions about project documentation (`/docs` directory)
+- `/analyze` — list all changed components with risk assessment
+- `/compliance [focus]` — compliance and security review
+- `/improve_component <component>` — improvement review scoped to a specific component
+- `/generate_labels` — auto-generate and apply PR labels from diff content
+- `/similar_code [query]` — detect duplicate or similar code patterns in diff
+- `/auto_approve` — conditional auto-approve based on AI risk assessment (default off)
+- `/scan_repo_discussions` — extract best practices from recent merged PR discussions
 - `/feedback` — provide learning signals to improve future reviews
 
 **Process Guardrails**
@@ -802,7 +811,7 @@ GITHUB_WEBHOOK_SKIP_SIGNATURE=false
 1. In project Settings > Webhooks, add `https://<domain>/gitlab/trigger`
 2. Select triggers:
    - `Merge request events` (open / reopen / update / merge)
-   - `Note events` (for comment commands: `/ai-review`, `/ask`, `/checks`, `/describe`, `/generate_tests`, `/changelog`, `/improve`, `/add_doc`, `/reflect`, `/similar_issue`, `/feedback`)
+   - `Note events` (for comment commands: `/ai-review`, `/ask`, `/checks`, `/describe`, `/generate_tests`, `/changelog`, `/improve`, `/add_doc`, `/reflect`, `/similar_issue`, `/feedback`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/improve_component`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`)
 3. Optionally add secret token
 4. Configure:
 
@@ -844,12 +853,21 @@ All commands are triggered via PR/MR comments. Commands marked with **(PR only)*
 | `/add_doc [focus]` / `/add-doc [focus]` **(PR only)** | Generate documentation-only suggestions |
 | `/reflect [goal]` **(PR only)** | Generate clarifying requirement/acceptance questions |
 | `/similar_issue [query]` / `/similar-issue [query]` | Search related issues in the same repository |
+| `/custom_prompt <prompt>` **(PR only)** | Run a custom AI prompt against PR changes |
+| `/help_docs <question>` | Ask questions about project documentation (`/docs` directory) |
+| `/analyze` **(PR only)** | List all changed components with risk assessment |
+| `/compliance [focus]` **(PR only)** | Compliance and security review |
+| `/improve_component <component>` **(PR only)** | Improvement review scoped to a specific component |
+| `/generate_labels` **(PR only)** | Auto-generate and apply PR labels from diff content |
+| `/similar_code [query]` **(PR only)** | Detect duplicate or similar code patterns in diff |
+| `/auto_approve` **(PR only)** | Conditional auto-approve based on AI risk assessment (default off) |
+| `/scan_repo_discussions` **(PR only)** | Extract best practices from recent merged PR discussions |
 | `/feedback resolved\|dismissed\|up\|down [note]` | Provide review quality feedback |
 
 Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
-Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`; `/reflect` depends on `askCommandEnabled`.
+Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`; `/reflect` depends on `askCommandEnabled`; `/improve_component` depends on `improveCommandEnabled`; `/generate_labels` depends on `autoLabelEnabled`.
 
-> **Note:** `/ask`, `/feedback`, `/similar_issue`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` to your GitHub App's slug (lowercase name) to enable `@mention` detection.
+> **Note:** `/ask`, `/feedback`, `/similar_issue`, `/help_docs`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` to your GitHub App's slug (lowercase name) to enable `@mention` detection.
 
 ---
 
@@ -893,6 +911,13 @@ review:
   feedbackCommandEnabled: true
   improveCommandEnabled: true
   addDocCommandEnabled: true
+  customPromptCommandEnabled: true
+  helpDocsCommandEnabled: true
+  analyzeCommandEnabled: true
+  complianceCommandEnabled: true
+  similarCodeCommandEnabled: true
+  autoApproveCommandEnabled: false   # default off for safety
+  scanRepoDiscussionsCommandEnabled: true
   secretScanEnabled: true
   autoLabelEnabled: true
   secretScanCustomPatterns:  # optional extra secret regex patterns
@@ -931,6 +956,13 @@ GitLab currently reads only the `review:` section from `.mr-agent.yml`. Top-leve
 | `feedbackCommandEnabled` | Enable `/feedback` command |
 | `improveCommandEnabled` | Enable `/improve` command |
 | `addDocCommandEnabled` | Enable `/add_doc` (`/add-doc`) command |
+| `customPromptCommandEnabled` | Enable `/custom_prompt` command |
+| `helpDocsCommandEnabled` | Enable `/help_docs` command |
+| `analyzeCommandEnabled` | Enable `/analyze` command |
+| `complianceCommandEnabled` | Enable `/compliance` command |
+| `similarCodeCommandEnabled` | Enable `/similar_code` command |
+| `autoApproveCommandEnabled` | Enable `/auto_approve` command (default **off** for safety) |
+| `scanRepoDiscussionsCommandEnabled` | Enable `/scan_repo_discussions` command |
 | `secretScanEnabled` | Scan diffs for potential secret leaks and post security warnings |
 | `secretScanCustomPatterns` | Additional repository-specific secret regex patterns |
 | `autoLabelEnabled` | Auto-add PR labels based on change content |
