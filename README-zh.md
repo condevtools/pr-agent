@@ -1,4 +1,4 @@
-# MR Agent
+# PR Agent
 
 基于 TypeScript + NestJS 构建的 AI 代码评审服务。通过 LLM 自动评审 Pull Request 和 Merge Request，支持 GitHub（App 与 Webhook）及 GitLab。
 

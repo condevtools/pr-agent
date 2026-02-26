@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(tail:*)",
+      "Bash(git stash:*)",
+      "Bash(npx tsx:*)",
+      "Bash(cd:*)",
+      "Bash(node:*)",
+      "Bash(cd /Users/lemonade/Downloads/github/mr-agent && git apply /tmp/patch-medium1.patch 2>&1)",
+      "Bash(git diff:*)",
+      "Bash(git apply:*)",
+      "Bash(git worktree:*)",
+      "Bash(git branch:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(npm test:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}
