@@ -9,6 +9,7 @@ import {
   type UiLocale,
 } from "#core";
 import { answerPullRequestQuestion, type PullRequestReviewInput } from "#review";
+import { getPublicErrorMessage } from "../shared/public-error.js";
 import { reviewMessage } from "../shared/review-messages.js";
 
 interface LoggerLike {
@@ -219,8 +220,8 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
               "",
               localizeText(
                 {
-                  zh: `错误：\`${error instanceof Error ? error.message : String(error)}\``,
-                  en: `Error: \`${error instanceof Error ? error.message : String(error)}\``,
+                  zh: `错误：\`${getPublicErrorMessage(error)}\``,
+                  en: `Error: \`${getPublicErrorMessage(error)}\``,
                 },
                 locale,
               ),
@@ -381,8 +382,8 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
               "",
               localizeText(
                 {
-                  zh: `错误：\`${error instanceof Error ? error.message : String(error)}\``,
-                  en: `Error: \`${error instanceof Error ? error.message : String(error)}\``,
+                  zh: `错误：\`${getPublicErrorMessage(error)}\``,
+                  en: `Error: \`${getPublicErrorMessage(error)}\``,
                 },
                 locale,
               ),
@@ -520,8 +521,8 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
               "",
               localizeText(
                 {
-                  zh: `错误：\`${error instanceof Error ? error.message : String(error)}\``,
-                  en: `Error: \`${error instanceof Error ? error.message : String(error)}\``,
+                  zh: `错误：\`${getPublicErrorMessage(error)}\``,
+                  en: `Error: \`${getPublicErrorMessage(error)}\``,
                 },
                 locale,
               ),

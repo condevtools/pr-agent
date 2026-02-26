@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { nowMs } from "./clock.js";
+import { wait } from "./http.js";
 import { logCore } from "./logger.js";
 import { InMemoryRuntimeStateStore } from "./runtime-state-in-memory.js";
 import {
@@ -74,7 +75,12 @@ export class FileRuntimeStateStore extends InMemoryRuntimeStateStore {
         await mkdir(dirname(this.filePath), { recursive: true });
         const tempPath = `${this.filePath}.tmp-${nowMs()}-${randomUUID().slice(0, 8)}`;
         await writeFile(tempPath, nextSnapshot, "utf8");
-        await rename(tempPath, this.filePath);
+        try {
+          await rename(tempPath, this.filePath);
+        } catch (renameError) {
+          await rm(tempPath, { force: true }).catch(() => {});
+          throw renameError;
+        }
       });
     } catch (error) {
       logCore("warn", "runtime_state.file.persist_failed", {
@@ -207,10 +213,4 @@ function isFileLockContentionError(error: unknown): boolean {
     "code" in error &&
     (error as { code?: unknown }).code === "EEXIST"
   );
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

@@ -55,7 +55,9 @@ export class HttpErrorFilter implements ExceptionFilter {
       }),
     );
 
-    response.status(resolved.status).json(body);
+    if (!response.headersSent) {
+      response.status(resolved.status).json(body);
+    }
   }
 
   private resolveError(exception: unknown): ResolvedError {
@@ -93,7 +95,7 @@ export class HttpErrorFilter implements ExceptionFilter {
     if (exception instanceof Error) {
       return {
         status: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: exception.message,
+        message: "internal server error",
         type: exception.name,
       };
     }

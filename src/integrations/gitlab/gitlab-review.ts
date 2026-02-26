@@ -1527,7 +1527,7 @@ async function handleGitLabNoteWebhook(params: {
           logger: params.logger,
           mode: "comment",
           trigger: "comment-command",
-          customRules: [...policy.customRules, buildGitLabImproveRule(improveCommand.focus)],
+          customRules: [...policy.customRules, buildImproveRule(improveCommand.focus)],
           includeCiChecks: policy.includeCiChecks,
           enableSecretScan: policy.secretScanEnabled,
           secretScanCustomPatterns: policy.secretScanCustomPatterns,
@@ -1566,7 +1566,7 @@ async function handleGitLabNoteWebhook(params: {
           logger: params.logger,
           mode: "comment",
           trigger: "comment-command",
-          customRules: [...policy.customRules, buildGitLabAddDocRule(addDocCommand.focus)],
+          customRules: [...policy.customRules, buildAddDocRule(addDocCommand.focus)],
           includeCiChecks: policy.includeCiChecks,
           enableSecretScan: false,
           enableAutoLabel: false,
@@ -2564,14 +2564,6 @@ export function buildGitLabDescribeQuestion(
   locale: UiLocale = resolveUiLocale(),
 ): string {
   return buildDescribeQuestion("MR", locale);
-}
-
-function buildGitLabImproveRule(focus: string): string {
-  return buildImproveRule(focus);
-}
-
-function buildGitLabAddDocRule(focus: string): string {
-  return buildAddDocRule(focus);
 }
 
 function buildGitLabReflectQuestion(

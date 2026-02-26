@@ -180,12 +180,7 @@ function normalizeParsedRiskLevel(value: unknown): "low" | "medium" | "high" | u
   return undefined;
 }
 
-function normalizeSeverity(value: unknown): "low" | "medium" | "high" | undefined {
-  if (value === "low" || value === "medium" || value === "high") {
-    return value;
-  }
-  return undefined;
-}
+const normalizeSeverity = normalizeParsedRiskLevel;
 
 function inferRiskLevelFromReviews(
   reviews: Array<{ severity: "low" | "medium" | "high" }>,

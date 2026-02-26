@@ -7,7 +7,6 @@ import {
   Query,
   Req,
 } from "@nestjs/common";
-import type { Request } from "express";
 
 import { BadWebhookRequestError, readOptionalStringEnv } from "#core";
 import { GithubWebhookService } from "./github.webhook.service.js";
@@ -24,10 +23,7 @@ import {
   resolveStoredWebhookReplayPayload,
 } from "../webhook/webhook-replay.js";
 import { readHeaderValue, readRawBody } from "../webhook/webhook.utils.js";
-
-interface RawBodyRequest extends Request {
-  rawBody?: Buffer | string;
-}
+import type { RawBodyRequest } from "../../common/types/raw-body-request.js";
 
 @Controller("github")
 export class GithubWebhookController {

@@ -71,6 +71,10 @@ export async function handleGitHubIssueCommentCommand(params: {
       }
     | null;
   isPullRequest?: boolean;
+  /** Issue title from webhook payload — provides AI context for Issue comments. */
+  issueTitle?: string;
+  /** Issue body from webhook payload — provides AI context for Issue comments. */
+  issueBody?: string;
   rateLimitPlatform: "github-app" | "github-webhook";
   throwOnError?: boolean;
 }): Promise<{ ok: boolean; message: string }> {
@@ -82,7 +86,7 @@ export async function handleGitHubIssueCommentCommand(params: {
   const locale = resolveUiLocale();
   const commentUserLogin = params.commentUser?.login;
   const throwOnError = Boolean(params.throwOnError);
-  const isPullRequest = params.isPullRequest !== false;
+  const isPullRequest = params.isPullRequest ?? true;
   const appSlug = readOptionalStringEnv("GITHUB_APP_SLUG");
   const botLogin = appSlug ? `${appSlug}[bot]` : "";
   let reviewBehaviorPromise:
@@ -140,6 +144,45 @@ export async function handleGitHubIssueCommentCommand(params: {
     },
     execute: execute as (parsed: unknown) => Promise<CommandDispatchResult>,
   });
+
+  // Shared ask execution logic — used by both /ask command and @mention handler
+  const executeAskLikeCommand = async (
+    question: string,
+    trigger: "comment-command" | "mention-command",
+  ): Promise<CommandDispatchResult> => {
+    if (await hitRateLimit("ask")) {
+      return { ok: true, message: `${trigger === "mention-command" ? "mention-" : ""}ask command rate limited` };
+    }
+    const reviewBehavior = await getReviewBehavior();
+    if (!reviewBehavior.askCommandEnabled) {
+      await params.context.octokit.issues.createComment({
+        owner: params.owner,
+        repo: params.repo,
+        issue_number: params.issueNumber,
+        body: buildCommandDisabledByPolicyMessage({
+          command: "ask",
+          policyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
+          locale,
+        }),
+      });
+      return { ok: true, message: `${trigger === "mention-command" ? "mention-" : ""}ask command ignored by policy` };
+    }
+    await runGitHubAsk({
+      context: params.context,
+      pullNumber: params.issueNumber,
+      question,
+      managedCommentKey: buildManagedCommandCommentKey("ask", question),
+      trigger,
+      customRules: reviewBehavior.customRules,
+      includeCiChecks: isPullRequest ? reviewBehavior.includeCiChecks : false,
+      enableConversationContext: true,
+      isPullRequest,
+      issueTitle: params.issueTitle,
+      issueBody: params.issueBody,
+      throwOnError,
+    });
+    return { ok: true, message: `${trigger === "mention-command" ? "mention-" : ""}ask command triggered` };
+  };
 
   const commandRegistry: CommandRegistration<unknown>[] = [
     registerCommand(
@@ -245,38 +288,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         const parsed = parseAskCommand(body);
         return parsed.matched ? parsed : undefined;
       },
-      async (ask) => {
-        if (await hitRateLimit("ask")) {
-          return { ok: true, message: "ask command rate limited" };
-        }
-        const reviewBehavior = await getReviewBehavior();
-        if (!reviewBehavior.askCommandEnabled) {
-          await params.context.octokit.issues.createComment({
-            owner: params.owner,
-            repo: params.repo,
-            issue_number: params.issueNumber,
-            body: buildCommandDisabledByPolicyMessage({
-              command: "ask",
-              policyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
-              locale,
-            }),
-          });
-          return { ok: true, message: "ask command ignored by policy" };
-        }
-        await runGitHubAsk({
-          context: params.context,
-          pullNumber: params.issueNumber,
-          question: ask.question,
-          managedCommentKey: buildManagedCommandCommentKey("ask", ask.question),
-          trigger: "comment-command",
-          customRules: reviewBehavior.customRules,
-          includeCiChecks: isPullRequest ? reviewBehavior.includeCiChecks : false,
-          enableConversationContext: true,
-          isPullRequest,
-          throwOnError,
-        });
-        return { ok: true, message: "ask command triggered" };
-      },
+      async (ask) => executeAskLikeCommand(ask.question, "comment-command"),
     ),
     registerPrCommand(
       "checks",
@@ -447,7 +459,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           trigger: "comment-command",
           customRules: [
             ...reviewBehavior.customRules,
-            buildGitHubImproveRule(improveCommand.focus),
+            buildImproveRule(improveCommand.focus),
           ],
           includeCiChecks: reviewBehavior.includeCiChecks,
           enableSecretScan: reviewBehavior.secretScanEnabled,
@@ -489,7 +501,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           trigger: "comment-command",
           customRules: [
             ...reviewBehavior.customRules,
-            buildGitHubAddDocRule(addDocCommand.focus),
+            buildAddDocRule(addDocCommand.focus),
           ],
           includeCiChecks: reviewBehavior.includeCiChecks,
           enableSecretScan: false,
@@ -599,38 +611,7 @@ export async function handleGitHubIssueCommentCommand(params: {
         const parsed = parseMentionCommand(body, botLogin);
         return parsed.matched ? parsed : undefined;
       },
-      async (mention) => {
-        if (await hitRateLimit("ask")) {
-          return { ok: true, message: "mention-ask command rate limited" };
-        }
-        const reviewBehavior = await getReviewBehavior();
-        if (!reviewBehavior.askCommandEnabled) {
-          await params.context.octokit.issues.createComment({
-            owner: params.owner,
-            repo: params.repo,
-            issue_number: params.issueNumber,
-            body: buildCommandDisabledByPolicyMessage({
-              command: "ask",
-              policyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
-              locale,
-            }),
-          });
-          return { ok: true, message: "mention-ask command ignored by policy" };
-        }
-        await runGitHubAsk({
-          context: params.context,
-          pullNumber: params.issueNumber,
-          question: mention.question,
-          managedCommentKey: buildManagedCommandCommentKey("ask", mention.question),
-          trigger: "mention-command",
-          customRules: reviewBehavior.customRules,
-          includeCiChecks: isPullRequest ? reviewBehavior.includeCiChecks : false,
-          enableConversationContext: true,
-          isPullRequest,
-          throwOnError,
-        });
-        return { ok: true, message: "mention-ask command triggered" };
-      },
+      async (mention) => executeAskLikeCommand(mention.question, "mention-command"),
     ),
   ];
 
@@ -638,14 +619,6 @@ export async function handleGitHubIssueCommentCommand(params: {
     ok: true,
     message: "ignored issue_comment content",
   });
-}
-
-function buildGitHubImproveRule(focus: string): string {
-  return buildImproveRule(focus);
-}
-
-function buildGitHubAddDocRule(focus: string): string {
-  return buildAddDocRule(focus);
 }
 
 function buildGitHubReflectQuestion(

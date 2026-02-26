@@ -48,6 +48,7 @@ export interface GitHubDescribeWorkflowParams {
 
 export interface GitHubAskWorkflowParams {
   context: GitHubWorkflowContext;
+  /** GitHub Issue or PR number (shared number space). */
   pullNumber: number;
   question: string;
   trigger: string;
@@ -59,6 +60,10 @@ export interface GitHubAskWorkflowParams {
   displayQuestion?: string;
   enableConversationContext?: boolean;
   isPullRequest?: boolean;
+  /** Issue title — used as AI context when isPullRequest is false. */
+  issueTitle?: string;
+  /** Issue body — used as AI context when isPullRequest is false. */
+  issueBody?: string;
   throwOnError?: boolean;
 }
 
@@ -292,6 +297,8 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
         displayQuestion,
         enableConversationContext = false,
         isPullRequest = true,
+        issueTitle = "",
+        issueBody = "",
         throwOnError = false,
       } = params;
       const { owner, repo } = context.repo();
@@ -337,12 +344,13 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
           });
           input = collected.input;
         } else {
+          // Issue context — no diff available, but provide title/body for AI context
           input = {
             platform: "github",
             repository: `${owner}/${repo}`,
             number: pullNumber,
-            title: "",
-            body: "",
+            title: issueTitle,
+            body: issueBody,
             author: "",
             baseBranch: "",
             headBranch: "",

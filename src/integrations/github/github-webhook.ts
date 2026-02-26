@@ -86,6 +86,8 @@ const issueCommentWebhookPayloadSchema = z.object({
   repository: repositoryInfoPayloadSchema,
   issue: z.object({
     number: z.number().int().positive(),
+    title: z.string().optional(),
+    body: z.string().nullable().optional(),
     pull_request: z.unknown().optional(),
   }),
   comment: z.object({
@@ -347,6 +349,8 @@ async function handleIssueCommentEvent(
     body: payload.comment?.body?.trim() ?? "",
     commentUser: payload.comment?.user,
     isPullRequest,
+    issueTitle: payload.issue.title ?? "",
+    issueBody: payload.issue.body ?? "",
     rateLimitPlatform: params.runtimeMode,
     throwOnError: params.runtimeMode === "github-webhook",
   });

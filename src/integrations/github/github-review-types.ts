@@ -257,6 +257,7 @@ export interface GitHubDescribeRunParams {
 
 export interface GitHubAskRunParams {
   context: GitHubReviewContext;
+  /** GitHub Issue or PR number (shared number space). */
   pullNumber: number;
   question: string;
   trigger: ReviewTrigger;
@@ -268,6 +269,10 @@ export interface GitHubAskRunParams {
   displayQuestion?: string;
   enableConversationContext?: boolean;
   isPullRequest?: boolean;
+  /** Issue title — used as AI context when isPullRequest is false. */
+  issueTitle?: string;
+  /** Issue body — used as AI context when isPullRequest is false. */
+  issueBody?: string;
   throwOnError?: boolean;
 }
 

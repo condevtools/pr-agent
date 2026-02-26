@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, resolve } from "node:path";
 
@@ -321,7 +321,28 @@ function buildStoredRawBody(rawBody: string | undefined, payload: unknown): stri
     return source;
   }
 
-  return sourceBuffer.subarray(0, maxBodyBytes).toString("utf8");
+  return truncateToValidUtf8(sourceBuffer.subarray(0, maxBodyBytes)).toString("utf8");
+}
+
+function truncateToValidUtf8(buf: Buffer): Buffer {
+  let end = buf.length;
+  // Walk back past any UTF-8 continuation bytes (0b10xxxxxx = 0x80..0xBF).
+  while (end > 0 && (buf[end - 1]! & 0xc0) === 0x80) {
+    end--;
+  }
+  // If we landed on a multi-byte lead byte, check if the full sequence fits.
+  if (end > 0) {
+    const lead = buf[end - 1]!;
+    let expectedLen = 1;
+    if ((lead & 0xe0) === 0xc0) expectedLen = 2;
+    else if ((lead & 0xf0) === 0xe0) expectedLen = 3;
+    else if ((lead & 0xf8) === 0xf0) expectedLen = 4;
+    const available = buf.length - (end - 1);
+    if (available < expectedLen) {
+      end--;
+    }
+  }
+  return buf.subarray(0, end);
 }
 
 function sanitizeHeaders(
@@ -391,7 +412,12 @@ async function trimStoredWebhookEventsAsync(): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   const tempFilePath = `${filePath}.tmp-${nowMs()}-${randomUUID().slice(0, 8)}`;
   await writeFile(tempFilePath, `${kept.map((event) => safeJsonStringify(event)).join("\n")}\n`, "utf8");
-  await rename(tempFilePath, filePath);
+  try {
+    await rename(tempFilePath, filePath);
+  } catch (renameError) {
+    await rm(tempFilePath, { force: true }).catch(() => {});
+    throw renameError;
+  }
   incrementMetricCounter("mr_agent_webhook_store_trim_total", {
     result: "trimmed",
   });

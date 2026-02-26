@@ -3,9 +3,10 @@ import "reflect-metadata";
 
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
-import { json, urlencoded, type Request } from "express";
+import { json, urlencoded } from "express";
 import { prepareRuntimeStateBackend, readOptionalStringEnv } from "#core";
 import { AppModule } from "./app.module.js";
+import type { RawBodyRequest } from "./common/types/raw-body-request.js";
 
 async function bootstrap(): Promise<void> {
   await prepareRuntimeStateBackend();
@@ -38,15 +39,11 @@ async function bootstrap(): Promise<void> {
 
 function resolvePort(rawPort: string | undefined): number {
   const parsed = Number(rawPort);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
     return 3000;
   }
 
   return Math.floor(parsed);
-}
-
-interface RawBodyRequest extends Request {
-  rawBody?: Buffer;
 }
 
 function captureRawBody(
