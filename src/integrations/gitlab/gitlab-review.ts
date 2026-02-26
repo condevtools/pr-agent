@@ -470,6 +470,7 @@ interface GitLabReviewPolicy {
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
+  implementCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -493,6 +494,7 @@ const defaultGitLabReviewPolicy: GitLabReviewPolicy = {
   feedbackCommandEnabled: true,
   improveCommandEnabled: true,
   addDocCommandEnabled: true,
+  implementCommandEnabled: true,
   customRules: [],
 };
 
@@ -761,7 +763,7 @@ export async function runGitLabWebhook(params: {
       payload.project.web_url,
     );
     const actionKind = mapGitLabActionToReviewEvent(action);
-    const policy = await resolveGitLabReviewPolicy({
+    const { policy } = await resolveGitLabReviewPolicy({
       baseUrl,
       projectId: payload.project.id,
       gitlabToken,
@@ -1177,7 +1179,7 @@ async function handleGitLabNoteWebhook(params: {
     readOptionalStringEnv("GITLAB_BASE_URL"),
     payload.project.web_url,
   );
-  const policy = await resolveGitLabReviewPolicy({
+  const { policy, hasConfigFile } = await resolveGitLabReviewPolicy({
     baseUrl,
     projectId: payload.project.id,
     gitlabToken,
@@ -1258,12 +1260,6 @@ async function handleGitLabNoteWebhook(params: {
         if (limited) {
           return limited;
         }
-        const hasConfigFile = await hasGitLabConfigFile({
-          baseUrl,
-          projectId: payload.project.id,
-          gitlabToken,
-          ref: mergePayload.object_attributes.target_branch,
-        });
         const configBody = hasConfigFile
           ? buildConfigFoundMessage({ config: { review: policy }, locale })
           : buildConfigNotFoundMessage(locale);
@@ -2214,10 +2210,10 @@ async function resolveGitLabReviewPolicy(params: {
   projectId: number;
   gitlabToken: string;
   ref: string;
-}): Promise<GitLabReviewPolicy> {
+}): Promise<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }> {
   const cacheKey = `${params.baseUrl}:${params.projectId}@${params.ref}`;
   const now = nowMs();
-  const cached = loadRuntimeStateValue<GitLabReviewPolicy>(
+  const cached = loadRuntimeStateValue<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }>(
     GITLAB_POLICY_CACHE_SCOPE,
     cacheKey,
     now,
@@ -2242,7 +2238,8 @@ async function resolveGitLabReviewPolicy(params: {
       path: ".mr-agent.yaml",
     }));
 
-  const resolved = raw
+  const hasConfigFile = raw != null;
+  const policy = raw
     ? parseGitLabReviewPolicyConfig(raw)
     : {
         ...defaultGitLabReviewPolicy,
@@ -2251,6 +2248,7 @@ async function resolveGitLabReviewPolicy(params: {
           ...defaultGitLabReviewPolicy.secretScanCustomPatterns,
         ],
       };
+  const resolved = { policy, hasConfigFile };
   saveRuntimeStateValue({
     scope: GITLAB_POLICY_CACHE_SCOPE,
     key: cacheKey,
@@ -2265,30 +2263,6 @@ async function resolveGitLabReviewPolicy(params: {
   });
 
   return resolved;
-}
-
-async function hasGitLabConfigFile(params: {
-  baseUrl: string;
-  projectId: number;
-  gitlabToken: string;
-  ref: string;
-}): Promise<boolean> {
-  const raw =
-    (await tryLoadGitLabTextFile({
-      baseUrl: params.baseUrl,
-      projectId: params.projectId,
-      gitlabToken: params.gitlabToken,
-      ref: params.ref,
-      path: ".mr-agent.yml",
-    })) ??
-    (await tryLoadGitLabTextFile({
-      baseUrl: params.baseUrl,
-      projectId: params.projectId,
-      gitlabToken: params.gitlabToken,
-      ref: params.ref,
-      path: ".mr-agent.yaml",
-    }));
-  return raw != null;
 }
 
 export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
@@ -2333,6 +2307,8 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
       overrides.improveCommandEnabled ?? basePolicy.improveCommandEnabled,
     addDocCommandEnabled:
       overrides.addDocCommandEnabled ?? basePolicy.addDocCommandEnabled,
+    implementCommandEnabled:
+      overrides.implementCommandEnabled ?? basePolicy.implementCommandEnabled,
     customRules: normalizePolicyStringList(overrides.customRules, 30),
   };
 }

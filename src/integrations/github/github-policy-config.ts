@@ -55,6 +55,7 @@ export interface ReviewPolicyConfig {
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
+  implementCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -106,6 +107,7 @@ const repoPolicyReviewSchema = z
     feedbackCommandEnabled: z.boolean().optional(),
     improveCommandEnabled: z.boolean().optional(),
     addDocCommandEnabled: z.boolean().optional(),
+    implementCommandEnabled: z.boolean().optional(),
     customRules: z.array(z.string()).optional(),
   })
   .strict()
@@ -162,12 +164,11 @@ export const defaultPolicyConfig: RepoPolicyConfig = {
     feedbackCommandEnabled: true,
     improveCommandEnabled: true,
     addDocCommandEnabled: true,
+    implementCommandEnabled: true,
     customRules: [],
   },
 };
 
-// ---------------------------------------------------------------------------
-// Cache
 // ---------------------------------------------------------------------------
 
 interface RepoPolicyConfigCacheEntry extends ExpiringCacheEntry<RepoPolicyConfig> {}
@@ -399,6 +400,7 @@ function normalizeRepoPolicyConfig(raw: Partial<RepoPolicyConfig>): RepoPolicyCo
       feedbackCommandEnabled: review.feedbackCommandEnabled !== false,
       improveCommandEnabled: review.improveCommandEnabled !== false,
       addDocCommandEnabled: review.addDocCommandEnabled !== false,
+      implementCommandEnabled: review.implementCommandEnabled !== false,
       customRules: normalizeStringList(review.customRules).slice(0, 30),
     },
   };
@@ -656,6 +658,13 @@ function normalizeYamlReviewConfig(
       const bool = coerceBoolean(rawValue);
       if (bool !== undefined) {
         target.addDocCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "implementcommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.implementCommandEnabled = bool;
       }
       continue;
     }

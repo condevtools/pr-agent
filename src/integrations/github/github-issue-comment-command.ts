@@ -650,6 +650,20 @@ export async function handleGitHubIssueCommentCommand(params: {
         if (await hitRateLimit("implement")) {
           return { ok: true, message: "implement command rate limited" };
         }
+        const reviewBehavior = await getReviewBehavior();
+        if (!reviewBehavior.implementCommandEnabled) {
+          await params.context.octokit.issues.createComment({
+            owner: params.owner,
+            repo: params.repo,
+            issue_number: params.issueNumber,
+            body: buildCommandDisabledByPolicyMessage({
+              command: "implement",
+              policyPath: ".mr-agent.yml -> review.implementCommandEnabled=false",
+              locale,
+            }),
+          });
+          return { ok: true, message: "implement command ignored by policy" };
+        }
         await runGitHubImplementCommand({
           context: params.context,
           owner: params.owner,

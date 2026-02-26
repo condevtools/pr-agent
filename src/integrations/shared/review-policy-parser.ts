@@ -24,6 +24,7 @@ const reviewPolicyOverridesSchema = z
     feedbackCommandEnabled: z.boolean().optional(),
     improveCommandEnabled: z.boolean().optional(),
     addDocCommandEnabled: z.boolean().optional(),
+    implementCommandEnabled: z.boolean().optional(),
     customRules: z.array(z.string()).optional(),
   })
   .strict()
@@ -201,6 +202,13 @@ function normalizeReviewPolicyOverrides(
       const bool = coerceBoolean(rawValue);
       if (bool !== undefined) {
         target.addDocCommandEnabled = bool;
+      }
+      continue;
+    }
+    if (key === "implementcommandenabled") {
+      const bool = coerceBoolean(rawValue);
+      if (bool !== undefined) {
+        target.implementCommandEnabled = bool;
       }
       continue;
     }

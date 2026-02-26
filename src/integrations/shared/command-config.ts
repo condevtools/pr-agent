@@ -1,8 +1,31 @@
 import { localizeText, type UiLocale } from "#core";
-import type { ReviewPolicyConfig } from "../github/github-policy-config.js";
+
+interface ConfigDisplayPolicy {
+  enabled: boolean;
+  mode: string;
+  onOpened: boolean;
+  onEdited: boolean;
+  onSynchronize: boolean;
+  describeEnabled: boolean;
+  describeAllowApply: boolean;
+  askCommandEnabled: boolean;
+  checksCommandEnabled: boolean;
+  includeCiChecks: boolean;
+  generateTestsCommandEnabled: boolean;
+  changelogCommandEnabled: boolean;
+  changelogAllowApply: boolean;
+  improveCommandEnabled: boolean;
+  addDocCommandEnabled: boolean;
+  implementCommandEnabled: boolean;
+  feedbackCommandEnabled: boolean;
+  secretScanEnabled: boolean;
+  secretScanCustomPatterns: string[];
+  autoLabelEnabled: boolean;
+  customRules: string[];
+}
 
 export function buildConfigFoundMessage(params: {
-  config: { review: ReviewPolicyConfig };
+  config: { review: ConfigDisplayPolicy };
   locale: UiLocale;
 }): string {
   const { config, locale } = params;
@@ -32,6 +55,7 @@ export function buildConfigFoundMessage(params: {
     `review.changelogAllowApply: ${r.changelogAllowApply}`,
     `review.improveCommandEnabled: ${r.improveCommandEnabled}`,
     `review.addDocCommandEnabled: ${r.addDocCommandEnabled}`,
+    `review.implementCommandEnabled: ${r.implementCommandEnabled}`,
     `review.feedbackCommandEnabled: ${r.feedbackCommandEnabled}`,
     `review.secretScanEnabled: ${r.secretScanEnabled}`,
     `review.autoLabelEnabled: ${r.autoLabelEnabled}`,

@@ -273,6 +273,7 @@ export async function resolveGitHubReviewBehaviorPolicy(params: {
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
+  implementCommandEnabled: boolean;
 }> {
   const { context } = params;
   const { owner, repo } = context.repo();
@@ -299,6 +300,7 @@ export async function resolveGitHubReviewBehaviorPolicy(params: {
     feedbackCommandEnabled: config.review.feedbackCommandEnabled,
     improveCommandEnabled: config.review.improveCommandEnabled,
     addDocCommandEnabled: config.review.addDocCommandEnabled,
+    implementCommandEnabled: config.review.implementCommandEnabled,
   };
 }
 

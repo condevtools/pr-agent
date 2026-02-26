@@ -3,6 +3,7 @@ import { getPublicErrorMessage } from "../shared/public-error.js";
 import type {
   GitHubReviewCommentSummary,
   GitHubReviewContext,
+  MinimalGitHubOctokit,
 } from "./github-review-types.js";
 import { decodeGitHubFileContent } from "./github-content.js";
 
@@ -53,11 +54,24 @@ export async function runGitHubImplementCommand(params: {
     return;
   }
 
+  // After the guards above, both methods are confirmed present.
+  const confirmedOctokit: ImplementOctokit = {
+    repos: {
+      getContent: octokit.repos.getContent,
+      createOrUpdateFileContents: octokit.repos.createOrUpdateFileContents,
+    },
+  };
+
   try {
     const pr = (await octokit.pulls.get({ owner, repo, pull_number: pullNumber })).data;
     const headBranch = pr.head.ref;
 
-    const comments = await collectAllReviewComments(octokit, owner, repo, pullNumber);
+    const comments = await collectAllReviewComments(
+      octokit.pulls.listReviewComments,
+      owner,
+      repo,
+      pullNumber,
+    );
     const pendingSuggestions = extractPendingSuggestions(comments);
 
     if (pendingSuggestions.length === 0) {
@@ -84,7 +98,7 @@ export async function runGitHubImplementCommand(params: {
     for (const [path, suggestions] of grouped) {
       try {
         const applyResult = await applySuggestionsToFile({
-          octokit,
+          octokit: confirmedOctokit,
           owner,
           repo,
           path,
@@ -96,7 +110,7 @@ export async function runGitHubImplementCommand(params: {
       } catch (error) {
         skipped += suggestions.length;
         errors.push(
-          `\`${path}\`: ${error instanceof Error ? error.message : String(error)}`,
+          `\`${path}\`: ${getPublicErrorMessage(error)}`,
         );
       }
     }
@@ -138,6 +152,18 @@ export async function runGitHubImplementCommand(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Narrowed octokit type — methods are confirmed present before use
+// ---------------------------------------------------------------------------
+
+type ImplementOctokit = {
+  repos: Pick<MinimalGitHubOctokit["repos"], "getContent"> & {
+    createOrUpdateFileContents: NonNullable<
+      MinimalGitHubOctokit["repos"]["createOrUpdateFileContents"]
+    >;
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Suggestion extraction
 // ---------------------------------------------------------------------------
 
@@ -157,6 +183,11 @@ function extractPendingSuggestions(
   const results: ParsedSuggestion[] = [];
 
   for (const comment of comments) {
+    // Only apply suggestions from Bot accounts
+    if (comment.user?.type !== "Bot") {
+      continue;
+    }
+
     const body = comment.body ?? "";
     const path = comment.path;
     const endLine = comment.line;
@@ -196,11 +227,31 @@ function groupSuggestionsByPath(
     list.push(s);
     map.set(s.path, list);
   }
-  // Sort within each file: bottom-to-top to avoid line drift
-  for (const list of map.values()) {
+  // Sort within each file: bottom-to-top to avoid line drift,
+  // then skip overlapping ranges
+  for (const [key, list] of map) {
     list.sort((a, b) => b.endLine - a.endLine);
+    const filtered = filterOverlappingSuggestions(list);
+    map.set(key, filtered);
   }
   return map;
+}
+
+function filterOverlappingSuggestions(
+  sorted: ParsedSuggestion[],
+): ParsedSuggestion[] {
+  const result: ParsedSuggestion[] = [];
+  let ceiling = Infinity;
+  for (const s of sorted) {
+    // Already sorted descending by endLine; skip if this suggestion's range
+    // overlaps with a previously accepted one (whose startLine is `ceiling`)
+    if (s.endLine >= ceiling) {
+      continue;
+    }
+    result.push(s);
+    ceiling = s.startLine;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,30 +259,7 @@ function groupSuggestionsByPath(
 // ---------------------------------------------------------------------------
 
 async function applySuggestionsToFile(params: {
-  octokit: {
-    repos: {
-      getContent(params: {
-        owner: string;
-        repo: string;
-        path: string;
-        ref?: string;
-      }): Promise<{
-        data:
-          | { type?: string; content?: string; encoding?: string; sha?: string }
-          | unknown[];
-      }>;
-      createOrUpdateFileContents?(params: {
-        [key: string]: unknown;
-        owner: string;
-        repo: string;
-        path: string;
-        message: string;
-        content: string;
-        sha?: string;
-        branch?: string;
-      }): Promise<unknown>;
-    };
-  };
+  octokit: ImplementOctokit;
   owner: string;
   repo: string;
   path: string;
@@ -246,16 +274,13 @@ async function applySuggestionsToFile(params: {
     throw new Error("file not found or is a directory");
   }
 
-  const fileSha = (data as { sha?: string }).sha;
-  const content = decodeGitHubFileContent(
-    data.content,
-    (data as { encoding?: string }).encoding,
-  );
+  const fileSha = data.sha;
+  const content = decodeGitHubFileContent(data.content, data.encoding);
   let lines = content.split("\n");
   let applied = 0;
   let skipped = 0;
 
-  // suggestions are already sorted bottom-to-top
+  // suggestions are already sorted bottom-to-top with overlaps removed
   for (const suggestion of suggestions) {
     const { startLine, endLine, replacement } = suggestion;
     if (startLine < 1 || endLine < startLine || endLine > lines.length) {
@@ -280,7 +305,7 @@ async function applySuggestionsToFile(params: {
   }
 
   const newContent = lines.join("\n");
-  await octokit.repos.createOrUpdateFileContents!({
+  await octokit.repos.createOrUpdateFileContents({
     owner,
     repo,
     path,
@@ -298,17 +323,7 @@ async function applySuggestionsToFile(params: {
 // ---------------------------------------------------------------------------
 
 async function collectAllReviewComments(
-  octokit: {
-    pulls: {
-      listReviewComments?(params: {
-        owner: string;
-        repo: string;
-        pull_number: number;
-        per_page?: number;
-        page?: number;
-      }): Promise<{ data: GitHubReviewCommentSummary[] }>;
-    };
-  },
+  listReviewComments: NonNullable<MinimalGitHubOctokit["pulls"]["listReviewComments"]>,
   owner: string,
   repo: string,
   pullNumber: number,
@@ -318,7 +333,7 @@ async function collectAllReviewComments(
   const maxPages = 10;
 
   while (page <= maxPages) {
-    const response = await octokit.pulls.listReviewComments!({
+    const response = await listReviewComments({
       owner,
       repo,
       pull_number: pullNumber,
