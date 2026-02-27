@@ -8,8 +8,18 @@ import {
 import {
   formatLogMessage,
   normalizeHeaderRecord,
+  readHeaderValue,
   readRawBody,
 } from "../webhook/webhook.utils.js";
+
+const GITHUB_ACTIONABLE_EVENTS = new Set([
+  "issue_comment",
+  "issues",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "pull_request_review_thread",
+]);
 
 @Injectable()
 export class GithubWebhookService {
@@ -31,6 +41,13 @@ export class GithubWebhookService {
     trustReplay?: boolean;
   }): Promise<{ ok: boolean; message: string }> {
     const normalizedHeaders = normalizeHeaderRecord(params.headers);
+
+    // Early guard: skip processing for non-actionable event types
+    const eventType = readHeaderValue(params.headers, "x-github-event")?.toLowerCase();
+    if (eventType && !GITHUB_ACTIONABLE_EVENTS.has(eventType)) {
+      return { ok: true, message: `ignored event type: ${eventType}` };
+    }
+
     const rawBody =
       readRawBody(params.rawBody) ??
       buildFallbackRawBodyForSignatureSkip(params.payload) ??

@@ -15,8 +15,14 @@ import {
 import {
   formatLogMessage,
   normalizeHeaderRecord,
+  readHeaderValue,
   readRawBody,
 } from "../webhook/webhook.utils.js";
+
+const GITLAB_ACTIONABLE_EVENTS = new Set([
+  "merge request hook",
+  "note hook",
+]);
 
 const gitlabWebhookPayloadSchema = z.object({
   object_kind: z.string().optional(),
@@ -58,6 +64,12 @@ export class GitlabWebhookService {
     rawBody?: Buffer | string;
     trustReplay?: boolean;
   }): Promise<{ ok: boolean; message: string }> {
+    // Early guard: skip processing for non-actionable event types
+    const eventType = readHeaderValue(params.headers, "x-gitlab-event")?.toLowerCase();
+    if (eventType && !GITLAB_ACTIONABLE_EVENTS.has(eventType)) {
+      return { ok: true, message: `ignored event type: ${eventType}` };
+    }
+
     const resolvedRawBody = readRawBody(params.rawBody);
 
     // Verify body size using the raw body when available (accurate byte
