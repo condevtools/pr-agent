@@ -89,6 +89,22 @@ import {
 } from "@mr-agent/shared/similar-issue.js";
 import { inferReviewLabels } from "@mr-agent/shared/auto-labels.js";
 
+// ---------------------------------------------------------------------------
+// TODO(refactor): Decompose this 1700+ line file into focused modules
+//
+// Suggested extraction plan:
+//   1. github-command-dispatch.ts – command registration, rate-limiting, routing (~400 lines)
+//   2. github-command-review.ts   – /review, /improve, /reflect handlers (~350 lines)
+//   3. github-command-query.ts    – /ask, /describe, /similar-issue, /help handlers (~300 lines)
+//   4. github-command-ops.ts      – /checks, /changelog, /config, /labels handlers (~250 lines)
+//   5. github-command-advanced.ts – /analyze, /compliance, /scan-discussions (~250 lines)
+//
+// Prerequisites:
+//   - Add integration tests covering at least the top-5 most-used commands
+//   - Verify command dispatch routing is covered by unit tests
+//   - Ensure shared state (rate-limit keys, policy cache) is passed explicitly
+// ---------------------------------------------------------------------------
+
 const DEFAULT_COMMAND_RATE_LIMIT_MAX = 10;
 const DEFAULT_COMMAND_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1_000;
 

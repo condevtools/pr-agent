@@ -145,6 +145,22 @@ import {
   shouldUseManagedReviewSummary,
 } from "@mr-agent/shared/review-triggers.js";
 
+// ---------------------------------------------------------------------------
+// TODO(refactor): Decompose this 3100+ line file into focused modules
+//
+// Suggested extraction plan:
+//   1. gitlab-mr-commands.ts    – slash-command parsing & dispatch (~800 lines)
+//   2. gitlab-mr-review.ts      – MR review orchestration & diff handling (~600 lines)
+//   3. gitlab-mr-comments.ts    – managed-comment CRUD helpers (~400 lines)
+//   4. gitlab-mr-guidelines.ts  – guideline loading & caching (~300 lines)
+//   5. gitlab-mr-security.ts    – secret scanning & policy checks (~200 lines)
+//
+// Prerequisites:
+//   - Increase test coverage for the command dispatch paths (currently low)
+//   - Ensure integration tests cover incremental review state round-trips
+//   - Verify that shared helpers from @mr-agent/shared are re-exported cleanly
+// ---------------------------------------------------------------------------
+
 const MAX_FILES = 40;
 const DEFAULT_MAX_PATCH_CHARS_PER_FILE = 4_000;
 const DEFAULT_MAX_TOTAL_PATCH_CHARS = 60_000;

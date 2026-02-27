@@ -109,6 +109,22 @@ import type {
   MinimalGitHubOctokit,
 } from "./github-review-types.js";
 
+// ---------------------------------------------------------------------------
+// TODO(refactor): Decompose this 1400+ line file into focused modules
+//
+// Suggested extraction plan:
+//   1. github-review-orchestrator.ts – top-level review orchestration & dedup (~350 lines)
+//   2. github-review-diff.ts         – diff fetching, patch limits, file context (~300 lines)
+//   3. github-review-comments.ts     – managed comment CRUD & formatting (~250 lines)
+//   4. github-review-guidelines.ts   – guideline loading & caching (~200 lines)
+//   5. github-review-ask.ts          – /ask & /describe command runners (~200 lines)
+//
+// Prerequisites:
+//   - Ensure exported types from github-review-types.js are re-exported cleanly
+//   - Add integration tests for incremental review state round-trips
+//   - Add tests for managed-comment update/create flows
+// ---------------------------------------------------------------------------
+
 const MAX_FILES = 40;
 const DEFAULT_MAX_PATCH_CHARS_PER_FILE = 4_000;
 const DEFAULT_MAX_TOTAL_PATCH_CHARS = 60_000;
