@@ -61,12 +61,15 @@ const navItems = [
   },
 ];
 
-export function Sidebar() {
+type SidebarProps = {
+  onNavigate?: () => void;
+};
+
+export function Sidebar({ onNavigate }: SidebarProps) {
   const pathname = usePathname();
 
   return (
     <>
-      {/* Mobile overlay handled by parent layout */}
       <aside className="flex h-full w-64 flex-col border-r border-gray-800 bg-gray-950">
         {/* Logo */}
         <div className="flex items-center gap-2 border-b border-gray-800 px-6 py-5">
@@ -88,6 +91,7 @@ export function Sidebar() {
                 <li key={item.href}>
                   <Link
                     href={item.href}
+                    onClick={onNavigate}
                     className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                       isActive
                         ? "bg-indigo-600/10 text-indigo-400"

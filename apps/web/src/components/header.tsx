@@ -6,6 +6,7 @@ import { authClient } from "@/lib/auth-client";
 type HeaderProps = {
   userName?: string | null;
   userEmail?: string | null;
+  onToggleSidebar?: () => void;
 };
 
 function getInitial(name?: string | null, email?: string | null): string {
@@ -15,7 +16,7 @@ function getInitial(name?: string | null, email?: string | null): string {
   return fromEmail ? fromEmail.toUpperCase() : "U";
 }
 
-export function Header({ userName, userEmail }: HeaderProps) {
+export function Header({ userName, userEmail, onToggleSidebar }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const avatarInitial = getInitial(userName, userEmail);
   const displayName = userName?.trim() || "User";
@@ -27,6 +28,7 @@ export function Header({ userName, userEmail }: HeaderProps) {
       <button
         className="lg:hidden rounded-lg p-2 text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors"
         aria-label="Toggle sidebar"
+        onClick={onToggleSidebar}
       >
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
