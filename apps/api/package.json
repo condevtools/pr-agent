@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mr-agent/core": "workspace:*",
+    "@mr-agent/db": "workspace:*",
     "@mr-agent/review": "workspace:*",
     "@mr-agent/shared": "workspace:*",
     "@nestjs/common": "^11.0.1",

@@ -1,11 +1,11 @@
 // Database client
-export { createDbClient, getDefaultDb, closeDefaultDb } from "./client";
-export type { PrismaClient } from "./client";
+export { createDbClient, getDefaultDb, closeDefaultDb } from "./client.js";
+export type { PrismaClient } from "./client.js";
 
 // Crypto helpers for API key encryption
-export { encryptApiKey, decryptApiKey } from "./crypto";
-export type { EncryptedPayload } from "./crypto";
+export { encryptApiKey, decryptApiKey } from "./crypto.js";
+export type { EncryptedPayload } from "./crypto.js";
 
 // Tenant resolution
-export { resolveTenantFromInstallation } from "./tenant-resolver";
-export type { TenantConfig } from "./tenant-resolver";
+export { resolveTenantFromInstallation } from "./tenant-resolver.js";
+export type { TenantConfig } from "./tenant-resolver.js";

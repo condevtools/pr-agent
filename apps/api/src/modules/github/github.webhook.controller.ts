@@ -6,9 +6,11 @@ import {
   Post,
   Query,
   Req,
+  UseGuards,
 } from "@nestjs/common";
 
 import { BadWebhookRequestError, readOptionalStringEnv } from "@mr-agent/core";
+import { SubscriptionGuard } from "../../common/guards/subscription.guard.js";
 import { GithubWebhookService } from "./github.webhook.service.js";
 import {
   buildHealthStatus,
@@ -46,6 +48,7 @@ export class GithubWebhookController {
   }
 
   @Post("trigger")
+  @UseGuards(SubscriptionGuard)
   async trigger(
     @Req() request: RawBodyRequest,
     @Headers() headers: Record<string, string | string[] | undefined>,

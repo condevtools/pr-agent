@@ -17,6 +17,9 @@ importers:
       '@mr-agent/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@mr-agent/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@mr-agent/review':
         specifier: workspace:*
         version: link:../../packages/review
