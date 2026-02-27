@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { authClient } from "@/lib/auth-client";
 
 export function Header() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -58,8 +59,7 @@ export function Header() {
               <hr className="my-1 border-gray-800" />
               <button
                 onClick={() => {
-                  // In production: signOut()
-                  window.location.href = "/";
+                  authClient.signOut({ fetchOptions: { onSuccess: () => { window.location.href = "/"; } } });
                 }}
                 className="block w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-gray-800"
               >
