@@ -1,3 +1,5 @@
+import { SampleDataBanner } from "@/components/sample-data-banner";
+
 const stats = [
   { label: "Total Reviews", value: "1,284", change: "+12%", changeType: "positive" as const },
   { label: "Active Repos", value: "23", change: "+3", changeType: "positive" as const },
@@ -82,6 +84,8 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-bold tracking-tight">Welcome back</h1>
         <p className="mt-1 text-gray-400">Here is what is happening with your repositories today.</p>
       </div>
+
+      <SampleDataBanner />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

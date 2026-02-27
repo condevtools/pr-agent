@@ -1,3 +1,5 @@
+import { SampleDataBanner } from "@/components/sample-data-banner";
+
 const repositories = [
   {
     id: 1,
@@ -76,13 +78,19 @@ export default function ReposPage() {
           <h1 className="text-2xl font-bold tracking-tight">Repositories</h1>
           <p className="mt-1 text-gray-400">Manage which repos MR Agent monitors and reviews.</p>
         </div>
-        <button className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium hover:bg-indigo-500 transition-colors">
+        <button
+          disabled
+          title="Coming soon"
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium opacity-50 cursor-not-allowed"
+        >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
           </svg>
           Add Repository
         </button>
       </div>
+
+      <SampleDataBanner />
 
       {/* Repository List */}
       <div className="rounded-xl border border-gray-800 bg-gray-900 divide-y divide-gray-800">

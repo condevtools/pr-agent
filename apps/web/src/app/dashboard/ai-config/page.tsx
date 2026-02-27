@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SampleDataBanner } from "@/components/sample-data-banner";
 
 type Provider = "openai" | "anthropic" | "gemini" | "openai-compatible";
 
@@ -66,6 +67,8 @@ export default function AIConfigPage() {
           Choose your AI provider and model. Your API key is encrypted and stored securely.
         </p>
       </div>
+
+      <SampleDataBanner />
 
       {/* Provider Selector */}
       <div>

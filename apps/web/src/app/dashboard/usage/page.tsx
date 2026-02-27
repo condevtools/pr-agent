@@ -1,3 +1,5 @@
+import { SampleDataBanner } from "@/components/sample-data-banner";
+
 const usageData = [
   { date: "2025-02-20", event: "Auto Review", model: "gpt-4o", tokens: 12450, repo: "acme/frontend" },
   { date: "2025-02-20", event: "/review command", model: "gpt-4o", tokens: 8320, repo: "acme/backend" },
@@ -26,6 +28,8 @@ export default function UsagePage() {
         <h1 className="text-2xl font-bold tracking-tight">Usage</h1>
         <p className="mt-1 text-gray-400">Monitor your AI token consumption and API usage.</p>
       </div>
+
+      <SampleDataBanner />
 
       {/* Summary Stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
