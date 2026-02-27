@@ -20,6 +20,9 @@ spec:
         app.kubernetes.io/component: database
         app.kubernetes.io/part-of: mr-agent
     spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 70
       containers:
         - name: postgresql
           image: postgres:16-alpine

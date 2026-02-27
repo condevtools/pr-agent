@@ -10,6 +10,20 @@ export class RedisRuntimeStateStore {
     this.redis = new Redis(params.redisUrl, {
       lazyConnect: true,
       maxRetriesPerRequest: 3,
+      retryStrategy(times: number) {
+        if (times > 10) return null; // Stop retrying after 10 attempts
+        return Math.min(times * 200, 5000); // Exponential backoff, max 5s
+      },
+      reconnectOnError(err: Error) {
+        // Reconnect on READONLY errors (happens during Redis failover)
+        return err.message.includes("READONLY");
+      },
+    });
+
+    this.redis.on("error", (error: Error) => {
+      logCore("warn", "runtime_state.redis.error", {
+        error: error.message,
+      });
     });
 
     this.readyPromise = this.redis.connect().then(

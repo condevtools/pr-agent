@@ -1,9 +1,6 @@
-// Schema — tables, enums, relations
-export * from "./schema.js";
-
 // Database client
 export { createDbClient, getDefaultDb, closeDefaultDb } from "./client.js";
-export type { DrizzleDb } from "./client.js";
+export type { PrismaClient } from "./client.js";
 
 // Crypto helpers for API key encryption
 export { encryptApiKey, decryptApiKey } from "./crypto.js";

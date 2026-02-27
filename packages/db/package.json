@@ -9,19 +9,19 @@
   },
   "dependencies": {
     "@mr-agent/core": "workspace:*",
-    "drizzle-orm": "^0.44.0",
-    "postgres": "^3.4.0"
+    "@prisma/client": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "drizzle-kit": "^0.30.0",
+    "prisma": "^6.0.0",
     "typescript": "^5.7.2"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
   }
 }

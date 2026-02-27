@@ -7,7 +7,14 @@
     "build": "turbo run build",
     "check": "turbo run check",
     "test": "turbo run test",
-    "dev": "turbo run dev --filter=@mr-agent/api",
+    "dev": "turbo run dev --parallel",
+    "dev:api": "pnpm --filter @mr-agent/api dev",
+    "dev:web": "pnpm --filter @mr-agent/web dev",
+    "start:api": "pnpm --filter @mr-agent/api start",
+    "start:web": "pnpm --filter @mr-agent/web start",
+    "db:generate": "pnpm --filter @mr-agent/db db:generate",
+    "db:migrate": "pnpm --filter @mr-agent/db db:migrate",
+    "db:studio": "pnpm --filter @mr-agent/db db:studio",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
@@ -17,5 +24,14 @@
   },
   "devDependencies": {
     "turbo": "^2.4.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "sharp"
+    ]
   }
 }

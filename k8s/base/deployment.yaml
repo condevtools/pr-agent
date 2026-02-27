@@ -19,9 +19,14 @@ spec:
         app.kubernetes.io/component: api
         app.kubernetes.io/part-of: mr-agent
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: api
-          image: mr-agent-api:latest
+          image: mr-agent-api:0.1.0
           ports:
             - name: http
               containerPort: 3000
@@ -34,7 +39,7 @@ spec:
                 optional: true
           env:
             - name: REDIS_URL
-              value: "redis://redis.mr-agent.svc.cluster.local:6379"
+              value: "redis://:$(REDIS_PASSWORD)@redis.mr-agent.svc.cluster.local:6379"
             - name: DATABASE_URL
               value: "postgresql://mr-agent:$(DB_PASSWORD)@postgresql.mr-agent.svc.cluster.local:5432/mr-agent"
           resources:
@@ -64,6 +69,12 @@ spec:
             - name: github-app-key
               mountPath: /etc/mr-agent/keys
               readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
       volumes:
         - name: github-app-key
           secret:

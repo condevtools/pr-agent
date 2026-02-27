@@ -6,7 +6,7 @@ const plans = [
     description: "For individuals and small open-source projects",
     features: [
       "50 reviews / month",
-      "1 repository",
+      "3 repositories",
       "Community support",
       "Basic slash commands",
     ],

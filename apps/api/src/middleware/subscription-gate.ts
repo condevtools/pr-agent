@@ -31,11 +31,13 @@ export interface SubscriptionCheckResult {
  * @returns An object indicating whether the operation is allowed, and an
  *          optional human-readable reason when it is not.
  */
+const PAID_PLANS = new Set(["pro", "enterprise"]);
+
 export function checkSubscriptionLimits(
   plan: string,
   usage: UsageCounts,
 ): SubscriptionCheckResult {
-  if (plan !== "free") return { allowed: true };
+  if (PAID_PLANS.has(plan)) return { allowed: true };
 
   if (usage.reviewsThisMonth >= FREE_TIER_REVIEW_LIMIT) {
     return {
