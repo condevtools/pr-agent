@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { authClient } from "@/lib/auth-client";
 
 export default function LoginPage() {
   return (
@@ -18,8 +19,7 @@ export default function LoginPage() {
 
           <button
             onClick={() => {
-              // In production this would call signIn("github") from next-auth
-              window.location.href = "/api/auth/signin";
+              authClient.signIn.social({ provider: "github" });
             }}
             className="w-full flex items-center justify-center gap-3 rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm font-medium hover:bg-gray-750 hover:border-gray-600 transition-colors"
           >
