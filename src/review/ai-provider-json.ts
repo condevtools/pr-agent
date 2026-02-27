@@ -56,6 +56,23 @@ export function parseJsonFromModelText(text: string): unknown {
       } catch {
         // fall through
       }
+
+      // When multiple JSON objects are mixed with text (e.g. thinking tokens
+      // + tool calls + answer), scan backwards from the last "}" to find the
+      // last valid JSON object.
+      for (
+        let searchPos = lastBrace;
+        searchPos > firstBrace;
+      ) {
+        const openPos = trimmed.lastIndexOf("{", searchPos - 1);
+        if (openPos < 0) break;
+        const inner = trimmed.slice(openPos, lastBrace + 1);
+        try {
+          return JSON.parse(inner);
+        } catch {
+          searchPos = openPos;
+        }
+      }
     }
 
     throw new Error("Model response is not valid JSON");
