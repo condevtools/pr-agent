@@ -5,3 +5,4 @@ export * from "./similar-issue.js";
 export * from "./review-policy.js";
 export * from "./review-types.js";
 export * from "./review-utils.js";
+export * from "./tenant-concurrency.js";

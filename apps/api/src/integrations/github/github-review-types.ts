@@ -1,4 +1,5 @@
 import type { DiffFileContext, PullRequestReviewInput, ReviewMode, ReviewTrigger } from "@mr-agent/review";
+import type { TenantConfig } from "@mr-agent/core";
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -268,6 +269,7 @@ export interface GitHubReviewRunParams {
   secretScanCustomPatterns?: string[];
   enableAutoLabel?: boolean;
   throwOnError?: boolean;
+  tenantConfig?: TenantConfig;
 }
 
 export interface GitHubDescribeRunParams {

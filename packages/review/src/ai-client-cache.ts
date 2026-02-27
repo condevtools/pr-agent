@@ -8,6 +8,7 @@ export interface OpenAIClientCacheConfig {
   baseURL?: string;
   timeout: number;
   maxRetries: number;
+  tenantId?: string;
 }
 
 export interface OpenAIClientCacheOptions {
@@ -85,12 +86,16 @@ export function createOpenAIClientCache(
 }
 
 export function openAIClientCacheKey(params: OpenAIClientCacheConfig): string {
-  return [
+  const parts = [
     hashApiKey(params.apiKey),
     params.baseURL ?? "",
     `${params.timeout}`,
     `${params.maxRetries}`,
-  ].join("|");
+  ];
+  if (params.tenantId) {
+    parts.push(`tenant:${params.tenantId}`);
+  }
+  return parts.join("|");
 }
 
 function hashApiKey(apiKey: string): string {

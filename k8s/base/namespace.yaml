@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mr-agent
+  labels:
+    app.kubernetes.io/name: mr-agent
+    app.kubernetes.io/part-of: mr-agent

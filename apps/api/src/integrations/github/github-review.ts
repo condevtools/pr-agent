@@ -292,6 +292,7 @@ export async function runGitHubReview(
     secretScanCustomPatterns = [],
     enableAutoLabel = true,
     throwOnError = false,
+    tenantConfig,
   } = params;
   const { owner, repo } = context.repo();
   const locale = resolveUiLocale();
@@ -404,7 +405,7 @@ export async function runGitHubReview(
       return;
     }
 
-    const reviewResult = await analyzePullRequest(collected.input);
+    const reviewResult = await analyzePullRequest(collected.input, { tenantConfig });
 
     if (mode === "comment") {
       const posted = await publishGitHubLineComments(

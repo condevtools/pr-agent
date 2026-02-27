@@ -39,7 +39,9 @@ export {
   resolveRuntimeStateBackend,
   saveRuntimeStateValue,
 } from "./runtime-state.js";
+export { RedisRuntimeStateStore } from "./runtime-state-redis.js";
 export {
   compileCustomSecretPatterns,
   type CustomSecretPatternMatcher,
 } from "./secret-patterns.js";
+export { type TenantAIConfig, type TenantConfig } from "./tenant.js";

@@ -5,7 +5,7 @@ import type {
   PullRequestReviewInput,
   PullRequestReviewResult,
 } from "./review-types.js";
-import type { AskConversationTurn } from "@mr-agent/core";
+import type { AskConversationTurn, TenantConfig } from "@mr-agent/core";
 import {
   fetchWithRetry,
   getHttpShutdownSignal,
@@ -201,21 +201,23 @@ export async function analyzePullRequest(
   pullRequest: PullRequestReviewInput,
   options?: {
     runtime?: AiReviewerRuntime;
+    tenantConfig?: TenantConfig;
   },
 ): Promise<PullRequestReviewResult> {
   const runtime = options?.runtime ?? defaultAiReviewerRuntime;
-  const provider = resolveProvider();
-  const model = resolveModel(provider);
+  const tenantConfig = options?.tenantConfig;
+  const provider = resolveProvider(tenantConfig);
+  const model = resolveModel(provider, tenantConfig);
   const prompt = buildUserPrompt(pullRequest);
 
   const parsed = await runtime.concurrencyLimiter.withLimit(async () => {
     if (provider === "openai" || provider === "openai-compatible") {
-      return analyzeWithOpenAI({ provider, model, prompt, runtime });
+      return analyzeWithOpenAI({ provider, model, prompt, runtime, tenantConfig });
     }
     if (provider === "anthropic") {
-      return analyzeWithAnthropic({ model, prompt });
+      return analyzeWithAnthropic({ model, prompt, tenantConfig });
     }
-    return analyzeWithGemini({ model, prompt });
+    return analyzeWithGemini({ model, prompt, tenantConfig });
   });
 
   const result = reviewResultSchema.parse(
@@ -243,23 +245,25 @@ export async function answerPullRequestQuestion(
   options?: {
     conversation?: AskConversationTurn[];
     runtime?: AiReviewerRuntime;
+    tenantConfig?: TenantConfig;
   },
 ): Promise<string> {
   const runtime = options?.runtime ?? defaultAiReviewerRuntime;
-  const provider = resolveProvider();
-  const model = resolveModel(provider);
+  const tenantConfig = options?.tenantConfig;
+  const provider = resolveProvider(tenantConfig);
+  const model = resolveModel(provider, tenantConfig);
   const conversation = options?.conversation ?? [];
   const prompt = buildAskPrompt(pullRequest, question, conversation);
 
   const parsed = await runtime.concurrencyLimiter.withLimit(async () => {
     try {
       if (provider === "openai" || provider === "openai-compatible") {
-        return await askWithOpenAI({ provider, model, prompt, runtime });
+        return await askWithOpenAI({ provider, model, prompt, runtime, tenantConfig });
       }
       if (provider === "anthropic") {
-        return await askWithAnthropic({ model, prompt });
+        return await askWithAnthropic({ model, prompt, tenantConfig });
       }
-      return await askWithGemini({ model, prompt });
+      return await askWithGemini({ model, prompt, tenantConfig });
     } catch (error) {
       if (!shouldRetryAskWithCompactContext(error)) {
         throw error;
@@ -278,12 +282,12 @@ export async function answerPullRequestQuestion(
       });
 
       if (provider === "openai" || provider === "openai-compatible") {
-        return askWithOpenAI({ provider, model, prompt: compactPrompt, runtime });
+        return askWithOpenAI({ provider, model, prompt: compactPrompt, runtime, tenantConfig });
       }
       if (provider === "anthropic") {
-        return askWithAnthropic({ model, prompt: compactPrompt });
+        return askWithAnthropic({ model, prompt: compactPrompt, tenantConfig });
       }
-      return askWithGemini({ model, prompt: compactPrompt });
+      return askWithGemini({ model, prompt: compactPrompt, tenantConfig });
     }
   });
 
@@ -291,7 +295,11 @@ export async function answerPullRequestQuestion(
   return result.answer.trim();
 }
 
-function resolveProvider(): AIProvider {
+function resolveProvider(tenantConfig?: TenantConfig): AIProvider {
+  if (tenantConfig) {
+    return tenantConfig.ai.provider;
+  }
+
   const raw = readStringEnv("AI_PROVIDER", "openai").toLowerCase();
 
   if (raw === "openai") {
@@ -317,7 +325,11 @@ function resolveProvider(): AIProvider {
   throw new Error(`Unsupported AI_PROVIDER: ${raw}`);
 }
 
-function resolveModel(provider: AIProvider): string {
+function resolveModel(provider: AIProvider, tenantConfig?: TenantConfig): string {
+  if (tenantConfig) {
+    return tenantConfig.ai.model;
+  }
+
   const genericModel = readOptionalStringEnv("AI_MODEL");
   if (genericModel) {
     return genericModel;
@@ -348,8 +360,11 @@ function resolveOpenAIClientForProvider(params: {
   provider: "openai" | "openai-compatible";
   timeoutMs: number;
   runtime: AiReviewerRuntime;
+  tenantConfig?: TenantConfig;
 }): OpenAI {
-  const apiKey = resolveOpenAIApiKey(params.provider);
+  const apiKey = params.tenantConfig
+    ? params.tenantConfig.ai.apiKey
+    : resolveOpenAIApiKey(params.provider);
   if (!apiKey) {
     throw new Error(
       params.provider === "openai-compatible"
@@ -358,7 +373,7 @@ function resolveOpenAIClientForProvider(params: {
     );
   }
 
-  const baseURL = readOptionalStringEnv("OPENAI_BASE_URL");
+  const baseURL = params.tenantConfig?.ai.baseUrl ?? readOptionalStringEnv("OPENAI_BASE_URL");
   if (params.provider === "openai-compatible" && !baseURL) {
     throw new Error("Missing OPENAI_BASE_URL for AI_PROVIDER=openai-compatible");
   }
@@ -369,6 +384,7 @@ function resolveOpenAIClientForProvider(params: {
     baseURL,
     timeout: params.timeoutMs,
     maxRetries,
+    tenantId: params.tenantConfig?.tenantId,
   });
 }
 
@@ -433,11 +449,13 @@ async function callOpenAIJsonWithFallback(params: {
   schema: unknown;
   nonJsonFallback: (text: string) => unknown;
   runtime: AiReviewerRuntime;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   const client = resolveOpenAIClientForProvider({
     provider: params.provider,
     timeoutMs: params.timeoutMs,
     runtime: params.runtime,
+    tenantConfig: params.tenantConfig,
   });
 
   try {
@@ -518,6 +536,7 @@ async function analyzeWithOpenAI(params: {
   model: string;
   prompt: string;
   runtime: AiReviewerRuntime;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   return callOpenAIJsonWithFallback({
     provider: params.provider,
@@ -529,18 +548,21 @@ async function analyzeWithOpenAI(params: {
     schema: reviewResultJsonSchema,
     nonJsonFallback: buildReviewFallbackFromNonJsonText,
     runtime: params.runtime,
+    tenantConfig: params.tenantConfig,
   });
 }
 
 async function analyzeWithAnthropic(params: {
   model: string;
   prompt: string;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   return callAnthropicJson({
     model: params.model,
     prompt: params.prompt,
     systemPrompt: resolveReviewSystemPrompt(),
     responseSchema: reviewResultJsonSchema,
+    apiKey: params.tenantConfig?.ai.apiKey,
     onFallback: (event, metadata) => {
       logAiDebug(event, metadata);
     },
@@ -550,12 +572,14 @@ async function analyzeWithAnthropic(params: {
 async function analyzeWithGemini(params: {
   model: string;
   prompt: string;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   return callGeminiJson({
     model: params.model,
     prompt: params.prompt,
     systemPrompt: resolveReviewSystemPrompt(),
     responseSchema: reviewResultJsonSchema,
+    apiKey: params.tenantConfig?.ai.apiKey,
     onFallback: (event, metadata) => {
       logAiDebug(event, metadata);
     },
@@ -567,6 +591,7 @@ async function askWithOpenAI(params: {
   model: string;
   prompt: string;
   runtime: AiReviewerRuntime;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   return callOpenAIJsonWithFallback({
     provider: params.provider,
@@ -584,6 +609,7 @@ async function askWithOpenAI(params: {
     schema: askResultJsonSchema,
     nonJsonFallback: (text) => ({ answer: text.trim() || "Model returned empty answer." }),
     runtime: params.runtime,
+    tenantConfig: params.tenantConfig,
   });
 }
 
@@ -678,12 +704,14 @@ function collectErrorText(error: unknown): string {
 async function askWithAnthropic(params: {
   model: string;
   prompt: string;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   return callAnthropicJson({
     model: params.model,
     prompt: params.prompt,
     systemPrompt: resolveAskSystemPrompt(),
     responseSchema: askResultJsonSchema,
+    apiKey: params.tenantConfig?.ai.apiKey,
     timeoutMs: readNumberEnv(
       "AI_ASK_HTTP_TIMEOUT_MS",
       Math.max(
@@ -700,12 +728,14 @@ async function askWithAnthropic(params: {
 async function askWithGemini(params: {
   model: string;
   prompt: string;
+  tenantConfig?: TenantConfig;
 }): Promise<unknown> {
   return callGeminiJson({
     model: params.model,
     prompt: params.prompt,
     systemPrompt: resolveAskSystemPrompt(),
     responseSchema: askResultJsonSchema,
+    apiKey: params.tenantConfig?.ai.apiKey,
     timeoutMs: readNumberEnv(
       "AI_ASK_HTTP_TIMEOUT_MS",
       Math.max(

@@ -17,9 +17,10 @@ export async function callAnthropicJson(params: {
   systemPrompt: string;
   responseSchema?: Record<string, unknown>;
   timeoutMs?: number;
+  apiKey?: string;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
 }): Promise<unknown> {
-  const apiKey = readOptionalStringEnv("ANTHROPIC_API_KEY");
+  const apiKey = params.apiKey ?? readOptionalStringEnv("ANTHROPIC_API_KEY");
   if (!apiKey) {
     throw new Error("Missing ANTHROPIC_API_KEY");
   }

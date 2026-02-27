@@ -214,6 +214,9 @@ async function handlePullRequestEvent(
   const context = createReviewContext(owner, repo, params.octokit, params.logger);
   const action = payload.action?.toLowerCase();
   if (action === "closed" && payload.pull_request?.merged) {
+    // Phase 3: Tenant resolution placeholder
+    // const tenantConfig = await resolveTenantFromInstallation(db, installationId);
+    // For now, falls back to env-var config when tenantConfig is undefined
     const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
       context,
       baseRef:
@@ -230,6 +233,7 @@ async function handlePullRequestEvent(
       secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
       enableAutoLabel: reviewBehavior.autoLabelEnabled,
       throwOnError: params.runtimeMode === "github-webhook",
+      // tenantConfig,
     });
     return { ok: true, message: "pull_request review triggered" };
   }

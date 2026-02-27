@@ -9,9 +9,10 @@ export async function callGeminiJson(params: {
   systemPrompt: string;
   responseSchema?: Record<string, unknown>;
   timeoutMs?: number;
+  apiKey?: string;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
 }): Promise<unknown> {
-  const apiKey = readOptionalStringEnv("GEMINI_API_KEY");
+  const apiKey = params.apiKey ?? readOptionalStringEnv("GEMINI_API_KEY");
   if (!apiKey) {
     throw new Error("Missing GEMINI_API_KEY");
   }

@@ -3,9 +3,10 @@ import { readNumberEnv, readOptionalStringEnv } from "./env.js";
 import { nowMs } from "./clock.js";
 import { FileRuntimeStateStore } from "./runtime-state-file.js";
 import { InMemoryRuntimeStateStore } from "./runtime-state-in-memory.js";
+import { RedisRuntimeStateStore } from "./runtime-state-redis.js";
 import { SqliteRuntimeStateStore } from "./runtime-state-sqlite.js";
 
-type RuntimeStateBackend = "memory" | "file" | "fs" | "sqlite";
+type RuntimeStateBackend = "memory" | "file" | "fs" | "sqlite" | "redis";
 
 const DEFAULT_RUNTIME_STATE_FILE = ".mr-agent-runtime-state.json";
 const DEFAULT_RUNTIME_STATE_SQLITE_FILE = ".mr-agent-runtime-state.sqlite3";
@@ -22,6 +23,7 @@ interface RuntimeStateRegistry {
   fileStorePath?: string;
   sqliteStore?: SqliteRuntimeStateStore;
   sqliteStorePath?: string;
+  redisStore?: RedisRuntimeStateStore;
 }
 
 const registry: RuntimeStateRegistry = {};
@@ -35,6 +37,9 @@ export function resolveRuntimeStateBackend(
   }
   if (backend === "sqlite" || backend === "sqlite3") {
     return "sqlite";
+  }
+  if (backend === "redis") {
+    return "redis";
   }
   return "memory";
 }
@@ -107,6 +112,10 @@ export function assertRuntimeStateBackendReady(): void {
 
 export async function prepareRuntimeStateBackend(): Promise<void> {
   const backend = getRuntimeStateBackend();
+  if (backend === "redis") {
+    await getRedisStore().waitUntilReady();
+    return;
+  }
   if (isFileBackend(backend)) {
     await getFileStore().waitUntilReady();
     return;
@@ -116,7 +125,10 @@ export async function prepareRuntimeStateBackend(): Promise<void> {
 
 export function clearRuntimeStateStore(): void {
   const backend = getRuntimeStateBackend();
-  if (backend === "sqlite") {
+  if (backend === "redis") {
+    getRedisStore().clearAllAndDispose();
+    registry.redisStore = undefined;
+  } else if (backend === "sqlite") {
     getSqliteStore().clearAllAndDispose();
     registry.sqliteStore = undefined;
     registry.sqliteStorePath = undefined;
@@ -149,8 +161,12 @@ export function getRuntimeStateScopeEntryCount(scope: string): number {
 function getRuntimeStateStore():
   | InMemoryRuntimeStateStore
   | FileRuntimeStateStore
-  | SqliteRuntimeStateStore {
+  | SqliteRuntimeStateStore
+  | RedisRuntimeStateStore {
   const backend = getRuntimeStateBackend();
+  if (backend === "redis") {
+    return getRedisStore();
+  }
   if (backend === "sqlite") {
     return getSqliteStore();
   }
@@ -202,6 +218,19 @@ function getSqliteStore(): SqliteRuntimeStateStore {
     registry.sqliteStorePath = nextPath;
   }
   return registry.sqliteStore;
+}
+
+function getRedisStore(): RedisRuntimeStateStore {
+  if (!registry.redisStore) {
+    const redisUrl = readOptionalStringEnv("REDIS_URL");
+    if (!redisUrl) {
+      throw new Error(
+        "REDIS_URL environment variable is required when RUNTIME_STATE_BACKEND=redis",
+      );
+    }
+    registry.redisStore = new RedisRuntimeStateStore({ redisUrl });
+  }
+  return registry.redisStore;
 }
 
 function isFileBackend(backend: RuntimeStateBackend): boolean {

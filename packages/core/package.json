@@ -11,6 +11,9 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "ioredis": "^5.6.1"
+  },
   "devDependencies": {
     "@types/node": "^22.19.11",
     "typescript": "^5.9.3"
