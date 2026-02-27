@@ -51,9 +51,9 @@ spec:
                   key: DB_PASSWORD
                   optional: false
             - name: REDIS_URL
-              value: "redis://:$(REDIS_PASSWORD)@redis.mr-agent.svc.cluster.local:6379"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379"
             - name: DATABASE_URL
-              value: "postgresql://mr-agent:$(DB_PASSWORD)@postgresql.mr-agent.svc.cluster.local:5432/mr-agent"
+              value: "postgresql://mr-agent:$(DB_PASSWORD)@postgresql:5432/mr-agent"
           resources:
             requests:
               cpu: 250m
