@@ -842,7 +842,7 @@ All commands are triggered via PR/MR comments. Commands marked with **(PR only)*
 | `/ai-review comment` **(PR only)** | Force comment mode (inline comments) |
 | `/ai-review --mode=report` / `--mode=comment` **(PR only)** | Flag-style mode override (same effect as positional mode) |
 | `/ask <question>` | Ask about the PR or Issue (multi-turn conversation) |
-| `@bot-name <question>` | @mention the bot to ask a question (requires `GITHUB_APP_SLUG`) |
+| `@bot-name <question>` | @mention the bot to ask a question (set `GITHUB_APP_SLUG` or `GITHUB_BOT_LOGIN`) |
 | `/checks [question]` **(PR only)** | Analyze CI check failures |
 | `/generate_tests [focus]` **(PR only)** | Generate test code for changes |
 | `/changelog [focus]` **(PR only)** | Generate changelog entry |
@@ -867,7 +867,7 @@ All commands are triggered via PR/MR comments. Commands marked with **(PR only)*
 Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
 Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`; `/reflect` depends on `askCommandEnabled`; `/improve_component` depends on `improveCommandEnabled`; `/generate_labels` depends on `autoLabelEnabled`.
 
-> **Note:** `/ask`, `/feedback`, `/similar_issue`, `/help_docs`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` to your GitHub App's slug (lowercase name) to enable `@mention` detection.
+> **Note:** `/ask`, `/feedback`, `/similar_issue`, `/help_docs`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` (GitHub App slug) or `GITHUB_BOT_LOGIN` (exact bot login) to enable `@mention` detection. Mentions with and without the `[bot]` suffix are both supported.
 
 ---
 

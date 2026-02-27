@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   parseAddDocCommand,
   parseImproveCommand,
+  parseMentionCommand,
   parseReflectCommand,
   parseSimilarIssueCommand,
 } from "../src/review/report-renderer.ts";
@@ -46,4 +47,14 @@ test("parseSimilarIssueCommand supports aliases and query", () => {
   const two = parseSimilarIssueCommand("/ai-review similar-issue oauth callback");
   assert.equal(two.matched, true);
   assert.equal(two.query, "oauth callback");
+});
+
+test("parseMentionCommand accepts both bot login with and without [bot]", () => {
+  const withSuffix = parseMentionCommand("@condev-code-agent[bot] give suggestions", "condev-code-agent");
+  assert.equal(withSuffix.matched, true);
+  assert.equal(withSuffix.question, "give suggestions");
+
+  const withoutSuffix = parseMentionCommand("@condev-code-agent give suggestions", "condev-code-agent[bot]");
+  assert.equal(withoutSuffix.matched, true);
+  assert.equal(withoutSuffix.question, "give suggestions");
 });

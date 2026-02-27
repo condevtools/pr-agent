@@ -842,7 +842,7 @@ GitLab 特有请求头：
 | `/ai-review comment` **(仅 PR)** | 强制 Comment 模式（行内评论） |
 | `/ai-review --mode=report` / `--mode=comment` **(仅 PR)** | 参数方式指定评审模式（与位置参数等价） |
 | `/ask <问题>` | 针对 PR 或 Issue 提问（支持多轮对话） |
-| `@bot-name <问题>` | @提及 Bot 进行提问（需设置 `GITHUB_APP_SLUG`） |
+| `@bot-name <问题>` | @提及 Bot 进行提问（设置 `GITHUB_APP_SLUG` 或 `GITHUB_BOT_LOGIN`） |
 | `/checks [问题]` **(仅 PR)** | 分析 CI 检查失败原因 |
 | `/generate_tests [重点]` **(仅 PR)** | 为变更生成测试代码 |
 | `/changelog [重点]` **(仅 PR)** | 生成 Changelog 条目 |
@@ -867,7 +867,7 @@ GitLab 特有请求头：
 支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
 `.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`；`/reflect` 依赖 `askCommandEnabled`；`/improve_component` 依赖 `improveCommandEnabled`；`/generate_labels` 依赖 `autoLabelEnabled`。
 
-> **提示：** `/ask`、`/feedback`、`/similar_issue`、`/help_docs` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。设置 `GITHUB_APP_SLUG` 为你的 GitHub App slug（小写名称）以启用 `@提及` 检测。
+> **提示：** `/ask`、`/feedback`、`/similar_issue`、`/help_docs` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。可设置 `GITHUB_APP_SLUG`（GitHub App 的 slug）或 `GITHUB_BOT_LOGIN`（Bot 账号 login）启用 `@提及` 检测。带或不带 `[bot]` 后缀都支持。
 
 ---
 

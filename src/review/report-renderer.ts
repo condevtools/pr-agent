@@ -120,24 +120,55 @@ export function parseAskCommand(rawBody: string): {
 
 export function parseMentionCommand(
   rawBody: string,
-  botLogin: string,
+  botLogin: string | string[],
 ): { matched: boolean; question: string } {
-  if (!botLogin) {
+  const loginAliases = normalizeMentionLogins(botLogin);
+  if (loginAliases.length === 0) {
     return { matched: false, question: "" };
   }
   const body = rawBody.trim();
+
   // Match @botLogin (case-insensitive) followed by the question text
-  const escaped = botLogin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^@${escaped}\\s+([\\s\\S]+)$`, "i");
-  const matched = body.match(re);
-  if (!matched) {
-    return { matched: false, question: "" };
+  for (const login of loginAliases) {
+    const escaped = login.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`^@${escaped}\\s+([\\s\\S]+)$`, "i");
+    const matched = body.match(re);
+    if (!matched) {
+      continue;
+    }
+    const question = matched[1]?.trim() ?? "";
+    if (!question) {
+      return { matched: false, question: "" };
+    }
+    return { matched: true, question };
   }
-  const question = matched[1]?.trim() ?? "";
-  if (!question) {
-    return { matched: false, question: "" };
+
+  return { matched: false, question: "" };
+}
+
+function normalizeMentionLogins(raw: string | string[]): string[] {
+  const seeds = Array.isArray(raw) ? raw : [raw];
+  const normalized = new Set<string>();
+
+  for (const value of seeds) {
+    const login = value.trim();
+    if (!login) {
+      continue;
+    }
+    normalized.add(login);
+
+    if (login.toLowerCase().endsWith("[bot]")) {
+      const withoutSuffix = login.slice(0, -5).trim();
+      if (withoutSuffix) {
+        normalized.add(withoutSuffix);
+      }
+      continue;
+    }
+
+    normalized.add(`${login}[bot]`);
   }
-  return { matched: true, question };
+
+  return [...normalized];
 }
 
 export function parseChecksCommand(rawBody: string): {

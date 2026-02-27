@@ -127,7 +127,8 @@ export async function handleGitHubIssueCommentCommand(params: {
   const throwOnError = Boolean(params.throwOnError);
   const isPullRequest = params.isPullRequest ?? true;
   const appSlug = readOptionalStringEnv("GITHUB_APP_SLUG");
-  const botLogin = appSlug ? `${appSlug}[bot]` : "";
+  const configuredBotLogin = readOptionalStringEnv("GITHUB_BOT_LOGIN");
+  const botLogin = configuredBotLogin ?? (appSlug ? `${appSlug}[bot]` : "");
   let reviewBehaviorPromise:
     | Promise<Awaited<ReturnType<typeof resolveGitHubReviewBehaviorPolicy>>>
     | undefined;
