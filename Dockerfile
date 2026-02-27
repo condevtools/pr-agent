@@ -2,24 +2,41 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
-COPY tsconfig.json ./
-COPY src ./src
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/review/package.json packages/review/
+COPY packages/shared/package.json packages/shared/
+COPY apps/api/package.json apps/api/
 
-RUN npm run build
+RUN pnpm install --frozen-lockfile
+
+COPY tsconfig.base.json ./
+COPY packages/ packages/
+COPY apps/api/ apps/api/
+
+RUN pnpm --filter @mr-agent/api run check
 
 FROM node:22-alpine AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
-COPY --from=build /app/dist ./dist
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/review/package.json packages/review/
+COPY packages/shared/package.json packages/shared/
+COPY apps/api/package.json apps/api/
+
+RUN pnpm install --frozen-lockfile
+
+COPY packages/ packages/
+COPY apps/api/src/ apps/api/src/
+COPY tsconfig.base.json ./
 
 EXPOSE 3000
 
-CMD ["node", "dist/main.js"]
+CMD ["node", "--import", "tsx", "apps/api/src/main.ts"]

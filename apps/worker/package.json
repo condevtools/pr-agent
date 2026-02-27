@@ -1,0 +1,15 @@
+{
+  "name": "@mr-agent/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mr-agent/core": "workspace:*",
+    "@mr-agent/review": "workspace:*",
+    "@mr-agent/shared": "workspace:*"
+  },
+  "scripts": {
+    "build": "echo 'worker build placeholder'",
+    "check": "echo 'worker check placeholder'"
+  }
+}

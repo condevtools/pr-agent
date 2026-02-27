@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "declaration": false,
+    "declarationMap": false,
+    "composite": false,
+    "baseUrl": ".",
+    "paths": {
+      "#integrations/github": ["src/integrations/github/index.ts"],
+      "#integrations/github/*": ["src/integrations/github/*"],
+      "#integrations/gitlab": ["src/integrations/gitlab/index.ts"],
+      "#integrations/gitlab/*": ["src/integrations/gitlab/*"],
+      "#integrations/notify": ["src/integrations/notify/index.ts"],
+      "#integrations/notify/*": ["src/integrations/notify/*"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

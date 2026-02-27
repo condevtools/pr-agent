@@ -1,0 +1,25 @@
+{
+  "name": "@mr-agent/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "dependencies": {
+    "@mr-agent/core": "workspace:*",
+    "@mr-agent/review": "workspace:*",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.24.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.3.2",
+    "typescript": "^5.9.3"
+  }
+}

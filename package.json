@@ -2,48 +2,20 @@
   "name": "mr-agent",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "imports": {
-    "#core": "./dist/core/index.js",
-    "#core/*": "./dist/core/*.js",
-    "#review": "./dist/review/index.js",
-    "#review/*": "./dist/review/*.js",
-    "#integrations/github": "./dist/integrations/github/index.js",
-    "#integrations/github/*": "./dist/integrations/github/*.js",
-    "#integrations/gitlab": "./dist/integrations/gitlab/index.js",
-    "#integrations/gitlab/*": "./dist/integrations/gitlab/*.js",
-    "#integrations/notify": "./dist/integrations/notify/index.js",
-    "#integrations/notify/*": "./dist/integrations/notify/*.js"
-  },
+  "packageManager": "pnpm@10.10.0",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "dev": "tsx src/main.ts",
-    "start": "node dist/main.js",
+    "build": "turbo run build",
+    "check": "turbo run check",
+    "test": "turbo run test",
+    "dev": "turbo run dev --filter=@mr-agent/api",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:restart": "docker compose restart mr-agent",
     "docker:logs": "docker compose logs -f mr-agent",
-    "docker:ps": "docker compose ps",
-    "test": "node --import tsx --test --test-force-exit tests/*.test.ts",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-force-exit tests/*.test.ts"
-  },
-  "dependencies": {
-    "@nestjs/common": "^11.0.1",
-    "@nestjs/core": "^11.0.1",
-    "@nestjs/platform-express": "^11.0.1",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "openai": "^4.77.0",
-    "probot": "^13.4.0",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
-    "zod": "^3.24.1"
+    "docker:ps": "docker compose ps"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "turbo": "^2.4.0"
   }
 }
