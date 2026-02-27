@@ -56,6 +56,36 @@ function mapSubscriptionStatus(
 }
 
 // ---------------------------------------------------------------------------
+// Transient error detection – return 500 so Stripe retries
+// ---------------------------------------------------------------------------
+
+function isTransientError(error: unknown): boolean {
+  if (error != null && typeof error === "object") {
+    // Prisma connection error codes
+    const code = (error as { code?: string }).code;
+    if (
+      code === "P1001" ||
+      code === "P1002" ||
+      code === "P1008" ||
+      code === "P1017"
+    ) {
+      return true;
+    }
+
+    const message =
+      (error as { message?: string }).message ?? "";
+    if (
+      message.includes("ECONNREFUSED") ||
+      message.includes("ETIMEDOUT") ||
+      message.includes("ECONNRESET")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Event handlers
 // ---------------------------------------------------------------------------
 
@@ -108,10 +138,20 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       stripeSubscriptionId,
     );
 
-    await db.subscription.create({
-      data: {
+    await db.subscription.upsert({
+      where: { stripeSubscriptionId },
+      create: {
         organizationId,
         stripeSubscriptionId,
+        status: mapSubscriptionStatus(subscription.status),
+        plan: planId,
+        currentPeriodStart: new Date(
+          subscription.current_period_start * 1000,
+        ),
+        currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      },
+      update: {
+        organizationId,
         status: mapSubscriptionStatus(subscription.status),
         plan: planId,
         currentPeriodStart: new Date(
@@ -156,24 +196,57 @@ async function handleSubscriptionUpdated(
     updateData.plan = plan;
   }
 
-  await db.subscription.update({
+  // Resolve organizationId: first try existing sub, then fallback via stripeCustomerId
+  const existingSub = await db.subscription.findUnique({
     where: { stripeSubscriptionId },
-    data: updateData,
+    select: { organizationId: true },
+  });
+
+  let organizationId = existingSub?.organizationId;
+
+  if (!organizationId) {
+    const stripeCustomerId =
+      typeof subscription.customer === "string"
+        ? subscription.customer
+        : subscription.customer?.id;
+
+    if (stripeCustomerId) {
+      const org = await db.organization.findFirst({
+        where: { stripeCustomerId },
+        select: { id: true },
+      });
+      organizationId = org?.id;
+    }
+  }
+
+  if (!organizationId) {
+    console.warn(
+      `[stripe/webhook] customer.subscription.updated – cannot resolve org for sub=${stripeSubscriptionId}`,
+    );
+    return;
+  }
+
+  await db.subscription.upsert({
+    where: { stripeSubscriptionId },
+    create: {
+      organizationId,
+      stripeSubscriptionId,
+      status,
+      plan: plan ?? "free",
+      currentPeriodStart: new Date(
+        subscription.current_period_start * 1000,
+      ),
+      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+    },
+    update: updateData,
   });
 
   // Also update the organization plan if the plan changed
   if (plan) {
-    const subRow = await db.subscription.findUnique({
-      where: { stripeSubscriptionId },
-      select: { organizationId: true },
+    await db.organization.update({
+      where: { id: organizationId },
+      data: { plan },
     });
-
-    if (subRow) {
-      await db.organization.update({
-        where: { id: subRow.organizationId },
-        data: { plan },
-      });
-    }
   }
 }
 
@@ -195,14 +268,14 @@ async function handleSubscriptionDeleted(
     return;
   }
 
-  // Mark subscription as canceled
-  await db.subscription.update({
+  // Mark subscription as canceled (updateMany silently handles missing record)
+  await db.subscription.updateMany({
     where: { stripeSubscriptionId },
     data: { status: "canceled" },
   });
 
   // Downgrade organization to free
-  const subRow = await db.subscription.findUnique({
+  const subRow = await db.subscription.findFirst({
     where: { stripeSubscriptionId },
     select: { organizationId: true },
   });
@@ -241,7 +314,7 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
     return;
   }
 
-  await db.subscription.update({
+  await db.subscription.updateMany({
     where: { stripeSubscriptionId },
     data: { status: "past_due" },
   });
@@ -273,7 +346,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
     return;
   }
 
-  await db.subscription.update({
+  await db.subscription.updateMany({
     where: { stripeSubscriptionId },
     data: { status: "active" },
   });
@@ -357,7 +430,16 @@ export async function POST(request: NextRequest) {
       `[stripe/webhook] Error processing event ${event.type}:`,
       error,
     );
-    // Return 200 anyway to prevent Stripe from retrying—log the error for investigation
+
+    // Transient errors (DB connection, network) → 500 so Stripe retries
+    if (isTransientError(error)) {
+      return NextResponse.json(
+        { received: true, error: "Transient processing error" },
+        { status: 500 },
+      );
+    }
+
+    // Permanent errors → 200 to prevent infinite retries
     return NextResponse.json({ received: true, error: "Processing error" });
   }
 
