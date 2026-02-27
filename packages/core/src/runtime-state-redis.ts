@@ -200,6 +200,50 @@ export class RedisRuntimeStateStore {
     return count;
   }
 
+  /**
+   * Atomic check-and-set for dedup: uses Redis SET NX to atomically check
+   * if a key exists and create it if not. Returns true if the key already
+   * existed (i.e., the request IS a duplicate).
+   */
+  async checkAndMarkDuplicateAsync(
+    scope: string,
+    key: string,
+    ttlMs: number,
+  ): Promise<boolean> {
+    const redisKey = toRedisKey(scope, key);
+    const now = nowMs();
+    const serialized = JSON.stringify({
+      value: { timestamp: now, expiresAt: now + ttlMs },
+      expiresAt: now + ttlMs,
+      updatedAt: now,
+    });
+    try {
+      const result = await this.redis.set(redisKey, serialized, "PX", ttlMs, "NX");
+      // result === "OK" means key was newly set → NOT a duplicate
+      // result === null means key already existed → IS a duplicate
+      return result !== "OK";
+    } catch (error) {
+      logCore("warn", "runtime_state.redis.check_and_mark_error", {
+        scope,
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false; // On error, allow the request to proceed
+    }
+  }
+
+  /**
+   * Ping the Redis server. Returns true if connection is healthy.
+   */
+  async ping(): Promise<boolean> {
+    try {
+      const result = await this.redis.ping();
+      return result === "PONG";
+    } catch {
+      return false;
+    }
+  }
+
   async closeAsync(): Promise<void> {
     try {
       await this.redis.quit();

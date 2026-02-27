@@ -150,6 +150,13 @@ export interface MinimalGitHubOctokit {
       sha?: string;
       branch?: string;
     }): Promise<unknown>;
+    getCollaboratorPermissionLevel?(params: {
+      owner: string;
+      repo: string;
+      username: string;
+    }): Promise<{
+      data: { permission: "admin" | "write" | "read" | "none" };
+    }>;
   };
   pulls: {
     get(params: {

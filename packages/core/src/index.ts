@@ -43,9 +43,11 @@ export {
 } from "./rate-limit.js";
 export {
   assertRuntimeStateBackendReady,
+  checkAndMarkDuplicateAsync,
   deleteRuntimeStateValue,
   loadRuntimeStateValue,
   loadRuntimeStateValueAsync,
+  pingRuntimeStateBackend,
   prepareRuntimeStateBackend,
   resolveRuntimeStateBackend,
   saveRuntimeStateValue,

@@ -33,7 +33,8 @@ export class GithubWebhookService {
     const normalizedHeaders = normalizeHeaderRecord(params.headers);
     const rawBody =
       readRawBody(params.rawBody) ??
-      buildFallbackRawBodyForSignatureSkip(params.payload);
+      buildFallbackRawBodyForSignatureSkip(params.payload) ??
+      buildFallbackRawBodyForReplay(params.payload, params.trustReplay);
 
     if (!rawBody) {
       throw new BadWebhookRequestError(
@@ -56,6 +57,31 @@ function buildFallbackRawBodyForSignatureSkip(
 ): string | undefined {
   const skipSignature = parseBooleanEnv(readOptionalStringEnv("GITHUB_WEBHOOK_SKIP_SIGNATURE"));
   if (!skipSignature || body === undefined) {
+    return undefined;
+  }
+
+  if (typeof body === "string") {
+    return body;
+  }
+
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * When replaying a stored webhook event the original rawBody may not have been
+ * persisted. Since signature verification is skipped during replay anyway, we
+ * can safely reconstruct a rawBody from the parsed payload — it is only needed
+ * for the body-size guard in the integration layer.
+ */
+function buildFallbackRawBodyForReplay(
+  body: unknown,
+  trustReplay?: boolean,
+): string | undefined {
+  if (!trustReplay || body === undefined) {
     return undefined;
   }
 

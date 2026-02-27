@@ -146,6 +146,53 @@ export async function handleGitHubIssueCommentCommand(params: {
   const appSlug = readOptionalStringEnv("GITHUB_APP_SLUG");
   const configuredBotLogin = readOptionalStringEnv("GITHUB_BOT_LOGIN");
   const botLogin = configuredBotLogin ?? (appSlug ? `${appSlug}[bot]` : "");
+
+  // --- Collaborator permission check for high-impact commands ---
+  const HIGH_IMPACT_COMMANDS = [
+    "/implement",
+    "/auto_approve",
+    "/auto-approve",
+    "/improve",
+    "/fix",
+  ];
+  const isHighImpact = HIGH_IMPACT_COMMANDS.some((cmd) =>
+    body.toLowerCase().startsWith(cmd),
+  );
+
+  if (isHighImpact && commentUserLogin) {
+    const octokit = params.context.octokit;
+    if (octokit.repos.getCollaboratorPermissionLevel) {
+      try {
+        const { data } =
+          await octokit.repos.getCollaboratorPermissionLevel({
+            owner: params.owner,
+            repo: params.repo,
+            username: commentUserLogin,
+          });
+        if (data.permission !== "admin" && data.permission !== "write") {
+          await octokit.issues.createComment({
+            owner: params.owner,
+            repo: params.repo,
+            issue_number: params.issueNumber,
+            body: localizeText(
+              {
+                zh: `@${commentUserLogin} 此命令需要仓库的 write 以上权限。`,
+                en: `@${commentUserLogin} This command requires write access to the repository.`,
+              },
+              locale,
+            ),
+          });
+          return {
+            ok: true,
+            message: `command rejected: user ${commentUserLogin} has ${data.permission} access, write required`,
+          };
+        }
+      } catch {
+        // If permission check fails (e.g. API not available), fall through
+        // and let rate-limiting be the safety net.
+      }
+    }
+  }
   let reviewBehaviorPromise:
     | Promise<Awaited<ReturnType<typeof resolveGitHubReviewBehaviorPolicy>>>
     | undefined;
@@ -714,6 +761,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           repo: params.repo,
           pullNumber: params.issueNumber,
           locale,
+          botLogin,
           throwOnError,
         });
         return { ok: true, message: "implement command triggered" };
@@ -1521,16 +1569,42 @@ async function runGitHubAutoApproveCommand(params: {
     let riskLevel = "high";
     let reason = "";
     if (context.octokit.issues.listComments) {
-      const comments = await context.octokit.issues.listComments({
+      // Paginate backwards from the latest comments to find the bot's response
+      let botComment: { body?: string | null } | undefined;
+      const MAX_PAGES = 10;
+      // First, get page 1 to discover total count via pagination
+      const firstPage = await context.octokit.issues.listComments({
         owner,
         repo,
         issue_number: pullNumber,
         per_page: 100,
         page: 1,
       });
-      const botComment = [...comments.data]
-        .reverse()
-        .find((c) => c.body?.includes("AI Auto-Approve"));
+      const totalOnFirstPage = firstPage.data.length;
+
+      if (totalOnFirstPage < 100) {
+        // All comments fit in one page — search from the end
+        botComment = [...firstPage.data]
+          .reverse()
+          .find((c) => c.body?.includes("AI Auto-Approve"));
+      } else {
+        // Multiple pages exist — scan backwards from the latest pages
+        for (let page = MAX_PAGES; page >= 1 && !botComment; page--) {
+          const pageData = page === 1
+            ? firstPage
+            : await context.octokit.issues.listComments({
+                owner,
+                repo,
+                issue_number: pullNumber,
+                per_page: 100,
+                page,
+              });
+          if (pageData.data.length === 0) continue;
+          botComment = [...pageData.data]
+            .reverse()
+            .find((c) => c.body?.includes("AI Auto-Approve"));
+        }
+      }
       if (botComment?.body) {
         // Try JSON.parse first, fall back to regex
         const jsonBlockMatch = botComment.body.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)

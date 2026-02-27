@@ -17,9 +17,10 @@ export async function runGitHubImplementCommand(params: {
   repo: string;
   pullNumber: number;
   locale: UiLocale;
+  botLogin?: string;
   throwOnError?: boolean;
 }): Promise<void> {
-  const { context, owner, repo, pullNumber, locale } = params;
+  const { context, owner, repo, pullNumber, locale, botLogin } = params;
   const octokit = context.octokit;
 
   if (!octokit.pulls.listReviewComments) {
@@ -72,7 +73,7 @@ export async function runGitHubImplementCommand(params: {
       repo,
       pullNumber,
     );
-    const pendingSuggestions = extractPendingSuggestions(comments);
+    const pendingSuggestions = extractPendingSuggestions(comments, botLogin);
 
     if (pendingSuggestions.length === 0) {
       await octokit.issues.createComment({
@@ -179,13 +180,23 @@ const SUGGESTION_BLOCK_RE = /```suggestion\n([\s\S]*?)```/g;
 
 function extractPendingSuggestions(
   comments: GitHubReviewCommentSummary[],
+  botLogin?: string,
 ): ParsedSuggestion[] {
   const results: ParsedSuggestion[] = [];
+  const normalizedBotLogin = botLogin?.trim().toLowerCase();
 
   for (const comment of comments) {
     // Only apply suggestions from Bot accounts
     if (comment.user?.type !== "Bot") {
       continue;
+    }
+
+    // When bot identity is known, only accept suggestions from THIS bot
+    if (normalizedBotLogin) {
+      const commentLogin = (comment.user?.login ?? "").trim().toLowerCase();
+      if (commentLogin !== normalizedBotLogin) {
+        continue;
+      }
     }
 
     const body = comment.body ?? "";

@@ -1,12 +1,12 @@
 import { headers } from "next/headers";
-import { auth } from "@/lib/auth";
+import { getAuth } from "@/lib/auth";
 import { resolveBillingOrganizationForUser } from "@/lib/organization-billing";
 import { BillingClient } from "./billing-client";
 
 type PlanId = "free" | "pro" | "enterprise";
 
 export default async function BillingPage() {
-  const session = await auth.api.getSession({
+  const session = await getAuth().api.getSession({
     headers: await headers(),
   });
 

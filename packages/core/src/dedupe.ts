@@ -4,6 +4,7 @@ import {
   loadRuntimeStateValue,
   saveRuntimeStateValueAsync,
   saveRuntimeStateValue,
+  checkAndMarkDuplicateAsync,
 } from "./runtime-state.js";
 import { nowMs } from "./clock.js";
 
@@ -62,30 +63,9 @@ export async function isDuplicateRequestAsync(
   }
 
   const safeTtlMs = Math.max(1, Math.floor(ttlMs));
-  const now = nowMs();
-  const expiresAt = now + safeTtlMs;
 
-  const persisted = await loadRuntimeStateValueAsync<DedupeStateRecord>(
-    DEDUPE_STATE_SCOPE,
-    stateKey,
-    now,
-  );
-  if (persisted && persisted.expiresAt > now && now - persisted.timestamp < safeTtlMs) {
-    return true;
-  }
-
-  await saveRuntimeStateValueAsync({
-    scope: DEDUPE_STATE_SCOPE,
-    key: stateKey,
-    value: {
-      timestamp: now,
-      expiresAt,
-    },
-    expiresAt,
-    maxEntries: MAX_DEDUPE_STATE_ENTRIES,
-  });
-
-  return false;
+  // Use atomic check-and-set which leverages SET NX on Redis
+  return checkAndMarkDuplicateAsync(DEDUPE_STATE_SCOPE, stateKey, safeTtlMs);
 }
 
 export function clearDuplicateRecord(key: string): void {

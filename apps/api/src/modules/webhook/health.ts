@@ -1,4 +1,4 @@
-import { parseBooleanEnv, readNumberEnv } from "@mr-agent/core";
+import { parseBooleanEnv, readNumberEnv, pingRuntimeStateBackend } from "@mr-agent/core";
 import { probeAiProviderConnectivity, type AiProviderProbeResult } from "@mr-agent/review";
 import { incrementMetricCounter } from "./metrics-runtime.js";
 
@@ -13,6 +13,7 @@ export interface HealthStatus {
   mode: string;
   checks?: {
     ai: AiProviderProbeResult;
+    runtimeState?: { ok: boolean };
     webhook?: WebhookHealthCheck;
   };
 }
@@ -42,12 +43,16 @@ export async function buildHealthStatus(params: {
     return base;
   }
 
-  const ai = await probeAiProviderConnectivity({
-    timeoutMs: readNumberEnv("HEALTHCHECK_AI_TIMEOUT_MS", 5_000),
-  });
+  const [ai, runtimeStateOk] = await Promise.all([
+    probeAiProviderConnectivity({
+      timeoutMs: readNumberEnv("HEALTHCHECK_AI_TIMEOUT_MS", 5_000),
+    }),
+    pingRuntimeStateBackend(),
+  ]);
 
   const checks: HealthStatus["checks"] = {
     ai,
+    runtimeState: { ok: runtimeStateOk },
   };
   if (params.webhook) {
     checks.webhook = params.webhook;
@@ -56,7 +61,7 @@ export async function buildHealthStatus(params: {
   const webhookOk = params.webhook ? params.webhook.configured : true;
   return {
     ...base,
-    ok: ai.ok && webhookOk,
+    ok: ai.ok && runtimeStateOk && webhookOk,
     checks,
   };
 }

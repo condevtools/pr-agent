@@ -211,6 +211,66 @@ export function getRuntimeStateScopeEntryCount(scope: string): number {
   return getRuntimeStateStore().getScopeEntryCount(scopeName);
 }
 
+/**
+ * Atomic check-and-mark for dedup: on Redis, uses SET NX for atomicity.
+ * On other backends, falls back to non-atomic load+save (acceptable for
+ * single-process deployments).
+ * Returns `true` if the key already exists (i.e., IS a duplicate).
+ */
+export async function checkAndMarkDuplicateAsync(
+  scope: string,
+  key: string,
+  ttlMs: number,
+): Promise<boolean> {
+  const scopeName = normalizeScope(scope);
+  const stateKey = normalizeKey(key);
+  if (!scopeName || !stateKey) {
+    return false;
+  }
+
+  const store = getRuntimeStateStore();
+  if (store instanceof RedisRuntimeStateStore) {
+    return store.checkAndMarkDuplicateAsync(scopeName, stateKey, ttlMs);
+  }
+
+  // Non-Redis backends: use existing load+save (single-process safe)
+  const now = nowMs();
+  const existing = store.loadValue<{ timestamp: number; expiresAt: number }>(
+    scopeName,
+    stateKey,
+    now,
+  );
+  if (existing && existing.expiresAt > now) {
+    return true;
+  }
+
+  store.saveValue({
+    scope: scopeName,
+    key: stateKey,
+    value: { timestamp: now, expiresAt: now + ttlMs },
+    expiresAt: now + ttlMs,
+    maxEntries: 20_000,
+  });
+  return false;
+}
+
+/**
+ * Ping the runtime state backend to check connectivity.
+ * Returns true if the backend is reachable.
+ */
+export async function pingRuntimeStateBackend(): Promise<boolean> {
+  const backend = getRuntimeStateBackend();
+  if (backend === "redis") {
+    try {
+      return await getRedisStore().ping();
+    } catch {
+      return false;
+    }
+  }
+  // Memory/file/sqlite backends are always considered reachable
+  return true;
+}
+
 function getRuntimeStateStore():
   | InMemoryRuntimeStateStore
   | FileRuntimeStateStore

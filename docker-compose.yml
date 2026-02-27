@@ -10,3 +10,45 @@ services:
     volumes:
       - ./data:/data
       - ./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgresql:
+    image: postgres:16-alpine
+    container_name: mr-agent-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mr-agent
+      POSTGRES_USER: mr-agent
+      POSTGRES_PASSWORD: mr-agent
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mr-agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: mr-agent-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgresql-data:
+  redis-data:

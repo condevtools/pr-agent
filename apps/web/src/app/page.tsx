@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { headers } from "next/headers";
-import { auth } from "@/lib/auth";
 
 type IconProps = { className?: string };
 
@@ -792,10 +791,16 @@ function Footer() {
 
 /* ─── Page ─── */
 export default async function Home() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-  const signedIn = Boolean(session);
+  let signedIn = false;
+  try {
+    const { getAuth } = await import("@/lib/auth");
+    const session = await getAuth().api.getSession({
+      headers: await headers(),
+    });
+    signedIn = Boolean(session);
+  } catch {
+    // Auth not configured (missing env vars / no DB) – render as signed-out
+  }
 
   return (
     <div className="flex min-h-screen w-full flex-col bg-[var(--color-page-bg)]">

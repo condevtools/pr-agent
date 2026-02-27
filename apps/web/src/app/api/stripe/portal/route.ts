@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { getAuth } from "@/lib/auth";
 import { getStripeClient } from "@/lib/stripe";
 import {
   canManageBilling,
@@ -13,7 +13,7 @@ interface PortalRequestBody {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({
+    const session = await getAuth().api.getSession({
       headers: request.headers,
     });
     if (!session) {

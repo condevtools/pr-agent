@@ -73,6 +73,7 @@ model Account {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@map("account")
 }
 
@@ -89,6 +90,7 @@ model Session {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@map("session")
 }
 
@@ -114,6 +116,7 @@ model Organization {
   logo                  String?
   metadata              String?
   createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
 
   // Business fields (additionalFields in Better Auth config)
   plan                  Plan      @default(free)
@@ -131,15 +134,17 @@ model Organization {
 }
 
 model Member {
-  id             String   @id
-  userId         String   @map("user_id")
-  organizationId String   @map("organization_id")
-  role           String   @default("member")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id             String     @id
+  userId         String     @map("user_id")
+  organizationId String     @map("organization_id")
+  role           MemberRole @default(member)
+  createdAt      DateTime   @default(now()) @map("created_at")
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, organizationId])
+  @@index([organizationId])
   @@map("member")
 }
 
@@ -155,6 +160,7 @@ model Invitation {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("invitation")
 }
 
@@ -174,6 +180,7 @@ model Installation {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("installations")
 }
 
@@ -223,5 +230,6 @@ model Subscription {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@index([organizationId])
   @@map("subscriptions")
 }

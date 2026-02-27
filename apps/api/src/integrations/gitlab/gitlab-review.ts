@@ -2051,20 +2051,102 @@ async function handleGitLabNoteWebhook(params: {
           );
           return { ok: true, message: "auto_approve command ignored by policy" };
         }
-        // GitLab auto-approve: run risk assessment via AI
-        const riskQuestion = buildAutoApproveQuestion("MR", locale);
-        await runGitLabAsk({
-          payload: mergePayload,
-          headers: params.headers,
-          logger: params.logger,
-          question: riskQuestion,
-          trigger: "comment-command",
-          customRules: policy.customRules,
-          includeCiChecks: policy.includeCiChecks,
-          commentTitle: "AI Auto-Approve",
-          displayQuestion: "/auto_approve",
-          managedCommentKey: buildManagedCommandCommentKey("auto-approve", riskQuestion),
-        });
+        try {
+          // Step 1: Run AI risk assessment
+          const riskQuestion = buildAutoApproveQuestion("MR", locale);
+          await runGitLabAsk({
+            payload: mergePayload,
+            headers: params.headers,
+            logger: params.logger,
+            question: riskQuestion,
+            trigger: "comment-command",
+            customRules: policy.customRules,
+            includeCiChecks: policy.includeCiChecks,
+            commentTitle: "AI Auto-Approve",
+            displayQuestion: "/auto_approve",
+            managedCommentKey: buildManagedCommandCommentKey("auto-approve", riskQuestion),
+          });
+
+          // Step 2: Retrieve the bot's response and parse risk level
+          let riskLevel = "high";
+          let reason = "";
+          const notesResp = await gitLabApiRequest({
+            url: `${target.baseUrl}/api/v4/projects/${encodeURIComponent(target.projectId)}/merge_requests/${target.mrId}/notes?per_page=100&sort=desc&order_by=created_at`,
+            token: gitlabToken,
+          });
+          if (notesResp.ok) {
+            const notes = (await notesResp.json()) as Array<{ body?: string }>;
+            const botNote = notes.find((n) => n.body?.includes("AI Auto-Approve"));
+            if (botNote?.body) {
+              const jsonBlockMatch = botNote.body.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/)
+                ?? botNote.body.match(/(\{[\s\S]*?"risk"[\s\S]*?\})/);
+              if (jsonBlockMatch?.[1]) {
+                try {
+                  const parsed = JSON.parse(jsonBlockMatch[1]) as { risk?: string; reason?: string };
+                  riskLevel = (parsed.risk ?? "high").toLowerCase();
+                  reason = parsed.reason ?? "";
+                } catch {
+                  // JSON parse failed — keep defaults
+                }
+              }
+            }
+          }
+
+          // Step 3: Approve MR or post rejection
+          if (riskLevel === "none" || riskLevel === "low") {
+            const approveResp = await gitLabApiRequest({
+              url: `${target.baseUrl}/api/v4/projects/${encodeURIComponent(target.projectId)}/merge_requests/${target.mrId}/approve`,
+              token: gitlabToken,
+              method: "POST",
+            });
+            const approvedSuccessfully = approveResp.ok;
+            const approveMsg = approvedSuccessfully
+              ? localizeText(
+                  {
+                    zh: `AI 自动批准 — 风险等级: **${riskLevel}**\n\n${reason}`,
+                    en: `AI Auto-Approved — Risk level: **${riskLevel}**\n\n${reason}`,
+                  },
+                  locale,
+                )
+              : localizeText(
+                  {
+                    zh: `## AI Auto-Approve\n\n风险评估为 **${riskLevel}**，但 MR 审批 API 调用失败 (HTTP ${approveResp.status})。请检查 bot 令牌是否具有审批权限。\n\n${reason}`,
+                    en: `## AI Auto-Approve\n\nRisk assessed as **${riskLevel}**, but MR approval API call failed (HTTP ${approveResp.status}). Please check that the bot token has approval permissions.\n\n${reason}`,
+                  },
+                  locale,
+                );
+            await publishGitLabGeneralComment(gitlabToken, target, approveMsg);
+          } else {
+            await publishGitLabGeneralComment(
+              gitlabToken,
+              target,
+              localizeText(
+                {
+                  zh: `## AI Auto-Approve\n\n风险等级为 **${riskLevel}**，不满足自动批准条件。\n\n${reason}`,
+                  en: `## AI Auto-Approve\n\nRisk level is **${riskLevel}** — does not meet auto-approve criteria.\n\n${reason}`,
+                },
+                locale,
+              ),
+            );
+          }
+        } catch (error) {
+          const msg = getPublicErrorMessage(error);
+          params.logger.error(
+            { projectId: target.projectId, mrId: target.mrId, error: msg },
+            "GitLab auto_approve failed",
+          );
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            localizeText(
+              {
+                zh: `## AI Auto-Approve\n\n自动批准失败：${msg}`,
+                en: `## AI Auto-Approve\n\nAuto-approve failed: ${msg}`,
+              },
+              locale,
+            ),
+          );
+        }
         return { ok: true, message: "auto_approve command triggered" };
       },
     ),
