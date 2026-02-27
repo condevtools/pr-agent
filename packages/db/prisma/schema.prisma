@@ -233,3 +233,12 @@ model Subscription {
   @@index([organizationId])
   @@map("subscriptions")
 }
+
+model ProcessedWebhookEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventId     String   @unique @map("event_id")
+  eventType   String   @map("event_type")
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@map("processed_webhook_events")
+}

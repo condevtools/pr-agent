@@ -31,6 +31,47 @@ async function tryGetDb() {
 }
 
 // ---------------------------------------------------------------------------
+// Event deduplication
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if this Stripe event has already been processed.
+ * Returns `true` if the event was already processed (should skip).
+ */
+async function isEventAlreadyProcessed(
+  db: NonNullable<Awaited<ReturnType<typeof tryGetDb>>>,
+  eventId: string,
+): Promise<boolean> {
+  try {
+    const existing = await db.processedWebhookEvent.findUnique({
+      where: { eventId },
+      select: { eventId: true },
+    });
+    return existing != null;
+  } catch {
+    // If dedup table doesn't exist yet (pre-migration), allow through
+    return false;
+  }
+}
+
+/**
+ * Record that a Stripe event has been successfully processed.
+ */
+async function markEventProcessed(
+  db: NonNullable<Awaited<ReturnType<typeof tryGetDb>>>,
+  eventId: string,
+  eventType: string,
+): Promise<void> {
+  try {
+    await db.processedWebhookEvent.create({
+      data: { eventId, eventType },
+    });
+  } catch {
+    // Unique constraint violation means another worker processed it first — fine
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Map Stripe price IDs back to plan names
 // ---------------------------------------------------------------------------
 
@@ -112,14 +153,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     `[stripe/webhook] checkout.session.completed – org=${organizationId} plan=${planId}`,
   );
 
-  const db = await tryGetDb();
-
-  if (!db) {
-    console.warn(
-      "[stripe/webhook] Skipping DB operations for checkout.session.completed",
-    );
-    return;
-  }
+  const db = await requireDb("checkout.session.completed");
+  if (!db) return;
 
   // Update organization with Stripe customer ID and plan
   await db.organization.update({
@@ -175,14 +210,8 @@ async function handleSubscriptionUpdated(
     `[stripe/webhook] customer.subscription.updated – sub=${stripeSubscriptionId} status=${status} plan=${plan ?? "unknown"}`,
   );
 
-  const db = await tryGetDb();
-
-  if (!db) {
-    console.warn(
-      "[stripe/webhook] Skipping DB operations for customer.subscription.updated",
-    );
-    return;
-  }
+  const db = await requireDb("customer.subscription.updated");
+  if (!db) return;
 
   const updateData: Record<string, unknown> = {
     status,
@@ -259,14 +288,8 @@ async function handleSubscriptionDeleted(
     `[stripe/webhook] customer.subscription.deleted – sub=${stripeSubscriptionId}`,
   );
 
-  const db = await tryGetDb();
-
-  if (!db) {
-    console.warn(
-      "[stripe/webhook] Skipping DB operations for customer.subscription.deleted",
-    );
-    return;
-  }
+  const db = await requireDb("customer.subscription.deleted");
+  if (!db) return;
 
   // Mark subscription as canceled (updateMany silently handles missing record)
   await db.subscription.updateMany({
@@ -305,14 +328,8 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
     `[stripe/webhook] invoice.payment_failed – sub=${stripeSubscriptionId}`,
   );
 
-  const db = await tryGetDb();
-
-  if (!db) {
-    console.warn(
-      "[stripe/webhook] Skipping DB operations for invoice.payment_failed",
-    );
-    return;
-  }
+  const db = await requireDb("invoice.payment_failed");
+  if (!db) return;
 
   await db.subscription.updateMany({
     where: { stripeSubscriptionId },
@@ -337,19 +354,38 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
     `[stripe/webhook] invoice.paid – sub=${stripeSubscriptionId}`,
   );
 
-  const db = await tryGetDb();
-
-  if (!db) {
-    console.warn(
-      "[stripe/webhook] Skipping DB operations for invoice.paid",
-    );
-    return;
-  }
+  const db = await requireDb("invoice.paid");
+  if (!db) return;
 
   await db.subscription.updateMany({
     where: { stripeSubscriptionId },
     data: { status: "active" },
   });
+}
+
+// ---------------------------------------------------------------------------
+// DB availability helper
+// ---------------------------------------------------------------------------
+
+/**
+ * When DATABASE_URL is set but tryGetDb() returns null, the DB is expected
+ * but unavailable — throw so the caller returns 500 and Stripe retries.
+ * When DATABASE_URL is not set, DB operations are truly optional.
+ */
+async function requireDb(eventType: string) {
+  const db = await tryGetDb();
+  if (db) return db;
+
+  if (process.env.DATABASE_URL) {
+    throw new Error(
+      `[stripe/webhook] DATABASE_URL is set but DB is unavailable for ${eventType} — returning 500 for Stripe retry`,
+    );
+  }
+
+  console.warn(
+    `[stripe/webhook] Skipping DB operations for ${eventType} (no DATABASE_URL)`,
+  );
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +430,17 @@ export async function POST(request: NextRequest) {
     `[stripe/webhook] Received event: ${event.type} (id=${event.id})`,
   );
 
+  // Dedup check: skip if this event was already processed
+  const db = await tryGetDb();
+  if (db) {
+    if (await isEventAlreadyProcessed(db, event.id)) {
+      console.log(
+        `[stripe/webhook] Skipping duplicate event: ${event.type} (id=${event.id})`,
+      );
+      return NextResponse.json({ received: true, deduplicated: true });
+    }
+  }
+
   try {
     switch (event.type) {
       case "checkout.session.completed":
@@ -424,6 +471,11 @@ export async function POST(request: NextRequest) {
 
       default:
         console.log(`[stripe/webhook] Unhandled event type: ${event.type}`);
+    }
+
+    // Record successful processing for dedup
+    if (db) {
+      await markEventProcessed(db, event.id, event.type);
     }
   } catch (error) {
     console.error(
