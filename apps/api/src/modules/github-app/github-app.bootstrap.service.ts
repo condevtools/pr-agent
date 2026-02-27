@@ -1,6 +1,8 @@
 import {
+  Inject,
   Injectable,
   Logger,
+  Optional,
   OnModuleInit,
 } from "@nestjs/common";
 import { HttpAdapterHost } from "@nestjs/core";
@@ -14,11 +16,18 @@ import { app as githubApp } from "../../app.js";
 export class GithubAppBootstrapService implements OnModuleInit {
   private readonly logger = new Logger(GithubAppBootstrapService.name);
 
-  constructor(private readonly httpAdapterHost: HttpAdapterHost) {}
+  constructor(
+    @Optional()
+    @Inject(HttpAdapterHost)
+    private readonly httpAdapterHost?: HttpAdapterHost,
+  ) {}
 
   onModuleInit(): void {
-    const httpAdapter = this.httpAdapterHost.httpAdapter;
+    const httpAdapter = this.httpAdapterHost?.httpAdapter;
     if (!httpAdapter) {
+      this.logger.warn(
+        "HTTP adapter is not ready; skip mounting GitHub App webhook middleware.",
+      );
       return;
     }
 
