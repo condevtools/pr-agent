@@ -40,6 +40,7 @@ import {
   parseGenerateTestsCommand,
   parseHelpCommand,
   parseImproveCommand,
+  parseMentionCommand,
   parseReflectCommand,
   parseReviewCommand,
   parseSimilarIssueCommand,
@@ -2196,6 +2197,46 @@ async function handleGitLabNoteWebhook(params: {
           enableAutoLabel: policy.autoLabelEnabled,
         });
         return { ok: true, message: "note review triggered" };
+      },
+    ),
+    // @mention handler — treat "@bot-name <question>" as "/ask <question>"
+    registerCommand(
+      "mention",
+      () => {
+        const botLogin = readOptionalStringEnv("GITLAB_BOT_LOGIN") ?? "mr-agent";
+        const parsed = parseMentionCommand(body, botLogin);
+        return parsed.matched ? parsed : undefined;
+      },
+      async (mention) => {
+        const limited = await hitRateLimit("ask", "mention-as-ask rate limited");
+        if (limited) {
+          return limited;
+        }
+        if (!policy.askCommandEnabled) {
+          await publishGitLabGeneralComment(
+            gitlabToken,
+            target,
+            buildCommandDisabledByPolicyMessage({
+              command: "ask",
+              policyPath: ".mr-agent.yml -> review.askCommandEnabled=false",
+              locale,
+            }),
+          );
+          return { ok: true, message: "mention-as-ask command ignored by policy" };
+        }
+
+        await runGitLabAsk({
+          payload: mergePayload,
+          headers: params.headers,
+          logger: params.logger,
+          question: mention.question,
+          trigger: "comment-command",
+          customRules: policy.customRules,
+          includeCiChecks: policy.includeCiChecks,
+          enableConversationContext: true,
+          managedCommentKey: buildManagedCommandCommentKey("ask", mention.question),
+        });
+        return { ok: true, message: "mention command triggered" };
       },
     ),
   ];
