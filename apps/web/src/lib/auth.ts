@@ -2,15 +2,24 @@ import { betterAuth } from "better-auth";
 import { organization } from "better-auth/plugins";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { createDbClient } from "@mr-agent/db";
+import { readRequiredEnv, resolveAppUrl } from "./env";
 
 const prisma = createDbClient();
 
 export const auth = betterAuth({
+  baseURL: resolveAppUrl(),
+  secret: readRequiredEnv("BETTER_AUTH_SECRET", {
+    allowPlaceholderInNextBuild: true,
+  }),
   database: prismaAdapter(prisma, { provider: "postgresql" }),
   socialProviders: {
     github: {
-      clientId: process.env.GITHUB_CLIENT_ID!,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+      clientId: readRequiredEnv("GITHUB_CLIENT_ID", {
+        allowPlaceholderInNextBuild: true,
+      }),
+      clientSecret: readRequiredEnv("GITHUB_CLIENT_SECRET", {
+        allowPlaceholderInNextBuild: true,
+      }),
     },
   },
   plugins: [

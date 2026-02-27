@@ -255,7 +255,7 @@ graph LR
 | GitHub App | Probot 13 |
 | AI Client | OpenAI SDK 4 (also used for compatible providers) |
 | Validation | Zod 3 |
-| State Store | In-memory / JSON file / SQLite (Node.js built-in `node:sqlite`) |
+| State Store | In-memory / JSON file / SQLite / Redis |
 | Container | Docker (multi-stage build) |
 
 ---
@@ -264,107 +264,28 @@ graph LR
 
 ```
 mr-agent/
-├── src/
-│   ├── main.ts                     # NestJS bootstrap & server startup
-│   ├── app.module.ts               # Root module (imports all sub-modules)
-│   ├── app.controller.ts           # Health, metrics, replay endpoints
-│   ├── app.ts                      # Probot event handlers (GitHub App)
-│   │
-│   ├── core/                       # Shared infrastructure
-│   │   ├── ask-session.ts          #   Ask multi-turn session management
-│   │   ├── cache.ts                #   TTL-based in-memory cache
-│   │   ├── clock.ts                #   Clock abstraction (testable time)
-│   │   ├── dedupe.ts               #   FNV hash request deduplication
-│   │   ├── env.ts                  #   Environment variable helpers
-│   │   ├── errors.ts               #   Typed error classes (4xx/5xx)
-│   │   ├── fnv.ts                  #   FNV-1a hash implementation
-│   │   ├── http.ts                 #   HTTP client with retry & backoff
-│   │   ├── i18n.ts                 #   Locale detection (zh/en)
-│   │   ├── logger.ts               #   Core structured logging
-│   │   ├── path.ts                 #   Path encoding utilities
-│   │   ├── rate-limit.ts           #   Per-scope rate limiting
-│   │   ├── runtime-state.ts        #   Pluggable state backend
-│   │   ├── runtime-state-file.ts   #   File-based state persistence
-│   │   ├── runtime-state-in-memory.ts # In-memory state store
-│   │   ├── runtime-state-snapshot.ts #  State snapshot merge utilities
-│   │   ├── runtime-state-sqlite.ts #   SQLite state persistence
-│   │   └── secret-patterns.ts      #   Regex-based secret detection
-│   │
-│   ├── review/                     # AI review domain
-│   │   ├── ai-reviewer.ts          #   Multi-provider AI abstraction
-│   │   ├── ai-prompts.ts           #   System & user prompt builders
-│   │   ├── ai-concurrency.ts       #   Concurrent request limiter
-│   │   ├── ai-client-cache.ts      #   OpenAI client instance cache
-│   │   ├── ai-provider-anthropic.ts #  Anthropic provider adapter
-│   │   ├── ai-provider-gemini.ts   #   Gemini provider adapter
-│   │   ├── ai-provider-json.ts     #   JSON response parser
-│   │   ├── ai-result-normalization.ts # Result normalization & severity
-│   │   ├── patch.ts                #   Git diff parsing & line mapping
-│   │   ├── report-renderer.ts      #   Markdown report formatting
-│   │   ├── review-policy.ts        #   Code file detection & line mapping
-│   │   ├── review-types.ts         #   Data models
-│   │   ├── review-utils.ts         #   Review helper utilities
-│   │   └── similar-issue.ts        #   Similar issue search logic
-│   │
-│   ├── integrations/
-│   │   ├── github/                 #   GitHub review, policy, content
-│   │   │   ├── github-review.ts    #     Review orchestration
-│   │   │   ├── github-review-types.ts #  Interfaces & type definitions
-│   │   │   ├── github-command-workflows.ts # /ask, /describe, /changelog workflows
-│   │   │   ├── github-issue-comment-command.ts # Comment command dispatch
-│   │   │   ├── github-issue-triage.ts #  Issue auto-triage
-│   │   │   ├── github-rest-client.ts #   REST-based Octokit client
-│   │   │   ├── github-content.ts   #     File content fetching
-│   │   │   ├── github-policy.ts    #     Policy checks & validation
-│   │   │   ├── github-policy-config.ts # Policy YAML parsing & caching
-│   │   │   ├── github-policy-templates.ts # Template discovery & sections
-│   │   │   ├── github-webhook.ts   #     Webhook event dispatching
-│   │   │   └── github-lifecycle.ts #     PR/Issue lifecycle workflows
-│   │   ├── gitlab/                 #   GitLab review & command handling
-│   │   │   ├── gitlab-review.ts    #     Review orchestration
-│   │   │   ├── gitlab-command-workflows.ts # /ask, /describe workflows
-│   │   │   ├── gitlab-http.ts      #     GitLab API HTTP client
-│   │   │   └── gitlab-webhook-security.ts # Webhook signature verification
-│   │   ├── shared/                 #   Cross-platform shared utilities
-│   │   │   ├── managed-comments.ts #     Comment upsert & dedup markers
-│   │   │   ├── review-triggers.ts  #     Trigger classification & TTL
-│   │   │   ├── feedback-signals.ts #     Review feedback learning
-│   │   │   ├── secret-scan.ts      #     Secret leak scanning
-│   │   │   ├── auto-labels.ts      #     Auto-labeling inference
-│   │   │   ├── similar-issue.ts    #     Similar issue search
-│   │   │   ├── process-guidelines.ts #   Guideline file loading
-│   │   │   ├── command-builders.ts #     Slash command rule builders
-│   │   │   ├── command-dispatch.ts #     Registry-based command dispatch
-│   │   │   ├── command-messages.ts #     Command response message templates
-│   │   │   ├── changelog.ts        #     Changelog generation logic
-│   │   │   ├── describe-question.ts #    Describe prompt construction
-│   │   │   ├── diff-context.ts     #     Diff context extraction
-│   │   │   ├── http-retry-options.ts #   Shared HTTP retry options
-│   │   │   ├── public-error.ts     #     Safe error message sanitization
-│   │   │   ├── review-messages.ts  #     Review comment formatting
-│   │   │   ├── review-policy-parser.ts # Policy file parsing
-│   │   │   ├── review-state.ts     #     Review state management
-│   │   │   ├── secret-warning.ts   #     Secret detection warnings
-│   │   │   └── yaml.ts             #     YAML parsing utilities
-│   │   └── notify/                 #   Webhook notifications
-│   │
-│   ├── modules/
-│   │   ├── github/                 #   NestJS GitHub Webhook module
-│   │   ├── gitlab/                 #   NestJS GitLab Webhook module
-│   │   ├── github-app/             #   NestJS GitHub App module (Probot)
-│   │   └── webhook/                #   Health, metrics, shutdown, replay
-│   │
-│   └── common/
-│       ├── filters/
-│       │   └── http-error.filter.ts  # Global exception filter
-│       └── types/
-│           └── raw-body-request.ts   # Shared RawBodyRequest interface
-│
-├── tests/                          # Node.js test runner (35+ test files)
-├── README-zh.md                    # Chinese version of this documentation
+├── apps/
+│   ├── api/                        # NestJS API + webhook entrypoints
+│   │   ├── src/
+│   │   │   ├── integrations/       # GitHub / GitLab / notification orchestration
+│   │   │   ├── modules/            # NestJS modules/controllers/services
+│   │   │   └── common/             # filters, shared request types
+│   │   └── tests/                  # node:test suites
+│   ├── web/                        # Next.js dashboard (auth, billing, admin UI)
+│   │   └── src/
+│   │       ├── app/                # App Router pages + API routes
+│   │       ├── components/         # Dashboard UI components
+│   │       └── lib/                # Auth/Stripe/env helpers
+│   └── worker/                     # Background worker placeholder
+├── packages/
+│   ├── core/                       # Runtime primitives (state, rate-limit, env, HTTP)
+│   ├── review/                     # AI provider adapters + review engine
+│   ├── shared/                     # Cross-platform policy/command utilities
+│   └── db/                         # Prisma schema + DB helpers + tenant resolver
+├── k8s/                            # Kustomize base + staging/production overlays
 ├── docs/                           # Design docs & roadmap
-├── Dockerfile                      # Multi-stage Docker build
-├── docker-compose.yml              # Docker Compose setup
+├── Dockerfile                      # API container build/runtime definition
+├── docker-compose.yml              # Local single-container deployment
 ├── .env.example                    # Full env var reference
 ├── .env.github-app.min.example     # Minimal GitHub App config
 ├── .env.github-webhook.min.example # Minimal GitHub Webhook config
@@ -373,15 +294,13 @@ mr-agent/
 
 ### Path Aliases
 
-The project uses Node.js ESM subpath imports (configured in both `tsconfig.json` and `package.json`):
+The API app uses Node.js ESM subpath imports (configured in `apps/api/package.json` and `apps/api/tsconfig.json`):
 
 | Alias | Maps to |
 |---|---|
-| `#core` | `src/core/index.ts` |
-| `#review` | `src/review/index.ts` |
-| `#integrations/github` | `src/integrations/github/index.ts` |
-| `#integrations/gitlab` | `src/integrations/gitlab/index.ts` |
-| `#integrations/notify` | `src/integrations/notify/index.ts` |
+| `#integrations/github` | `apps/api/src/integrations/github/index.ts` |
+| `#integrations/gitlab` | `apps/api/src/integrations/gitlab/index.ts` |
+| `#integrations/notify` | `apps/api/src/integrations/notify/index.ts` |
 
 ---
 
@@ -431,6 +350,18 @@ Copy `.env.example` and fill in the required values. Minimal configs are also av
 - `.env.github-webhook.min.example` — Plain GitHub Webhook minimum
 - `.env.gitlab.min.example` — GitLab Webhook minimum
 
+### Web Dashboard Auth (apps/web)
+
+If you run `apps/web` (Next.js dashboard), configure GitHub OAuth and app URL:
+
+```env
+GITHUB_CLIENT_ID=Ov23...
+GITHUB_CLIENT_SECRET=replace-with-github-oauth-secret
+BETTER_AUTH_SECRET=replace-with-random-secret
+BETTER_AUTH_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
 ### AI Provider
 
 ```mermaid
@@ -479,6 +410,7 @@ GEMINI_MODEL=gemini-2.0-flash
 | Memory | `memory` (default) | Stateless containers, dev |
 | JSON File | `file` | Simple single-instance |
 | SQLite | `sqlite` (recommended) | Production single-instance |
+| Redis | `redis` | Multi-instance shared runtime state |
 
 ```env
 RUNTIME_STATE_BACKEND=sqlite
@@ -568,9 +500,9 @@ See `.env.example` for the baseline variable reference; advanced runtime knobs a
 ```mermaid
 graph LR
     subgraph Docker Build
-        B1[Stage 1: Build<br/>node:22-alpine<br/>npm ci + tsc]
-        B2[Stage 2: Runtime<br/>node:22-alpine<br/>prod deps only]
-        B1 -->|COPY dist/| B2
+        B1[Stage 1: Validate<br/>node:22-alpine<br/>pnpm install + type check]
+        B2[Stage 2: Runtime<br/>node:22-alpine<br/>pnpm install + run tsx entry]
+        B1 --> B2
     end
     B2 -->|Expose 3000| SRV[mr-agent container]
 ```
@@ -733,6 +665,12 @@ If replay is enabled:
 - `POST /github/replay/:eventId`
 - `POST /gitlab/replay/:eventId`
 - Header: `x-mr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
+
+### Kubernetes Notes
+
+- `k8s/base/deployment.yaml` requires secret `mr-agent-secrets` (non-optional).
+- The secret must include `DB_PASSWORD` and `REDIS_PASSWORD`.
+- Readiness probe uses `GET /health`; deep checks remain available via `GET /health?deep=true` for diagnostics.
 
 ### Nginx Reverse Proxy
 

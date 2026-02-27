@@ -36,8 +36,20 @@ spec:
                 name: mr-agent-config
             - secretRef:
                 name: mr-agent-secrets
-                optional: true
+                optional: false
           env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mr-agent-secrets
+                  key: REDIS_PASSWORD
+                  optional: false
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mr-agent-secrets
+                  key: DB_PASSWORD
+                  optional: false
             - name: REDIS_URL
               value: "redis://:$(REDIS_PASSWORD)@redis.mr-agent.svc.cluster.local:6379"
             - name: DATABASE_URL
@@ -59,7 +71,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health?deep=true
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
+import { resolveBillingOrganizationForUser } from "@/lib/organization-billing";
 import { BillingClient } from "./billing-client";
 
 type PlanId = "free" | "pro" | "enterprise";
@@ -31,39 +32,15 @@ export default async function BillingPage() {
   let hasStripeCustomer = false;
 
   try {
-    let db: any = null;
-
-    try {
-      const { getDefaultDb } = await import("@mr-agent/db");
-      db = getDefaultDb();
-    } catch {
-      db = null;
-    }
-
-    if (db) {
-      if (!organizationId) {
-        const membership = await db.member.findFirst({
-          where: { userId: session.user.id },
-          select: { organizationId: true },
-          orderBy: { createdAt: "asc" },
-        });
-        organizationId = membership?.organizationId ?? null;
-      }
-
-      if (organizationId) {
-        const org = await db.organization.findUnique({
-          where: { id: organizationId },
-          select: {
-            plan: true,
-            stripeCustomerId: true,
-          },
-        });
-
-        if (org) {
-          initialPlan = org.plan;
-          hasStripeCustomer = Boolean(org.stripeCustomerId);
-        }
-      }
+    const billingContext = await resolveBillingOrganizationForUser({
+      userId: session.user.id,
+      preferredOrganizationId: activeOrganizationId,
+      fallbackToFirstMembership: true,
+    });
+    if (billingContext) {
+      organizationId = billingContext.organizationId;
+      initialPlan = billingContext.plan;
+      hasStripeCustomer = Boolean(billingContext.stripeCustomerId);
     }
   } catch (error) {
     console.warn("[billing/page] Could not load organization billing context", error);

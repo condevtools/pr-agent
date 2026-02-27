@@ -1,6 +1,11 @@
 import { readNumberEnv } from "./env.js";
 import { nowMs } from "./clock.js";
-import { loadRuntimeStateValue, saveRuntimeStateValue } from "./runtime-state.js";
+import {
+  loadRuntimeStateValue,
+  loadRuntimeStateValueAsync,
+  saveRuntimeStateValue,
+  saveRuntimeStateValueAsync,
+} from "./runtime-state.js";
 
 export interface AskConversationTurn {
   question: string;
@@ -22,6 +27,24 @@ export function loadAskConversationTurns(sessionKey: string): AskConversationTur
   const now = nowMs();
   const turns =
     loadRuntimeStateValue<AskConversationTurn[]>(ASK_SESSION_STATE_SCOPE, key, now) ?? [];
+  return turns.map((turn) => ({ ...turn }));
+}
+
+export async function loadAskConversationTurnsAsync(
+  sessionKey: string,
+): Promise<AskConversationTurn[]> {
+  const key = normalizeSessionKey(sessionKey);
+  if (!key) {
+    return [];
+  }
+
+  const now = nowMs();
+  const turns =
+    (await loadRuntimeStateValueAsync<AskConversationTurn[]>(
+      ASK_SESSION_STATE_SCOPE,
+      key,
+      now,
+    )) ?? [];
   return turns.map((turn) => ({ ...turn }));
 }
 
@@ -51,6 +74,44 @@ export function rememberAskConversationTurn(params: {
   const trimmed = next.slice(Math.max(0, next.length - maxTurns));
 
   saveRuntimeStateValue({
+    scope: ASK_SESSION_STATE_SCOPE,
+    key,
+    value: trimmed,
+    expiresAt: now + ttlMs,
+    maxEntries,
+  });
+}
+
+export async function rememberAskConversationTurnAsync(params: {
+  sessionKey: string;
+  question: string;
+  answer: string;
+}): Promise<void> {
+  const key = normalizeSessionKey(params.sessionKey);
+  const question = params.question.trim();
+  const answer = params.answer.trim();
+  if (!key || !question || !answer) {
+    return;
+  }
+
+  const now = nowMs();
+  const ttlMs = Math.max(1, readNumberEnv("ASK_SESSION_TTL_MS", DEFAULT_ASK_SESSION_TTL_MS));
+  const maxTurns = Math.max(1, readNumberEnv("ASK_SESSION_MAX_TURNS", DEFAULT_ASK_SESSION_MAX_TURNS));
+  const maxEntries = Math.max(
+    1,
+    readNumberEnv("ASK_SESSION_MAX_ENTRIES", DEFAULT_ASK_SESSION_MAX_ENTRIES),
+  );
+
+  const current =
+    (await loadRuntimeStateValueAsync<AskConversationTurn[]>(
+      ASK_SESSION_STATE_SCOPE,
+      key,
+      now,
+    )) ?? [];
+  const next = [...current, { question, answer }];
+  const trimmed = next.slice(Math.max(0, next.length - maxTurns));
+
+  await saveRuntimeStateValueAsync({
     scope: ASK_SESSION_STATE_SCOPE,
     key,
     value: trimmed,

@@ -1,5 +1,5 @@
 import {
-  isDuplicateRequest,
+  isDuplicateRequestAsync,
   localizeText,
   readNumberEnv,
   readStringEnv,
@@ -469,7 +469,7 @@ async function publishPolicyReminderComment(params: {
     "GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS",
     DEFAULT_POLICY_COMMENT_DEDUPE_TTL_MS,
   );
-  if (isDuplicateRequest(dedupeKey, dedupeTtl)) {
+  if (await isDuplicateRequestAsync(dedupeKey, dedupeTtl)) {
     return;
   }
 

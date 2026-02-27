@@ -65,6 +65,25 @@ export function loadRuntimeStateValue<T>(
   return getRuntimeStateStore().loadValue<T>(scopeName, stateKey, now);
 }
 
+export async function loadRuntimeStateValueAsync<T>(
+  scope: string,
+  key: string,
+  now = nowMs(),
+): Promise<T | undefined> {
+  const scopeName = normalizeScope(scope);
+  const stateKey = normalizeKey(key);
+  if (!scopeName || !stateKey) {
+    return undefined;
+  }
+
+  const store = getRuntimeStateStore();
+  if (store instanceof RedisRuntimeStateStore) {
+    return store.loadValueAsync<T>(scopeName, stateKey, now);
+  }
+
+  return store.loadValue<T>(scopeName, stateKey, now);
+}
+
 export function saveRuntimeStateValue<T>(params: {
   scope: string;
   key: string;
@@ -79,6 +98,40 @@ export function saveRuntimeStateValue<T>(params: {
   }
 
   getRuntimeStateStore().saveValue({
+    scope: scopeName,
+    key: stateKey,
+    value: params.value,
+    expiresAt: params.expiresAt,
+    maxEntries: params.maxEntries,
+  });
+}
+
+export async function saveRuntimeStateValueAsync<T>(params: {
+  scope: string;
+  key: string;
+  value: T;
+  expiresAt: number;
+  maxEntries?: number;
+}): Promise<void> {
+  const scopeName = normalizeScope(params.scope);
+  const stateKey = normalizeKey(params.key);
+  if (!scopeName || !stateKey) {
+    return;
+  }
+
+  const store = getRuntimeStateStore();
+  if (store instanceof RedisRuntimeStateStore) {
+    await store.saveValueAsync({
+      scope: scopeName,
+      key: stateKey,
+      value: params.value,
+      expiresAt: params.expiresAt,
+      maxEntries: params.maxEntries,
+    });
+    return;
+  }
+
+  store.saveValue({
     scope: scopeName,
     key: stateKey,
     value: params.value,

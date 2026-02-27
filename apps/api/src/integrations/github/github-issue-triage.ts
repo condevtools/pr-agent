@@ -1,7 +1,7 @@
 import {
   clearDuplicateRecord,
   fnv1a32Hex,
-  isDuplicateRequest,
+  isDuplicateRequestAsync,
   localizeText,
   parseBooleanEnv,
   readNumberEnv,
@@ -71,7 +71,7 @@ export async function runGitHubIssueAutoTriageWorkflow(
       DEFAULT_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS,
     ),
   );
-  if (isDuplicateRequest(dedupeKey, dedupeTtlMs)) {
+  if (await isDuplicateRequestAsync(dedupeKey, dedupeTtlMs)) {
     return;
   }
 

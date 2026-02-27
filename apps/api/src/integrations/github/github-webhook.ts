@@ -9,7 +9,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 import {
-  recordGitHubFeedbackSignal,
+  recordGitHubFeedbackSignalAsync,
   runGitHubReview,
   type GitHubReviewContext,
   type LoggerLike,
@@ -316,7 +316,7 @@ async function handlePullRequestReviewThreadEvent(
     action === "resolved"
       ? `PR #${pullNumber ?? "?"} review thread resolved: developer indicates suggestion fixed/high-value`
       : `PR #${pullNumber ?? "?"} review thread unresolved: developer indicates suggestion still not satisfied`;
-  recordGitHubFeedbackSignal({
+  await recordGitHubFeedbackSignalAsync({
     owner,
     repo,
     pullNumber,

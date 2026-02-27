@@ -1,5 +1,6 @@
 import {
   isRateLimited,
+  isRateLimitedAsync,
   localizeText,
   normalizeRateLimitPart,
   readNumberEnv,
@@ -9,7 +10,7 @@ import {
 } from "@mr-agent/core";
 import {
   buildManagedCommandCommentKey,
-  recordGitHubFeedbackSignal,
+  recordGitHubFeedbackSignalAsync,
   runGitHubAsk,
   runGitHubChangelog,
   runGitHubDescribe,
@@ -308,7 +309,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           ? "developer prefers high-confidence, actionable suggestions"
           : "developer prefers fewer low-value/noisy suggestions";
         const noteText = feedbackCommand.note ? `; note: ${feedbackCommand.note}` : "";
-        recordGitHubFeedbackSignal({
+        await recordGitHubFeedbackSignalAsync({
           owner: params.owner,
           repo: params.repo,
           pullNumber: params.issueNumber,
@@ -1269,6 +1270,35 @@ export function isGitHubCommandRateLimited(params: {
   return isRateLimited(key, maxPerWindow, windowMs);
 }
 
+async function isGitHubCommandRateLimitedAsync(params: {
+  platform: "github-app" | "github-webhook";
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  userLogin?: string;
+  command: string;
+}): Promise<boolean> {
+  const maxPerWindow = Math.max(
+    1,
+    readNumberEnv("COMMAND_RATE_LIMIT_MAX", DEFAULT_COMMAND_RATE_LIMIT_MAX),
+  );
+  const windowMs = Math.max(
+    1_000,
+    readNumberEnv(
+      "COMMAND_RATE_LIMIT_WINDOW_MS",
+      DEFAULT_COMMAND_RATE_LIMIT_WINDOW_MS,
+    ),
+  );
+  const user = normalizeRateLimitPart(params.userLogin, "unknown-user");
+  const command = normalizeRateLimitPart(params.command, "unknown-command");
+  const key =
+    `${params.platform}:` +
+    `${normalizeRateLimitPart(params.owner, "unknown-owner")}/` +
+    `${normalizeRateLimitPart(params.repo, "unknown-repo")}:` +
+    `pr:${params.pullNumber}:user:${user}:cmd:${command}`;
+  return isRateLimitedAsync(key, maxPerWindow, windowMs);
+}
+
 async function shouldRejectGitHubCommandByRateLimit(params: {
   context: GitHubReviewContext;
   owner: string;
@@ -1279,14 +1309,14 @@ async function shouldRejectGitHubCommandByRateLimit(params: {
   platform: "github-app" | "github-webhook";
 }): Promise<boolean> {
   if (
-    !isGitHubCommandRateLimited({
+    !(await isGitHubCommandRateLimitedAsync({
       platform: params.platform,
       owner: params.owner,
       repo: params.repo,
       pullNumber: params.pullNumber,
       userLogin: params.userLogin,
       command: params.command,
-    })
+    }))
   ) {
     return false;
   }

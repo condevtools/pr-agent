@@ -2,10 +2,9 @@ import {
   BadWebhookRequestError,
   clearDuplicateRecord,
   ensureError,
-  isDuplicateRequest,
-  isRateLimited,
-  loadRuntimeStateValue,
-  loadAskConversationTurns,
+  isDuplicateRequestAsync,
+  isRateLimitedAsync,
+  loadRuntimeStateValueAsync,
   localizeText,
   nowMs,
   normalizeRateLimitPart,
@@ -13,9 +12,8 @@ import {
   readNumberEnv,
   readOptionalStringEnv,
   readStringEnv,
-  rememberAskConversationTurn,
   resolveUiLocale,
-  saveRuntimeStateValue,
+  saveRuntimeStateValueAsync,
   type UiLocale,
 } from "@mr-agent/core";
 import { z } from "zod";
@@ -98,7 +96,10 @@ import {
   buildConfigNotFoundMessage,
 } from "@mr-agent/shared/command-config.js";
 import { mergeChangelogContent as mergeSharedChangelogContent } from "@mr-agent/shared/changelog.js";
-import { recordFeedbackSignal } from "@mr-agent/shared/feedback-signals.js";
+import {
+  recordFeedbackSignal,
+  recordFeedbackSignalAsync,
+} from "@mr-agent/shared/feedback-signals.js";
 import {
   loadProcessGuidelinesWithCache,
   type ProcessGuideline,
@@ -106,9 +107,9 @@ import {
 import { getPublicErrorMessage } from "@mr-agent/shared/public-error.js";
 import { parseReviewPolicyOverridesFromConfigText } from "@mr-agent/shared/review-policy-parser.js";
 import {
-  loadIncrementalReviewHead,
-  readMergedFeedbackSignals,
-  rememberIncrementalReviewHead,
+  loadIncrementalReviewHeadAsync,
+  readMergedFeedbackSignalsAsync,
+  rememberIncrementalReviewHeadAsync,
 } from "@mr-agent/shared/review-state.js";
 import {
   findPotentialSecrets as findSharedPotentialSecrets,
@@ -538,7 +539,7 @@ const gitLabCommandWorkflows = createGitLabCommandWorkflows({
       baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
     }),
   postCommandComment: postGitLabCommandComment,
-  loadFeedbackSignals: loadGitLabFeedbackSignals,
+  loadFeedbackSignals: loadGitLabFeedbackSignalsAsync,
   collectMergeRequestContext: async (params) =>
     collectGitLabMergeRequestContext({
       payload: params.payload as GitLabMrWebhookBody,
@@ -686,12 +687,12 @@ function buildGitLabCommentTargetFromPayload(params: {
   };
 }
 
-function isGitLabCommandRateLimited(params: {
+async function isGitLabCommandRateLimited(params: {
   projectId: number;
   mrId: number;
   userName?: string;
   command: string;
-}): boolean {
+}): Promise<boolean> {
   const maxPerWindow = Math.max(
     1,
     readNumberEnv("COMMAND_RATE_LIMIT_MAX", DEFAULT_COMMAND_RATE_LIMIT_MAX),
@@ -709,7 +710,7 @@ function isGitLabCommandRateLimited(params: {
     "gitlab:" +
     `${params.projectId}:mr:${params.mrId}:` +
     `user:${user}:cmd:${command}`;
-  return isRateLimited(key, maxPerWindow, windowMs);
+  return isRateLimitedAsync(key, maxPerWindow, windowMs);
 }
 
 async function shouldRejectGitLabCommandByRateLimit(params: {
@@ -722,12 +723,12 @@ async function shouldRejectGitLabCommandByRateLimit(params: {
   logger?: LoggerLike;
 }): Promise<boolean> {
   if (
-    !isGitLabCommandRateLimited({
+    !(await isGitLabCommandRateLimited({
       projectId: params.projectId,
       mrId: params.mrId,
       userName: params.userName,
       command: params.command,
-    })
+    }))
   ) {
     return false;
   }
@@ -876,7 +877,12 @@ export async function runGitLabReview(
   ]
     .filter(Boolean)
     .join(":");
-  if (isDuplicateRequest(requestKey, resolveDedupeTtlMs(trigger, mode, "GITLAB"))) {
+  if (
+    await isDuplicateRequestAsync(
+      requestKey,
+      resolveDedupeTtlMs(trigger, mode, "GITLAB"),
+    )
+  ) {
     return { ok: true, message: "duplicate request ignored" };
   }
 
@@ -887,7 +893,7 @@ export async function runGitLabReview(
   const gitlabToken = requireGitLabToken(headers);
   const reviewMrKey = `${payload.project.id}#${payload.object_attributes.iid}`;
   const incrementalBaseSha = shouldUseIncrementalReview(trigger)
-    ? getIncrementalHead(reviewMrKey)
+    ? await getIncrementalHead(reviewMrKey)
     : undefined;
   const currentHeadSha = payload.object_attributes.last_commit?.id?.trim();
   if (
@@ -909,7 +915,7 @@ export async function runGitLabReview(
   }
 
   try {
-    const feedbackSignals = loadGitLabFeedbackSignals(payload.project.id);
+    const feedbackSignals = await loadGitLabFeedbackSignalsAsync(payload.project.id);
     const collected = await collectGitLabMergeRequestContext({
       payload,
       gitlabToken,
@@ -943,7 +949,7 @@ export async function runGitLabReview(
       } else {
         await publishGitLabGeneralComment(gitlabToken, collected, noDiffBody);
       }
-      rememberIncrementalHead(reviewMrKey, collected.diffRefs.headSha);
+      await rememberIncrementalHead(reviewMrKey, collected.diffRefs.headSha);
       return { ok: true, message: "no textual diff to review" };
     }
 
@@ -1032,7 +1038,7 @@ export async function runGitLabReview(
       });
     }
 
-    rememberIncrementalHead(reviewMrKey, collected.diffRefs.headSha);
+    await rememberIncrementalHead(reviewMrKey, collected.diffRefs.headSha);
 
     const pushUrl =
       headers["x-push-url"] ??
@@ -1153,6 +1159,24 @@ export function recordGitLabFeedbackSignal(params: {
 }): void {
   const key = `${params.projectId}`;
   recordFeedbackSignal({
+    scope: GITLAB_FEEDBACK_SIGNAL_SCOPE,
+    key,
+    signal: params.signal,
+    ttlMs: readNumberEnv(
+      "GITLAB_FEEDBACK_SIGNAL_TTL_MS",
+      DEFAULT_FEEDBACK_SIGNAL_TTL_MS,
+    ),
+    maxSignals: MAX_FEEDBACK_SIGNALS,
+    maxEntries: MAX_FEEDBACK_CACHE_ENTRIES,
+  });
+}
+
+export async function recordGitLabFeedbackSignalAsync(params: {
+  projectId: number;
+  signal: string;
+}): Promise<void> {
+  const key = `${params.projectId}`;
+  await recordFeedbackSignalAsync({
     scope: GITLAB_FEEDBACK_SIGNAL_SCOPE,
     key,
     signal: params.signal,
@@ -1337,7 +1361,7 @@ async function handleGitLabNoteWebhook(params: {
           ? "developer prefers high-confidence, actionable suggestions"
           : "developer prefers fewer low-value/noisy suggestions";
         const noteText = feedbackCommand.note ? `; note: ${feedbackCommand.note}` : "";
-        recordGitLabFeedbackSignal({
+        await recordGitLabFeedbackSignalAsync({
           projectId: payload.project.id,
           signal: `MR !${mergePayload.object_attributes.iid} ${feedbackCommand.action}: ${signalCore}${noteText}`,
         });
@@ -2538,15 +2562,20 @@ function shouldRunGitLabAutoReview(
   return true;
 }
 
-function getIncrementalHead(reviewMrKey: string): string | undefined {
-  return loadIncrementalReviewHead({
+async function getIncrementalHead(
+  reviewMrKey: string,
+): Promise<string | undefined> {
+  return loadIncrementalReviewHeadAsync({
     scope: GITLAB_INCREMENTAL_STATE_SCOPE,
     key: reviewMrKey,
   });
 }
 
-function rememberIncrementalHead(reviewMrKey: string, headSha: string): void {
-  rememberIncrementalReviewHead({
+async function rememberIncrementalHead(
+  reviewMrKey: string,
+  headSha: string,
+): Promise<void> {
+  await rememberIncrementalReviewHeadAsync({
     scope: GITLAB_INCREMENTAL_STATE_SCOPE,
     key: reviewMrKey,
     headSha,
@@ -2558,9 +2587,9 @@ function rememberIncrementalHead(reviewMrKey: string, headSha: string): void {
   });
 }
 
-function loadGitLabFeedbackSignals(projectId: number): string[] {
+async function loadGitLabFeedbackSignalsAsync(projectId: number): Promise<string[]> {
   const key = `${projectId}`;
-  return readMergedFeedbackSignals({
+  return readMergedFeedbackSignalsAsync({
     scope: GITLAB_FEEDBACK_SIGNAL_SCOPE,
     scopedKey: key,
     maxSignals: MAX_FEEDBACK_SIGNALS,
@@ -2575,11 +2604,10 @@ async function resolveGitLabReviewPolicy(params: {
 }): Promise<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }> {
   const cacheKey = `${params.baseUrl}:${params.projectId}@${params.ref}`;
   const now = nowMs();
-  const cached = loadRuntimeStateValue<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }>(
-    GITLAB_POLICY_CACHE_SCOPE,
-    cacheKey,
-    now,
-  );
+  const cached = await loadRuntimeStateValueAsync<{
+    policy: GitLabReviewPolicy;
+    hasConfigFile: boolean;
+  }>(GITLAB_POLICY_CACHE_SCOPE, cacheKey, now);
   if (cached) {
     return cached;
   }
@@ -2611,7 +2639,7 @@ async function resolveGitLabReviewPolicy(params: {
         ],
       };
   const resolved = { policy, hasConfigFile };
-  saveRuntimeStateValue({
+  await saveRuntimeStateValueAsync({
     scope: GITLAB_POLICY_CACHE_SCOPE,
     key: cacheKey,
     value: resolved,

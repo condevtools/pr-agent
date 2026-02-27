@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getStripeClient } from "@/lib/stripe";
+import {
+  canManageBilling,
+  getBillingOrganizationMembership,
+} from "@/lib/organization-billing";
+import { resolveAppUrl } from "@/lib/env";
 
 interface PortalRequestBody {
   organizationId: string;
@@ -24,27 +29,24 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-
-    // Look up the organization's Stripe customer ID from the database
-    let stripeCustomerId: string | null = null;
-
-    try {
-      const { getDefaultDb } = await import("@mr-agent/db");
-
-      const db = getDefaultDb();
-      if (!db) throw new Error("Database not available");
-
-      const orgRow = await db.organization.findUnique({
-        where: { id: organizationId },
-        select: { stripeCustomerId: true },
-      });
-
-      stripeCustomerId = orgRow?.stripeCustomerId ?? null;
-    } catch {
-      console.warn(
-        "[stripe/portal] Could not query database for organization Stripe customer ID",
+    const membership = await getBillingOrganizationMembership({
+      userId: session.user.id,
+      organizationId,
+    });
+    if (!membership) {
+      return NextResponse.json(
+        { error: "You are not a member of the target organization." },
+        { status: 403 },
       );
     }
+    if (!canManageBilling(membership.role)) {
+      return NextResponse.json(
+        { error: "Only organization owners/admins can manage billing." },
+        { status: 403 },
+      );
+    }
+
+    const stripeCustomerId = membership.stripeCustomerId;
 
     if (!stripeCustomerId) {
       return NextResponse.json(
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest) {
 
     const stripe = getStripeClient();
 
-    const appUrl = process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl = resolveAppUrl();
 
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: stripeCustomerId,

@@ -1,6 +1,8 @@
 import {
   deleteRuntimeStateValue,
+  loadRuntimeStateValueAsync,
   loadRuntimeStateValue,
+  saveRuntimeStateValueAsync,
   saveRuntimeStateValue,
 } from "./runtime-state.js";
 import { nowMs } from "./clock.js";
@@ -37,6 +39,42 @@ export function isDuplicateRequest(
   }
 
   saveRuntimeStateValue({
+    scope: DEDUPE_STATE_SCOPE,
+    key: stateKey,
+    value: {
+      timestamp: now,
+      expiresAt,
+    },
+    expiresAt,
+    maxEntries: MAX_DEDUPE_STATE_ENTRIES,
+  });
+
+  return false;
+}
+
+export async function isDuplicateRequestAsync(
+  key: string,
+  ttlMs = DEFAULT_TTL_MS,
+): Promise<boolean> {
+  const stateKey = normalizeDedupeKey(key);
+  if (!stateKey) {
+    return false;
+  }
+
+  const safeTtlMs = Math.max(1, Math.floor(ttlMs));
+  const now = nowMs();
+  const expiresAt = now + safeTtlMs;
+
+  const persisted = await loadRuntimeStateValueAsync<DedupeStateRecord>(
+    DEDUPE_STATE_SCOPE,
+    stateKey,
+    now,
+  );
+  if (persisted && persisted.expiresAt > now && now - persisted.timestamp < safeTtlMs) {
+    return true;
+  }
+
+  await saveRuntimeStateValueAsync({
     scope: DEDUPE_STATE_SCOPE,
     key: stateKey,
     value: {

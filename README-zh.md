@@ -255,7 +255,7 @@ graph LR
 | GitHub App | Probot 13 |
 | AI 客户端 | OpenAI SDK 4（同时用于兼容 Provider） |
 | 校验 | Zod 3 |
-| 状态存储 | 内存 / JSON 文件 / SQLite（Node.js 内置 `node:sqlite`） |
+| 状态存储 | 内存 / JSON 文件 / SQLite / Redis |
 | 容器 | Docker（多阶段构建） |
 
 ---
@@ -264,107 +264,28 @@ graph LR
 
 ```
 mr-agent/
-├── src/
-│   ├── main.ts                     # NestJS 启动入口
-│   ├── app.module.ts               # 根模块（导入所有子模块）
-│   ├── app.controller.ts           # 健康检查、指标、回放路由
-│   ├── app.ts                      # Probot 事件处理（GitHub App）
-│   │
-│   ├── core/                       # 公共基础设施
-│   │   ├── ask-session.ts          #   Ask 多轮会话管理
-│   │   ├── cache.ts                #   TTL 内存缓存
-│   │   ├── clock.ts                #   时钟抽象（可测试时间）
-│   │   ├── dedupe.ts               #   FNV 哈希请求去重
-│   │   ├── env.ts                  #   环境变量工具
-│   │   ├── errors.ts               #   类型化错误类（4xx/5xx）
-│   │   ├── fnv.ts                  #   FNV-1a 哈希实现
-│   │   ├── http.ts                 #   HTTP 客户端（重试 & 退避）
-│   │   ├── i18n.ts                 #   语言检测（中文/英文）
-│   │   ├── logger.ts               #   核心结构化日志
-│   │   ├── path.ts                 #   路径编码工具
-│   │   ├── rate-limit.ts           #   按作用域限流
-│   │   ├── runtime-state.ts        #   可插拔状态后端
-│   │   ├── runtime-state-file.ts   #   文件持久化状态存储
-│   │   ├── runtime-state-in-memory.ts # 内存状态存储
-│   │   ├── runtime-state-snapshot.ts #  状态快照合并工具
-│   │   ├── runtime-state-sqlite.ts #   SQLite 状态持久化
-│   │   └── secret-patterns.ts      #   正则密钥检测
-│   │
-│   ├── review/                     # AI 评审领域
-│   │   ├── ai-reviewer.ts          #   多 Provider AI 抽象
-│   │   ├── ai-prompts.ts           #   系统 & 用户 Prompt 构建
-│   │   ├── ai-concurrency.ts       #   并发请求限制器
-│   │   ├── ai-client-cache.ts      #   OpenAI 客户端实例缓存
-│   │   ├── ai-provider-anthropic.ts #  Anthropic 提供商适配器
-│   │   ├── ai-provider-gemini.ts   #   Gemini 提供商适配器
-│   │   ├── ai-provider-json.ts     #   JSON 响应解析器
-│   │   ├── ai-result-normalization.ts # 结果标准化 & 严重等级
-│   │   ├── patch.ts                #   Git diff 解析 & 行号映射
-│   │   ├── report-renderer.ts      #   Markdown 报告格式化
-│   │   ├── review-policy.ts        #   代码文件检测 & 行号解析
-│   │   ├── review-types.ts         #   数据模型
-│   │   ├── review-utils.ts         #   评审辅助工具
-│   │   └── similar-issue.ts        #   相似 Issue 搜索逻辑
-│   │
-│   ├── integrations/
-│   │   ├── github/                 #   GitHub 评审、策略、内容获取
-│   │   │   ├── github-review.ts    #     评审编排
-│   │   │   ├── github-review-types.ts #  接口 & 类型定义
-│   │   │   ├── github-command-workflows.ts # /ask、/describe、/changelog 工作流
-│   │   │   ├── github-issue-comment-command.ts # 评论命令分发
-│   │   │   ├── github-issue-triage.ts #  Issue 自动分诊
-│   │   │   ├── github-rest-client.ts #   REST Octokit 客户端
-│   │   │   ├── github-content.ts   #     文件内容获取
-│   │   │   ├── github-policy.ts    #     策略检查 & 校验
-│   │   │   ├── github-policy-config.ts # 策略 YAML 解析 & 缓存
-│   │   │   ├── github-policy-templates.ts # 模板发现 & 段落提取
-│   │   │   ├── github-webhook.ts   #     Webhook 事件分发
-│   │   │   └── github-lifecycle.ts #     PR/Issue 生命周期工作流
-│   │   ├── gitlab/                 #   GitLab 评审 & 命令处理
-│   │   │   ├── gitlab-review.ts    #     评审编排
-│   │   │   ├── gitlab-command-workflows.ts # /ask、/describe 工作流
-│   │   │   ├── gitlab-http.ts      #     GitLab API HTTP 客户端
-│   │   │   └── gitlab-webhook-security.ts # Webhook 签名验证
-│   │   ├── shared/                 #   跨平台共享工具
-│   │   │   ├── managed-comments.ts #     评论去重 & 更新标记
-│   │   │   ├── review-triggers.ts  #     触发分类 & TTL 计算
-│   │   │   ├── feedback-signals.ts #     评审反馈学习
-│   │   │   ├── secret-scan.ts      #     密钥泄露扫描
-│   │   │   ├── auto-labels.ts      #     自动标签推断
-│   │   │   ├── similar-issue.ts    #     相似 Issue 搜索
-│   │   │   ├── process-guidelines.ts #   流程规范文件加载
-│   │   │   ├── command-builders.ts #     斜杠命令规则构建器
-│   │   │   ├── command-dispatch.ts #     注册式命令分发
-│   │   │   ├── command-messages.ts #     命令响应消息模板
-│   │   │   ├── changelog.ts        #     Changelog 生成逻辑
-│   │   │   ├── describe-question.ts #    Describe Prompt 构建
-│   │   │   ├── diff-context.ts     #     Diff 上下文提取
-│   │   │   ├── http-retry-options.ts #   共享 HTTP 重试选项
-│   │   │   ├── public-error.ts     #     安全错误消息过滤
-│   │   │   ├── review-messages.ts  #     评审评论格式化
-│   │   │   ├── review-policy-parser.ts # 策略文件解析
-│   │   │   ├── review-state.ts     #     评审状态管理
-│   │   │   ├── secret-warning.ts   #     密钥检测警告
-│   │   │   └── yaml.ts             #     YAML 解析工具
-│   │   └── notify/                 #   Webhook 通知推送
-│   │
-│   ├── modules/
-│   │   ├── github/                 #   NestJS GitHub Webhook 模块
-│   │   ├── gitlab/                 #   NestJS GitLab Webhook 模块
-│   │   ├── github-app/             #   NestJS GitHub App 模块（Probot）
-│   │   └── webhook/                #   健康检查、指标、关停、回放
-│   │
-│   └── common/
-│       ├── filters/
-│       │   └── http-error.filter.ts  # 全局异常过滤器
-│       └── types/
-│           └── raw-body-request.ts   # 共享 RawBodyRequest 接口
-│
-├── tests/                          # Node.js 测试（35+ 测试文件）
-├── README.md                       # 当前文档的英文版本
-├── docs/                           # 设计文档 & 路线图
-├── Dockerfile                      # 多阶段 Docker 构建
-├── docker-compose.yml              # Docker Compose 配置
+├── apps/
+│   ├── api/                        # NestJS API + Webhook 入口
+│   │   ├── src/
+│   │   │   ├── integrations/       # GitHub / GitLab / 通知编排
+│   │   │   ├── modules/            # NestJS 模块、控制器、服务
+│   │   │   └── common/             # filters、共享请求类型
+│   │   └── tests/                  # node:test 测试集
+│   ├── web/                        # Next.js 控制台（鉴权、计费、管理界面）
+│   │   └── src/
+│   │       ├── app/                # App Router 页面 + API 路由
+│   │       ├── components/         # 控制台 UI 组件
+│   │       └── lib/                # Auth/Stripe/env 工具
+│   └── worker/                     # 后台 worker 占位
+├── packages/
+│   ├── core/                       # 运行时基础能力（state、限流、env、HTTP）
+│   ├── review/                     # AI Provider 适配 + 评审引擎
+│   ├── shared/                     # 跨平台策略/命令共享能力
+│   └── db/                         # Prisma schema + DB 工具 + 租户解析
+├── k8s/                            # Kustomize base + staging/production overlays
+├── docs/                           # 设计文档与路线图
+├── Dockerfile                      # API 镜像构建/运行定义
+├── docker-compose.yml              # 本地单容器部署
 ├── .env.example                    # 完整环境变量参考
 ├── .env.github-app.min.example     # GitHub App 最小配置
 ├── .env.github-webhook.min.example # GitHub Webhook 最小配置
@@ -373,15 +294,13 @@ mr-agent/
 
 ### 路径别名
 
-项目使用 Node.js ESM subpath imports（在 `tsconfig.json` 和 `package.json` 中同步配置）：
+API 应用使用 Node.js ESM subpath imports（配置在 `apps/api/package.json` 与 `apps/api/tsconfig.json`）：
 
 | 别名 | 映射路径 |
 |---|---|
-| `#core` | `src/core/index.ts` |
-| `#review` | `src/review/index.ts` |
-| `#integrations/github` | `src/integrations/github/index.ts` |
-| `#integrations/gitlab` | `src/integrations/gitlab/index.ts` |
-| `#integrations/notify` | `src/integrations/notify/index.ts` |
+| `#integrations/github` | `apps/api/src/integrations/github/index.ts` |
+| `#integrations/gitlab` | `apps/api/src/integrations/gitlab/index.ts` |
+| `#integrations/notify` | `apps/api/src/integrations/notify/index.ts` |
 
 ---
 
@@ -431,6 +350,18 @@ curl http://localhost:3000/gitlab/health       # GitLab 配置状态
 - `.env.github-webhook.min.example` — 普通 GitHub Webhook 最小配置
 - `.env.gitlab.min.example` — GitLab Webhook 最小配置
 
+### Web 控制台鉴权（apps/web）
+
+如果需要运行 `apps/web`（Next.js 控制台），请额外配置 GitHub OAuth 与应用地址：
+
+```env
+GITHUB_CLIENT_ID=Ov23...
+GITHUB_CLIENT_SECRET=replace-with-github-oauth-secret
+BETTER_AUTH_SECRET=replace-with-random-secret
+BETTER_AUTH_URL=http://localhost:3000
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
 ### AI Provider 配置
 
 ```mermaid
@@ -479,6 +410,7 @@ GEMINI_MODEL=gemini-2.0-flash
 | 内存 | `memory`（默认） | 无状态容器、开发环境 |
 | JSON 文件 | `file` | 简单单实例 |
 | SQLite | `sqlite`（推荐） | 生产单实例部署 |
+| Redis | `redis` | 多实例共享运行时状态 |
 
 ```env
 RUNTIME_STATE_BACKEND=sqlite
@@ -568,9 +500,9 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 ```mermaid
 graph LR
     subgraph Docker 构建
-        B1[阶段 1：构建<br/>node:22-alpine<br/>npm ci + tsc]
-        B2[阶段 2：运行时<br/>node:22-alpine<br/>仅生产依赖]
-        B1 -->|COPY dist/| B2
+        B1[阶段 1：校验<br/>node:22-alpine<br/>pnpm install + 类型检查]
+        B2[阶段 2：运行时<br/>node:22-alpine<br/>pnpm install + 运行 tsx 入口]
+        B1 --> B2
     end
     B2 -->|暴露 3000 端口| SRV[mr-agent 容器]
 ```
@@ -733,6 +665,12 @@ docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
 - `POST /github/replay/:eventId`
 - `POST /gitlab/replay/:eventId`
 - 请求头：`x-mr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
+
+### Kubernetes 说明
+
+- `k8s/base/deployment.yaml` 依赖 `mr-agent-secrets`（非可选）。
+- 该 Secret 至少需要包含 `DB_PASSWORD` 与 `REDIS_PASSWORD`。
+- 就绪探针使用 `GET /health`；`GET /health?deep=true` 仍可用于人工诊断深度检查。
 
 ### Nginx 反向代理
 

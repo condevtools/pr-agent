@@ -1,10 +1,10 @@
 import {
   clearDuplicateRecord,
   ensureError,
-  isDuplicateRequest,
-  loadAskConversationTurns,
+  isDuplicateRequestAsync,
+  loadAskConversationTurnsAsync,
   localizeText,
-  rememberAskConversationTurn,
+  rememberAskConversationTurnAsync,
   resolveUiLocale,
   type UiLocale,
 } from "@mr-agent/core";
@@ -98,7 +98,11 @@ export interface GitHubCommandWorkflowDeps {
     body: string;
     managedCommentKey?: string;
   }): Promise<void>;
-  loadFeedbackSignals(owner: string, repo: string, pullNumber: number): string[];
+  loadFeedbackSignals(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+  ): string[] | Promise<string[]>;
   buildDescribeQuestion(locale: UiLocale): string;
   buildChangelogQuestion(focus: string | undefined, locale: UiLocale): string;
   applyChangelogUpdate(params: {
@@ -137,7 +141,7 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
         .filter(Boolean)
         .join(":");
 
-      if (isDuplicateRequest(requestKey, deps.defaultDedupeTtlMs)) {
+      if (await isDuplicateRequestAsync(requestKey, deps.defaultDedupeTtlMs)) {
         if (trigger === "comment-command" || trigger === "describe-command") {
           await deps.postCommandComment({
             context,
@@ -311,7 +315,7 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
         .filter(Boolean)
         .join(":");
 
-      if (isDuplicateRequest(requestKey, deps.defaultDedupeTtlMs)) {
+      if (await isDuplicateRequestAsync(requestKey, deps.defaultDedupeTtlMs)) {
         await deps.postCommandComment({
           context,
           owner,
@@ -332,7 +336,11 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
       try {
         let input: PullRequestReviewInput;
         if (isPullRequest) {
-          const feedbackSignals = deps.loadFeedbackSignals(owner, repo, pullNumber);
+          const feedbackSignals = await deps.loadFeedbackSignals(
+            owner,
+            repo,
+            pullNumber,
+          );
           const collected = await deps.collectPullRequestContext({
             context,
             owner,
@@ -363,13 +371,13 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
         }
         const sessionKey = `github:${owner}/${repo}#${pullNumber}`;
         const conversation = enableConversationContext
-          ? loadAskConversationTurns(sessionKey)
+          ? await loadAskConversationTurnsAsync(sessionKey)
           : [];
         const answer = await answerPullRequestQuestion(input, question, {
           conversation,
         });
         if (enableConversationContext) {
-          rememberAskConversationTurn({
+          await rememberAskConversationTurnAsync({
             sessionKey,
             question: (displayQuestion ?? question).trim(),
             answer,
@@ -467,7 +475,7 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
         .filter(Boolean)
         .join(":");
 
-      if (isDuplicateRequest(requestKey, deps.defaultDedupeTtlMs)) {
+      if (await isDuplicateRequestAsync(requestKey, deps.defaultDedupeTtlMs)) {
         await deps.postCommandComment({
           context,
           owner,
@@ -480,7 +488,11 @@ export function createGitHubCommandWorkflows(deps: GitHubCommandWorkflowDeps): {
       }
 
       try {
-        const feedbackSignals = deps.loadFeedbackSignals(owner, repo, pullNumber);
+        const feedbackSignals = await deps.loadFeedbackSignals(
+          owner,
+          repo,
+          pullNumber,
+        );
         const collected = await deps.collectPullRequestContext({
           context,
           owner,

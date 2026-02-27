@@ -1,6 +1,8 @@
 export {
   loadAskConversationTurns,
+  loadAskConversationTurnsAsync,
   rememberAskConversationTurn,
+  rememberAskConversationTurnAsync,
   type AskConversationTurn,
 } from "./ask-session.js";
 export {
@@ -10,7 +12,11 @@ export {
   type ExpiringCacheEntry,
 } from "./cache.js";
 export { ManualClock, nowMs, systemClock, type Clock } from "./clock.js";
-export { clearDuplicateRecord, isDuplicateRequest } from "./dedupe.js";
+export {
+  clearDuplicateRecord,
+  isDuplicateRequest,
+  isDuplicateRequestAsync,
+} from "./dedupe.js";
 export {
   parseBooleanEnv,
   readNumberEnv,
@@ -30,14 +36,20 @@ export {
 export { localizeText, resolveUiLocale, type UiLocale } from "./i18n.js";
 export { logCore } from "./logger.js";
 export { encodePath } from "./path.js";
-export { isRateLimited, normalizeRateLimitPart } from "./rate-limit.js";
+export {
+  isRateLimited,
+  isRateLimitedAsync,
+  normalizeRateLimitPart,
+} from "./rate-limit.js";
 export {
   assertRuntimeStateBackendReady,
   deleteRuntimeStateValue,
   loadRuntimeStateValue,
+  loadRuntimeStateValueAsync,
   prepareRuntimeStateBackend,
   resolveRuntimeStateBackend,
   saveRuntimeStateValue,
+  saveRuntimeStateValueAsync,
 } from "./runtime-state.js";
 export { RedisRuntimeStateStore } from "./runtime-state-redis.js";
 export {

@@ -1,10 +1,10 @@
 import {
   clearDuplicateRecord,
   ensureError,
-  isDuplicateRequest,
-  loadAskConversationTurns,
+  isDuplicateRequestAsync,
+  loadAskConversationTurnsAsync,
   localizeText,
-  rememberAskConversationTurn,
+  rememberAskConversationTurnAsync,
   resolveUiLocale,
   type UiLocale,
 } from "@mr-agent/core";
@@ -86,7 +86,7 @@ export interface GitLabCommandWorkflowDeps {
     managedCommentKey?: string;
     logger?: LoggerLike;
   }): Promise<void>;
-  loadFeedbackSignals(projectId: number): string[];
+  loadFeedbackSignals(projectId: number): string[] | Promise<string[]>;
   collectMergeRequestContext(params: {
     payload: GitLabWorkflowPayload;
     gitlabToken: string;
@@ -141,7 +141,7 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
 
       const gitlabToken = deps.requireGitLabToken(headers);
       const target = deps.buildCommentTarget(payload);
-      if (isDuplicateRequest(requestKey, deps.defaultDedupeTtlMs)) {
+      if (await isDuplicateRequestAsync(requestKey, deps.defaultDedupeTtlMs)) {
         await deps.postCommandComment({
           gitlabToken,
           target,
@@ -159,7 +159,7 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
       }
 
       try {
-        const feedbackSignals = deps.loadFeedbackSignals(payload.project.id);
+        const feedbackSignals = await deps.loadFeedbackSignals(payload.project.id);
         const collected = await deps.collectMergeRequestContext({
           payload,
           gitlabToken,
@@ -169,13 +169,13 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
         });
         const sessionKey = `gitlab:${payload.project.id}#${payload.object_attributes.iid}`;
         const conversation = enableConversationContext
-          ? loadAskConversationTurns(sessionKey)
+          ? await loadAskConversationTurnsAsync(sessionKey)
           : [];
         const answer = await answerPullRequestQuestion(collected.input, question, {
           conversation,
         });
         if (enableConversationContext) {
-          rememberAskConversationTurn({
+          await rememberAskConversationTurnAsync({
             sessionKey,
             question: (displayQuestion ?? question).trim(),
             answer,
@@ -269,7 +269,7 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
 
       const gitlabToken = deps.requireGitLabToken(headers);
       const target = deps.buildCommentTarget(payload);
-      if (isDuplicateRequest(requestKey, deps.defaultDedupeTtlMs)) {
+      if (await isDuplicateRequestAsync(requestKey, deps.defaultDedupeTtlMs)) {
         await deps.postCommandComment({
           gitlabToken,
           target,
@@ -435,7 +435,7 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
 
       const gitlabToken = deps.requireGitLabToken(headers);
       const target = deps.buildCommentTarget(payload);
-      if (isDuplicateRequest(requestKey, deps.defaultDedupeTtlMs)) {
+      if (await isDuplicateRequestAsync(requestKey, deps.defaultDedupeTtlMs)) {
         await deps.postCommandComment({
           gitlabToken,
           target,
@@ -447,7 +447,7 @@ export function createGitLabCommandWorkflows(deps: GitLabCommandWorkflowDeps): {
       }
 
       try {
-        const feedbackSignals = deps.loadFeedbackSignals(payload.project.id);
+        const feedbackSignals = await deps.loadFeedbackSignals(payload.project.id);
         const collected = await deps.collectMergeRequestContext({
           payload,
           gitlabToken,

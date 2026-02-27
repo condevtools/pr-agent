@@ -1,7 +1,7 @@
 import {
   clearDuplicateRecord,
   ensureError,
-  isDuplicateRequest,
+  isDuplicateRequestAsync,
   localizeText,
   readNumberEnv,
   readOptionalStringEnv,
@@ -35,16 +35,20 @@ import { buildChangelogQuestion } from "@mr-agent/shared/command-builders.js";
 import { mergeChangelogContent as mergeSharedChangelogContent } from "@mr-agent/shared/changelog.js";
 import { buildDescribeQuestion } from "@mr-agent/shared/describe-question.js";
 import { buildDiffFileContexts } from "@mr-agent/shared/diff-context.js";
-import { recordFeedbackSignal } from "@mr-agent/shared/feedback-signals.js";
+import {
+  recordFeedbackSignal,
+  recordFeedbackSignalAsync,
+} from "@mr-agent/shared/feedback-signals.js";
 import {
   loadProcessGuidelinesWithCache,
   type ProcessGuideline,
 } from "@mr-agent/shared/process-guidelines.js";
 import { getPublicErrorMessage } from "@mr-agent/shared/public-error.js";
 import {
-  loadIncrementalReviewHead,
+  loadIncrementalReviewHeadAsync,
+  readMergedFeedbackSignalsAsync,
   readMergedFeedbackSignals,
-  rememberIncrementalReviewHead,
+  rememberIncrementalReviewHeadAsync,
 } from "@mr-agent/shared/review-state.js";
 import {
   findPotentialSecrets as findSharedPotentialSecrets,
@@ -304,7 +308,7 @@ export async function runGitHubReview(
     .join(":");
   const dedupeTtlMs = resolveDedupeTtlMs(trigger, mode, "GITHUB");
 
-  if (isDuplicateRequest(requestKey, dedupeTtlMs)) {
+  if (await isDuplicateRequestAsync(requestKey, dedupeTtlMs)) {
     if (trigger === "comment-command") {
       await context.octokit.issues.createComment({
         owner,
@@ -329,9 +333,13 @@ export async function runGitHubReview(
 
   const reviewPrKey = `${owner}/${repo}#${pullNumber}`;
   const incrementalBaseSha = shouldUseIncrementalReview(trigger)
-    ? getIncrementalHead(reviewPrKey)
+    ? await getIncrementalHead(reviewPrKey)
     : undefined;
-  const feedbackSignals = loadGitHubFeedbackSignals(owner, repo, pullNumber);
+  const feedbackSignals = await loadGitHubFeedbackSignalsAsync(
+    owner,
+    repo,
+    pullNumber,
+  );
   let preloadedPullSummary: GitHubPullSummary | undefined;
 
   if (isAutoReviewTrigger(trigger)) {
@@ -401,7 +409,7 @@ export async function runGitHubReview(
         markerKey: "review-no-diff",
         body: noDiffBody,
       });
-      rememberIncrementalHead(reviewPrKey, collected.headSha);
+      await rememberIncrementalHead(reviewPrKey, collected.headSha);
       return;
     }
 
@@ -531,7 +539,7 @@ export async function runGitHubReview(
       });
     }
 
-    rememberIncrementalHead(reviewPrKey, collected.headSha);
+    await rememberIncrementalHead(reviewPrKey, collected.headSha);
 
     if (progressCommentId) {
       await context.octokit.issues.updateComment({
@@ -735,6 +743,30 @@ export function recordGitHubFeedbackSignal(params: {
   });
 }
 
+export async function recordGitHubFeedbackSignalAsync(params: {
+  owner: string;
+  repo: string;
+  pullNumber?: number;
+  signal: string;
+}): Promise<void> {
+  const feedbackKey = buildGitHubFeedbackSignalKey(
+    params.owner,
+    params.repo,
+    params.pullNumber,
+  );
+  await recordFeedbackSignalAsync({
+    scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
+    key: feedbackKey,
+    signal: params.signal,
+    ttlMs: readNumberEnv(
+      "GITHUB_FEEDBACK_SIGNAL_TTL_MS",
+      DEFAULT_FEEDBACK_SIGNAL_TTL_MS,
+    ),
+    maxSignals: MAX_FEEDBACK_SIGNALS,
+    maxEntries: MAX_FEEDBACK_CACHE_ENTRIES,
+  });
+}
+
 function loadGitHubFeedbackSignals(
   owner: string,
   repo: string,
@@ -754,6 +786,32 @@ function loadGitHubFeedbackSignals(
     });
   }
   return readMergedFeedbackSignals({
+    scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
+    scopedKey: feedbackKey,
+    fallbackKey: repositoryLevelKey,
+    maxSignals: MAX_FEEDBACK_SIGNALS,
+  });
+}
+
+async function loadGitHubFeedbackSignalsAsync(
+  owner: string,
+  repo: string,
+  pullNumber?: number,
+): Promise<string[]> {
+  const feedbackKey = buildGitHubFeedbackSignalKey(owner, repo, pullNumber);
+  const repositoryLevelKey = buildGitHubFeedbackSignalKey(owner, repo);
+  if (
+    !Number.isInteger(pullNumber) ||
+    (pullNumber as number) <= 0 ||
+    feedbackKey === repositoryLevelKey
+  ) {
+    return readMergedFeedbackSignalsAsync({
+      scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
+      scopedKey: repositoryLevelKey,
+      maxSignals: MAX_FEEDBACK_SIGNALS,
+    });
+  }
+  return readMergedFeedbackSignalsAsync({
     scope: GITHUB_FEEDBACK_SIGNAL_SCOPE,
     scopedKey: feedbackKey,
     fallbackKey: repositoryLevelKey,
@@ -992,7 +1050,7 @@ const gitHubCommandWorkflows = createGitHubCommandWorkflows({
       feedbackSignals: params.feedbackSignals,
     }),
   postCommandComment: postGitHubCommandComment,
-  loadFeedbackSignals: loadGitHubFeedbackSignals,
+  loadFeedbackSignals: loadGitHubFeedbackSignalsAsync,
   buildDescribeQuestion: buildGitHubDescribeQuestion,
   buildChangelogQuestion: buildGitHubChangelogQuestion,
   applyChangelogUpdate: applyGitHubChangelogUpdate,
@@ -1119,15 +1177,20 @@ async function loadHeadCheckRuns(params: {
   }
 }
 
-function getIncrementalHead(reviewPrKey: string): string | undefined {
-  return loadIncrementalReviewHead({
+async function getIncrementalHead(
+  reviewPrKey: string,
+): Promise<string | undefined> {
+  return loadIncrementalReviewHeadAsync({
     scope: GITHUB_INCREMENTAL_STATE_SCOPE,
     key: reviewPrKey,
   });
 }
 
-function rememberIncrementalHead(reviewPrKey: string, headSha: string): void {
-  rememberIncrementalReviewHead({
+async function rememberIncrementalHead(
+  reviewPrKey: string,
+  headSha: string,
+): Promise<void> {
+  await rememberIncrementalReviewHeadAsync({
     scope: GITHUB_INCREMENTAL_STATE_SCOPE,
     key: reviewPrKey,
     headSha,
@@ -1157,7 +1220,7 @@ async function publishSecretWarningComment(params: {
     `${params.pullNumber}`,
     params.headSha,
   ].join(":");
-  if (isDuplicateRequest(dedupeKey, DEFAULT_DEDUPE_TTL_MS)) {
+  if (await isDuplicateRequestAsync(dedupeKey, DEFAULT_DEDUPE_TTL_MS)) {
     return;
   }
   const locale = resolveUiLocale();

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getStripeClient, PLANS, type PlanId } from "@/lib/stripe";
+import {
+  canManageBilling,
+  getBillingOrganizationMembership,
+} from "@/lib/organization-billing";
+import { resolveAppUrl } from "@/lib/env";
 
 interface CheckoutRequestBody {
   planId: "pro" | "enterprise";
@@ -33,6 +38,22 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    const membership = await getBillingOrganizationMembership({
+      userId: session.user.id,
+      organizationId,
+    });
+    if (!membership) {
+      return NextResponse.json(
+        { error: "You are not a member of the target organization." },
+        { status: 403 },
+      );
+    }
+    if (!canManageBilling(membership.role)) {
+      return NextResponse.json(
+        { error: "Only organization owners/admins can manage billing." },
+        { status: 403 },
+      );
+    }
 
     const plan = PLANS[planId as PlanId];
     if (!plan.priceId) {
@@ -44,7 +65,7 @@ export async function POST(request: NextRequest) {
 
     const stripe = getStripeClient();
 
-    const appUrl = process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl = resolveAppUrl();
 
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
