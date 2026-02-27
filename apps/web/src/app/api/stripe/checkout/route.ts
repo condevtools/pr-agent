@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { getStripeClient, PLANS, type PlanId } from "@/lib/stripe";
 
 interface CheckoutRequestBody {
   planId: "pro" | "enterprise";
-  tenantId: string;
+  organizationId: string;
 }
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await auth.api.getSession({
+      headers: request.headers,
+    });
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = (await request.json()) as CheckoutRequestBody;
-    const { planId, tenantId } = body;
+    const { planId, organizationId } = body;
 
     // Validate planId
     if (planId !== "pro" && planId !== "enterprise") {
@@ -19,9 +27,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!tenantId || typeof tenantId !== "string") {
+    if (!organizationId || typeof organizationId !== "string") {
       return NextResponse.json(
-        { error: "tenantId is required." },
+        { error: "organizationId is required." },
         { status: 400 },
       );
     }
@@ -36,6 +44,8 @@ export async function POST(request: NextRequest) {
 
     const stripe = getStripeClient();
 
+    const appUrl = process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
@@ -46,11 +56,11 @@ export async function POST(request: NextRequest) {
         },
       ],
       metadata: {
-        tenantId,
+        organizationId,
         planId,
       },
-      success_url: `${process.env.NEXTAUTH_URL ?? "http://localhost:3000"}/dashboard/billing?success=true`,
-      cancel_url: `${process.env.NEXTAUTH_URL ?? "http://localhost:3000"}/dashboard/billing?canceled=true`,
+      success_url: `${appUrl}/dashboard/billing?success=true`,
+      cancel_url: `${appUrl}/dashboard/billing?canceled=true`,
     });
 
     return NextResponse.json({ url: checkoutSession.url });
