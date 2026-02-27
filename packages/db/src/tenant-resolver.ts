@@ -1,9 +1,7 @@
-import { eq, and } from "drizzle-orm";
-import type { DrizzleDb } from "./client.js";
+import type { PrismaClient } from "@prisma/client";
 import { decryptApiKey } from "./crypto.js";
-import { installations, tenants, aiConfigs } from "./schema.js";
 
-/** Resolved tenant context used throughout the request lifecycle. */
+/** Resolved organization context used throughout the request lifecycle. */
 export interface TenantConfig {
   tenantId: string;
   plan: "free" | "pro" | "enterprise";
@@ -19,91 +17,53 @@ export interface TenantConfig {
  * Resolve a full {@link TenantConfig} from a GitHub App installation ID.
  *
  * This is the primary entry point for multi-tenant request routing:
- *   installation_id  ->  installations row  ->  tenant  ->  active ai_config
+ *   installation_id  ->  installations row  ->  organization  ->  active ai_config
  *
- * If the installation is not found, the tenant does not exist, or there is
+ * If the installation is not found, the organization does not exist, or there is
  * no active AI configuration, the function returns `null` so that callers
  * can fall back to the legacy env-var-based behaviour.
  *
- * @param db             - Drizzle database instance.
+ * @param db             - Prisma database client.
  * @param installationId - GitHub App installation ID (numeric).
  */
 export async function resolveTenantFromInstallation(
-  db: DrizzleDb,
+  db: PrismaClient,
   installationId: number,
 ): Promise<TenantConfig | null> {
-  // 1. Look up the installation row
-  const installationRow = await db
-    .select({
-      tenantId: installations.tenantId,
-    })
-    .from(installations)
-    .where(
-      and(
-        eq(installations.githubInstallationId, installationId),
-        eq(installations.status, "active"),
-      ),
-    )
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
+  const installation = await db.installation.findUnique({
+    where: {
+      githubInstallationId: installationId,
+    },
+    include: {
+      organization: {
+        include: {
+          aiConfigs: {
+            where: { isActive: true },
+            take: 1,
+          },
+        },
+      },
+    },
+  });
 
-  if (!installationRow) {
-    return null;
-  }
+  if (!installation || installation.status !== "active") return null;
 
-  const { tenantId } = installationRow;
+  const { organization } = installation;
+  const aiConfig = organization.aiConfigs[0];
 
-  // 2. Fetch tenant details
-  const tenantRow = await db
-    .select({
-      plan: tenants.plan,
-    })
-    .from(tenants)
-    .where(eq(tenants.id, tenantId))
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
-
-  if (!tenantRow) {
-    return null;
-  }
-
-  // 3. Fetch the active AI config for this tenant
-  const aiConfigRow = await db
-    .select({
-      provider: aiConfigs.provider,
-      model: aiConfigs.model,
-      apiKeyEncrypted: aiConfigs.apiKeyEncrypted,
-      apiKeyIv: aiConfigs.apiKeyIv,
-      baseUrl: aiConfigs.baseUrl,
-    })
-    .from(aiConfigs)
-    .where(
-      and(
-        eq(aiConfigs.tenantId, tenantId),
-        eq(aiConfigs.isActive, true),
-      ),
-    )
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
-
-  if (!aiConfigRow) {
-    return null;
-  }
-
-  // 4. Decrypt the API key
-  const apiKey = decryptApiKey(
-    aiConfigRow.apiKeyEncrypted,
-    aiConfigRow.apiKeyIv,
-  );
+  if (!aiConfig) return null;
 
   return {
-    tenantId,
-    plan: tenantRow.plan,
+    tenantId: organization.id,
+    plan: organization.plan,
     ai: {
-      provider: aiConfigRow.provider,
-      model: aiConfigRow.model,
-      apiKey,
-      baseUrl: aiConfigRow.baseUrl ?? undefined,
+      provider: aiConfig.provider,
+      model: aiConfig.model,
+      apiKey: decryptApiKey(
+        Buffer.from(aiConfig.apiKeyEncrypted),
+        Buffer.from(aiConfig.apiKeyIv),
+      ),
+      baseUrl: aiConfig.baseUrl ?? undefined,
     },
   };
 }
