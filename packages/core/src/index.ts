@@ -37,14 +37,17 @@ export { localizeText, resolveUiLocale, type UiLocale } from "./i18n.js";
 export { logCore } from "./logger.js";
 export { encodePath } from "./path.js";
 export {
+  getRateLimitRecordCount,
   isRateLimited,
   isRateLimitedAsync,
+  isRateLimitedAtomicAsync,
   normalizeRateLimitPart,
 } from "./rate-limit.js";
 export {
   assertRuntimeStateBackendReady,
   checkAndMarkDuplicateAsync,
   deleteRuntimeStateValue,
+  getRuntimeStateStoreInstance,
   loadRuntimeStateValue,
   loadRuntimeStateValueAsync,
   pingRuntimeStateBackend,

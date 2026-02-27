@@ -1,10 +1,12 @@
 import {
   getRuntimeStateScopeEntryCount,
+  getRuntimeStateStoreInstance,
   loadRuntimeStateValue,
   loadRuntimeStateValueAsync,
   saveRuntimeStateValue,
   saveRuntimeStateValueAsync,
 } from "./runtime-state.js";
+import { RedisRuntimeStateStore } from "./runtime-state-redis.js";
 import { nowMs } from "./clock.js";
 
 const MAX_RATE_LIMIT_KEYS = 5_000;
@@ -109,4 +111,38 @@ async function touchRateLimitRecordAsync(
 
 export function getRateLimitRecordCount(): number {
   return getRuntimeStateScopeEntryCount(RATE_LIMIT_STATE_SCOPE);
+}
+
+/**
+ * Atomic rate limiting that uses Redis sorted sets when the backend is Redis,
+ * falling back to the standard load→mutate→save pattern on other backends.
+ *
+ * The Redis path is fully atomic (pipeline executes on a single-threaded
+ * Redis server), eliminating the TOCTOU race in multi-instance deployments.
+ */
+export async function isRateLimitedAtomicAsync(
+  key: string,
+  limit: number,
+  windowMs: number,
+): Promise<boolean> {
+  const safeKey = key.trim().slice(0, 240);
+  if (!safeKey) {
+    return false;
+  }
+
+  const safeLimit = Math.max(1, Math.floor(limit));
+  const safeWindowMs = Math.max(1, Math.floor(windowMs));
+
+  const store = getRuntimeStateStoreInstance();
+  if (store instanceof RedisRuntimeStateStore) {
+    const count = await store.incrementRateLimitAsync(
+      RATE_LIMIT_STATE_SCOPE,
+      safeKey,
+      safeWindowMs,
+    );
+    return count > safeLimit;
+  }
+
+  // Non-Redis backends: fall back to existing async pattern (single-process safe)
+  return isRateLimitedAsync(safeKey, safeLimit, safeWindowMs);
 }

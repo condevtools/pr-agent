@@ -1,6 +1,6 @@
 import {
   isRateLimited,
-  isRateLimitedAsync,
+  isRateLimitedAtomicAsync,
   localizeText,
   normalizeRateLimitPart,
   readNumberEnv,
@@ -1360,7 +1360,7 @@ async function isGitHubCommandRateLimitedAsync(params: {
     `${normalizeRateLimitPart(params.owner, "unknown-owner")}/` +
     `${normalizeRateLimitPart(params.repo, "unknown-repo")}:` +
     `pr:${params.pullNumber}:user:${user}:cmd:${command}`;
-  return isRateLimitedAsync(key, maxPerWindow, windowMs);
+  return isRateLimitedAtomicAsync(key, maxPerWindow, windowMs);
 }
 
 async function shouldRejectGitHubCommandByRateLimit(params: {

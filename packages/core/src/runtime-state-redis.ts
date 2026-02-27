@@ -244,6 +244,51 @@ export class RedisRuntimeStateStore {
     }
   }
 
+  /**
+   * Atomic sliding-window rate limit using a Redis sorted set pipeline.
+   *
+   * Each request adds a unique member scored by the current timestamp.
+   * Expired members (outside the window) are pruned, and ZCARD returns the
+   * count of remaining members within the window — all inside a single
+   * pipeline that executes atomically on the Redis server.
+   *
+   * Returns the count of requests within the window (AFTER adding the new one).
+   */
+  async incrementRateLimitAsync(
+    scope: string,
+    key: string,
+    windowMs: number,
+  ): Promise<number> {
+    const redisKey = toRedisKey(scope, key);
+    const now = nowMs();
+    const windowStart = now - windowMs;
+    // Unique member: timestamp + random suffix to avoid collisions
+    const member = `${now}:${Math.random().toString(36).slice(2, 10)}`;
+
+    try {
+      const pipeline = this.redis.pipeline();
+      pipeline.zadd(redisKey, now, member);
+      pipeline.zremrangebyscore(redisKey, "-inf", windowStart);
+      pipeline.zcard(redisKey);
+      pipeline.pexpire(redisKey, Math.ceil(windowMs * 1.1));
+
+      const results = await pipeline.exec();
+      // results[2] is the ZCARD result: [error, count]
+      const zcardResult = results?.[2];
+      if (zcardResult && !zcardResult[0]) {
+        return zcardResult[1] as number;
+      }
+      return 0;
+    } catch (error) {
+      logCore("warn", "runtime_state.redis.rate_limit_error", {
+        scope,
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
+  }
+
   async closeAsync(): Promise<void> {
     try {
       await this.redis.quit();

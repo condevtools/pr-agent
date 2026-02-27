@@ -255,6 +255,19 @@ export async function checkAndMarkDuplicateAsync(
 }
 
 /**
+ * Returns the current runtime state store instance.
+ * Useful for callers that need to type-check against a specific backend
+ * (e.g., `instanceof RedisRuntimeStateStore`) to use backend-specific methods.
+ */
+export function getRuntimeStateStoreInstance():
+  | InMemoryRuntimeStateStore
+  | FileRuntimeStateStore
+  | SqliteRuntimeStateStore
+  | RedisRuntimeStateStore {
+  return getRuntimeStateStore();
+}
+
+/**
  * Ping the runtime state backend to check connectivity.
  * Returns true if the backend is reachable.
  */

@@ -3,7 +3,7 @@ import {
   clearDuplicateRecord,
   ensureError,
   isDuplicateRequestAsync,
-  isRateLimitedAsync,
+  isRateLimitedAtomicAsync,
   loadRuntimeStateValueAsync,
   localizeText,
   nowMs,
@@ -726,7 +726,7 @@ async function isGitLabCommandRateLimited(params: {
     "gitlab:" +
     `${params.projectId}:mr:${params.mrId}:` +
     `user:${user}:cmd:${command}`;
-  return isRateLimitedAsync(key, maxPerWindow, windowMs);
+  return isRateLimitedAtomicAsync(key, maxPerWindow, windowMs);
 }
 
 async function shouldRejectGitLabCommandByRateLimit(params: {
