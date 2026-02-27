@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { decryptApiKey } from "./crypto.js";
+import { decryptApiKey } from "./crypto";
 
 /** Resolved organization context used throughout the request lifecycle. */
 export interface TenantConfig {

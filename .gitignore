@@ -6,6 +6,7 @@ node_modules
 dist
 .DS_Store
 .worktrees/
+apps/web/.next/
 docs/
 .mr-agent-runtime-state.json
 .mr-agent-runtime-state.sqlite3

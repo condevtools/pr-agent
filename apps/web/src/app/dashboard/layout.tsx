@@ -21,7 +21,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
       {/* Main content area */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header />
+        <Header userName={session.user.name} userEmail={session.user.email} />
         <main className="flex-1 overflow-y-auto p-6 lg:p-8">
           {children}
         </main>

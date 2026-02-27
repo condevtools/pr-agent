@@ -3,8 +3,23 @@
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 
-export function Header() {
+type HeaderProps = {
+  userName?: string | null;
+  userEmail?: string | null;
+};
+
+function getInitial(name?: string | null, email?: string | null): string {
+  const fromName = name?.trim().charAt(0);
+  if (fromName) return fromName.toUpperCase();
+  const fromEmail = email?.trim().charAt(0);
+  return fromEmail ? fromEmail.toUpperCase() : "U";
+}
+
+export function Header({ userName, userEmail }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const avatarInitial = getInitial(userName, userEmail);
+  const displayName = userName?.trim() || "User";
+  const displayEmail = userEmail?.trim() || "user@example.com";
 
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm px-6 py-3">
@@ -40,11 +55,11 @@ export function Header() {
             className="flex items-center gap-3 rounded-lg px-3 py-1.5 hover:bg-gray-800 transition-colors"
           >
             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-sm font-bold">
-              U
+              {avatarInitial}
             </div>
             <div className="hidden sm:block text-left">
-              <p className="text-sm font-medium text-gray-200">User</p>
-              <p className="text-xs text-gray-500">user@example.com</p>
+              <p className="text-sm font-medium text-gray-200">{displayName}</p>
+              <p className="text-xs text-gray-500">{displayEmail}</p>
             </div>
             <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
