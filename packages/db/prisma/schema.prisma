@@ -1,0 +1,227 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Plan {
+  free
+  pro
+  enterprise
+}
+
+enum MemberRole {
+  owner
+  admin
+  member
+}
+
+enum InstallationStatus {
+  active
+  suspended
+  removed
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  canceled
+  trialing
+}
+
+// ---------------------------------------------------------------------------
+// Better Auth core tables
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  accounts Account[]
+  sessions Session[]
+  members  Member[]
+
+  @@map("user")
+}
+
+model Account {
+  id                    String    @id
+  userId                String    @map("user_id")
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  idToken               String?   @map("id_token")
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account")
+}
+
+model Session {
+  id                     String    @id
+  userId                 String    @map("user_id")
+  token                  String    @unique
+  expiresAt              DateTime  @map("expires_at")
+  ipAddress              String?   @map("ip_address")
+  userAgent              String?   @map("user_agent")
+  activeOrganizationId   String?   @map("active_organization_id")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("verification")
+}
+
+// ---------------------------------------------------------------------------
+// Better Auth organization plugin tables
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id                    String    @id
+  name                  String
+  slug                  String    @unique
+  logo                  String?
+  metadata              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  // Business fields (additionalFields in Better Auth config)
+  plan                  Plan      @default(free)
+  stripeCustomerId      String?   @unique @map("stripe_customer_id")
+  stripeSubscriptionId  String?   @unique @map("stripe_subscription_id")
+
+  members        Member[]
+  invitations    Invitation[]
+  installations  Installation[]
+  aiConfigs      AiConfig[]
+  usageRecords   UsageRecord[]
+  subscriptions  Subscription[]
+
+  @@map("organization")
+}
+
+model Member {
+  id             String   @id
+  userId         String   @map("user_id")
+  organizationId String   @map("organization_id")
+  role           String   @default("member")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("member")
+}
+
+model Invitation {
+  id             String   @id
+  email          String
+  inviterId      String   @map("inviter_id")
+  organizationId String   @map("organization_id")
+  role           String   @default("member")
+  status         String   @default("pending")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("invitation")
+}
+
+// ---------------------------------------------------------------------------
+// Business tables (foreign keys re-pointed to Organization)
+// ---------------------------------------------------------------------------
+
+model Installation {
+  id                    String             @id @default(uuid()) @db.Uuid
+  organizationId        String             @map("organization_id")
+  githubInstallationId  Int                @unique @map("github_installation_id")
+  accountLogin          String             @map("account_login")
+  accountType           String             @default("Organization") @map("account_type")
+  status                InstallationStatus @default(active)
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("installations")
+}
+
+model AiConfig {
+  id               String   @id @default(uuid()) @db.Uuid
+  organizationId   String   @map("organization_id")
+  provider         String
+  model            String
+  apiKeyEncrypted  Bytes    @map("api_key_encrypted")
+  apiKeyIv         Bytes    @map("api_key_iv")
+  baseUrl          String?  @map("base_url")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@map("ai_configs")
+}
+
+model UsageRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id")
+  eventType      String   @map("event_type")
+  tokensIn       Int      @default(0) @map("tokens_in")
+  tokensOut      Int      @default(0) @map("tokens_out")
+  model          String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("usage_records")
+}
+
+model Subscription {
+  id                    String             @id @default(uuid()) @db.Uuid
+  organizationId        String             @map("organization_id")
+  stripeSubscriptionId  String             @unique @map("stripe_subscription_id")
+  status                SubscriptionStatus
+  plan                  Plan
+  currentPeriodStart    DateTime?          @map("current_period_start")
+  currentPeriodEnd      DateTime?          @map("current_period_end")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
