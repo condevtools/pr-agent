@@ -11,10 +11,7 @@ type SubscriptionStatusValue =
   | "active"
   | "past_due"
   | "canceled"
-  | "incomplete"
-  | "trialing"
-  | "unpaid"
-  | "paused";
+  | "trialing";
 
 /**
  * Attempt to lazily import the DB module.  Returns `null` when the package is
@@ -29,14 +26,6 @@ async function tryGetDb() {
     console.warn(
       "[stripe/webhook] @mr-agent/db is not available – DB operations will be skipped.",
     );
-    return null;
-  }
-}
-
-async function tryGetSchema() {
-  try {
-    return await import("@mr-agent/db");
-  } catch {
     return null;
   }
 }
@@ -61,12 +50,9 @@ function mapSubscriptionStatus(
     active: "active",
     past_due: "past_due",
     canceled: "canceled",
-    incomplete: "incomplete",
     trialing: "trialing",
-    unpaid: "unpaid",
-    paused: "paused",
   };
-  return mapping[stripeStatus] ?? "incomplete";
+  return mapping[stripeStatus] ?? "canceled";
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +60,7 @@ function mapSubscriptionStatus(
 // ---------------------------------------------------------------------------
 
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
-  const tenantId = session.metadata?.tenantId;
+  const organizationId = session.metadata?.organizationId;
   const planId = (session.metadata?.planId ?? "free") as PlanValue;
   const stripeCustomerId =
     typeof session.customer === "string"
@@ -85,38 +71,35 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       ? session.subscription
       : session.subscription?.id;
 
-  if (!tenantId) {
+  if (!organizationId) {
     console.warn(
-      "[stripe/webhook] checkout.session.completed missing tenantId in metadata",
+      "[stripe/webhook] checkout.session.completed missing organizationId in metadata",
     );
     return;
   }
 
   console.log(
-    `[stripe/webhook] checkout.session.completed – tenant=${tenantId} plan=${planId}`,
+    `[stripe/webhook] checkout.session.completed – org=${organizationId} plan=${planId}`,
   );
 
   const db = await tryGetDb();
-  const schema = await tryGetSchema();
 
-  if (!db || !schema) {
+  if (!db) {
     console.warn(
       "[stripe/webhook] Skipping DB operations for checkout.session.completed",
     );
     return;
   }
 
-  const { eq } = await import("drizzle-orm");
-
-  // Update tenant with Stripe customer ID and plan
-  await db
-    .update(schema.tenants)
-    .set({
+  // Update organization with Stripe customer ID and plan
+  await db.organization.update({
+    where: { id: organizationId },
+    data: {
       plan: planId,
       stripeCustomerId: stripeCustomerId ?? null,
       stripeSubscriptionId: stripeSubscriptionId ?? null,
-    })
-    .where(eq(schema.tenants.id, tenantId));
+    },
+  });
 
   // Create subscription record
   if (stripeSubscriptionId) {
@@ -125,15 +108,17 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       stripeSubscriptionId,
     );
 
-    await db.insert(schema.subscriptions).values({
-      tenantId,
-      stripeSubscriptionId,
-      status: mapSubscriptionStatus(subscription.status),
-      plan: planId,
-      currentPeriodStart: new Date(
-        subscription.current_period_start * 1000,
-      ),
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+    await db.subscription.create({
+      data: {
+        organizationId,
+        stripeSubscriptionId,
+        status: mapSubscriptionStatus(subscription.status),
+        plan: planId,
+        currentPeriodStart: new Date(
+          subscription.current_period_start * 1000,
+        ),
+        currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      },
     });
   }
 }
@@ -151,16 +136,13 @@ async function handleSubscriptionUpdated(
   );
 
   const db = await tryGetDb();
-  const schema = await tryGetSchema();
 
-  if (!db || !schema) {
+  if (!db) {
     console.warn(
       "[stripe/webhook] Skipping DB operations for customer.subscription.updated",
     );
     return;
   }
-
-  const { eq } = await import("drizzle-orm");
 
   const updateData: Record<string, unknown> = {
     status,
@@ -174,29 +156,23 @@ async function handleSubscriptionUpdated(
     updateData.plan = plan;
   }
 
-  await db
-    .update(schema.subscriptions)
-    .set(updateData)
-    .where(
-      eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId),
-    );
+  await db.subscription.update({
+    where: { stripeSubscriptionId },
+    data: updateData,
+  });
 
-  // Also update the tenant plan if the plan changed
+  // Also update the organization plan if the plan changed
   if (plan) {
-    const subRow = await db
-      .select({ tenantId: schema.subscriptions.tenantId })
-      .from(schema.subscriptions)
-      .where(
-        eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId),
-      )
-      .limit(1)
-      .then((rows) => rows[0] ?? null);
+    const subRow = await db.subscription.findUnique({
+      where: { stripeSubscriptionId },
+      select: { organizationId: true },
+    });
 
     if (subRow) {
-      await db
-        .update(schema.tenants)
-        .set({ plan })
-        .where(eq(schema.tenants.id, subRow.tenantId));
+      await db.organization.update({
+        where: { id: subRow.organizationId },
+        data: { plan },
+      });
     }
   }
 }
@@ -211,40 +187,31 @@ async function handleSubscriptionDeleted(
   );
 
   const db = await tryGetDb();
-  const schema = await tryGetSchema();
 
-  if (!db || !schema) {
+  if (!db) {
     console.warn(
       "[stripe/webhook] Skipping DB operations for customer.subscription.deleted",
     );
     return;
   }
 
-  const { eq } = await import("drizzle-orm");
-
   // Mark subscription as canceled
-  await db
-    .update(schema.subscriptions)
-    .set({ status: "canceled" })
-    .where(
-      eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId),
-    );
+  await db.subscription.update({
+    where: { stripeSubscriptionId },
+    data: { status: "canceled" },
+  });
 
-  // Downgrade tenant to free
-  const subRow = await db
-    .select({ tenantId: schema.subscriptions.tenantId })
-    .from(schema.subscriptions)
-    .where(
-      eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId),
-    )
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
+  // Downgrade organization to free
+  const subRow = await db.subscription.findUnique({
+    where: { stripeSubscriptionId },
+    select: { organizationId: true },
+  });
 
   if (subRow) {
-    await db
-      .update(schema.tenants)
-      .set({ plan: "free", stripeSubscriptionId: null })
-      .where(eq(schema.tenants.id, subRow.tenantId));
+    await db.organization.update({
+      where: { id: subRow.organizationId },
+      data: { plan: "free", stripeSubscriptionId: null },
+    });
   }
 }
 
@@ -266,23 +233,18 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
   );
 
   const db = await tryGetDb();
-  const schema = await tryGetSchema();
 
-  if (!db || !schema) {
+  if (!db) {
     console.warn(
       "[stripe/webhook] Skipping DB operations for invoice.payment_failed",
     );
     return;
   }
 
-  const { eq } = await import("drizzle-orm");
-
-  await db
-    .update(schema.subscriptions)
-    .set({ status: "past_due" })
-    .where(
-      eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId),
-    );
+  await db.subscription.update({
+    where: { stripeSubscriptionId },
+    data: { status: "past_due" },
+  });
 }
 
 async function handleInvoicePaid(invoice: Stripe.Invoice) {
@@ -303,23 +265,18 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   );
 
   const db = await tryGetDb();
-  const schema = await tryGetSchema();
 
-  if (!db || !schema) {
+  if (!db) {
     console.warn(
       "[stripe/webhook] Skipping DB operations for invoice.paid",
     );
     return;
   }
 
-  const { eq } = await import("drizzle-orm");
-
-  await db
-    .update(schema.subscriptions)
-    .set({ status: "active" })
-    .where(
-      eq(schema.subscriptions.stripeSubscriptionId, stripeSubscriptionId),
-    );
+  await db.subscription.update({
+    where: { stripeSubscriptionId },
+    data: { status: "active" },
+  });
 }
 
 // ---------------------------------------------------------------------------
