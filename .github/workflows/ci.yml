@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @mr-agent/db db:generate
+
+      - name: Typecheck
+        run: pnpm --filter '!@mr-agent/web' run check
+
+      - name: Build
+        run: pnpm --filter '!@mr-agent/web' run build
+
+      - name: Test
+        run: pnpm test
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t mr-agent-api:ci .
+
+  kustomize:
+    name: Validate K8s Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Validate base
+        run: kustomize build k8s/base > /dev/null
+
+      - name: Validate staging
+        run: kustomize build k8s/overlays/staging > /dev/null
+
+      - name: Validate production
+        run: kustomize build k8s/overlays/production > /dev/null
