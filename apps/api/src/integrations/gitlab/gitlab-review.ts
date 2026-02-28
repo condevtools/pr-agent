@@ -14,6 +14,7 @@ import {
   readStringEnv,
   resolveUiLocale,
   saveRuntimeStateValueAsync,
+  type TenantConfig,
   type UiLocale,
 } from "@mr-agent/core";
 import { z } from "zod";
@@ -26,6 +27,7 @@ import {
   countPatchChanges,
   findSimilarIssues,
   findFileForReview,
+  getTenantConcurrencyLimiter,
   GITLAB_GUIDELINE_DIRECTORIES,
   GITLAB_GUIDELINE_FILE_PATHS,
   parseAddDocCommand,
@@ -145,8 +147,7 @@ import {
   shouldUseIncrementalReview,
   shouldUseManagedReviewSummary,
 } from "@mr-agent/shared/review-triggers.js";
-
-// ---------------------------------------------------------------------------
+import { getPlanConcurrencyLimit } from "../../common/config/plan-concurrency.js";
 // TODO(refactor): Decompose this 3100+ line file into focused modules
 //
 // Suggested extraction plan:
@@ -444,6 +445,7 @@ interface GitLabReviewRunParams {
   secretScanCustomPatterns?: string[];
   enableAutoLabel?: boolean;
   throwOnError?: boolean;
+  tenantConfig?: TenantConfig;
 }
 
 interface GitLabAskRunParams {
@@ -875,6 +877,7 @@ export async function runGitLabReview(
     secretScanCustomPatterns = [],
     enableAutoLabel = true,
     throwOnError = false,
+    tenantConfig,
   } = params;
   if (payload.object_kind && payload.object_kind !== "merge_request") {
     return { ok: true, message: `ignored object_kind=${payload.object_kind}` };
@@ -970,7 +973,15 @@ export async function runGitLabReview(
       return { ok: true, message: "no textual diff to review" };
     }
 
-    const result = await analyzePullRequest(collected.input);
+    const runAnalysis = () => analyzePullRequest(collected.input, { tenantConfig });
+
+    // Apply per-tenant concurrency limiting when tenant is resolved
+    const result = tenantConfig
+      ? await getTenantConcurrencyLimiter(
+          tenantConfig.tenantId,
+          getPlanConcurrencyLimit(tenantConfig.plan),
+        ).withLimit(runAnalysis)
+      : await runAnalysis();
     if (mode === "comment") {
       await publishGitLabLineComments(gitlabToken, collected, result, logger, locale);
       const summaryBody = [

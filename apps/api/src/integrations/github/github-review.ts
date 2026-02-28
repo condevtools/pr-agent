@@ -15,6 +15,7 @@ import {
   buildIssueCommentMarkdown,
   buildReportCommentMarkdown,
   findFileForReview,
+  getTenantConcurrencyLimiter,
   GITHUB_GUIDELINE_DIRECTORIES,
   GITHUB_GUIDELINE_FILE_PATHS,
   isProcessTemplateFile,
@@ -108,8 +109,7 @@ import type {
   GitHubReviewRunParams,
   MinimalGitHubOctokit,
 } from "./github-review-types.js";
-
-// ---------------------------------------------------------------------------
+import { getPlanConcurrencyLimit } from "../../common/config/plan-concurrency.js";
 // TODO(refactor): Decompose this 1400+ line file into focused modules
 //
 // Suggested extraction plan:
@@ -429,7 +429,15 @@ export async function runGitHubReview(
       return;
     }
 
-    const reviewResult = await analyzePullRequest(collected.input, { tenantConfig });
+    const runAnalysis = () => analyzePullRequest(collected.input, { tenantConfig });
+
+    // Apply per-tenant concurrency limiting when tenant is resolved
+    const reviewResult = tenantConfig
+      ? await getTenantConcurrencyLimiter(
+          tenantConfig.tenantId,
+          getPlanConcurrencyLimit(tenantConfig.plan),
+        ).withLimit(runAnalysis)
+      : await runAnalysis();
 
     if (mode === "comment") {
       const posted = await publishGitHubLineComments(
