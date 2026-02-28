@@ -1,0 +1,7 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mr-agent-api
+  namespace: mr-agent
+spec:
+  replicas: 1

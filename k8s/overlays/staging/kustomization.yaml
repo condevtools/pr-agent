@@ -3,21 +3,16 @@ kind: Kustomization
 namespace: mr-agent-staging
 resources:
   - ../../base
+images:
+  - name: mr-agent-api
+    newTag: staging
+  - name: mr-agent-web
+    newTag: staging
 patches:
-  - target:
-      kind: Deployment
-      name: mr-agent-api
-    patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 1
-  - target:
-      kind: Deployment
-      name: mr-agent-api
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: mr-agent-api:staging
+  - path: patch-api-deployment.yaml
+  - path: patch-web-deployment.yaml
+  - path: patch-api-ingress.yaml
+  - path: patch-web-ingress.yaml
   - target:
       kind: Namespace
       name: mr-agent
@@ -25,16 +20,3 @@ patches:
       - op: replace
         path: /metadata/name
         value: mr-agent-staging
-  - target:
-      kind: Ingress
-      name: mr-agent-api
-    patch: |
-      - op: replace
-        path: /spec/rules/0/host
-        value: staging.mr-agent.example.com
-      - op: replace
-        path: /spec/tls/0/hosts/0
-        value: staging.mr-agent.example.com
-      - op: replace
-        path: /spec/tls/0/secretName
-        value: mr-agent-staging-tls

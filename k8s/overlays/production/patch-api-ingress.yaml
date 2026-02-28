@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mr-agent-api
+  namespace: mr-agent
+spec:
+  tls:
+    - hosts:
+        - mr-agent.example.com
+      secretName: mr-agent-tls
+  rules:
+    - host: mr-agent.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mr-agent-api
+                port:
+                  number: 3000

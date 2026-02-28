@@ -39,25 +39,32 @@ export class GithubAppBootstrapService implements OnModuleInit {
       return;
     }
 
-    const probot = createProbot();
-    const middleware = createNodeMiddleware(githubApp, {
-      probot,
-      webhooksPath: "/api/github/webhooks",
-    });
+    try {
+      const probot = createProbot();
+      const middleware = createNodeMiddleware(githubApp, {
+        probot,
+        webhooksPath: "/api/github/webhooks",
+      });
 
-    const expressMiddleware: RequestHandler = (
-      request,
-      response,
-      next,
-    ) => {
-      void (middleware as (...args: unknown[]) => unknown)(
+      const expressMiddleware: RequestHandler = (
         request,
         response,
         next,
+      ) => {
+        void (middleware as (...args: unknown[]) => unknown)(
+          request,
+          response,
+          next,
+        );
+      };
+      expressApp.use(expressMiddleware);
+      this.logger.log("GitHub App webhook mounted at /api/github/webhooks");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `GitHub App bootstrap failed: ${reason}. Continue without GitHub App middleware.`,
       );
-    };
-    expressApp.use(expressMiddleware);
-    this.logger.log("GitHub App webhook mounted at /api/github/webhooks");
+    }
   }
 }
 

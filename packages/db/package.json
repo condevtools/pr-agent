@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./*": "./src/*"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
+  "types": "./dist/index.d.ts",
   "dependencies": {
     "@mr-agent/core": "workspace:*",
     "@prisma/client": "^6.0.0"

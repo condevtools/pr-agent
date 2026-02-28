@@ -315,16 +315,19 @@ API 应用使用 Node.js ESM subpath imports（配置在 `apps/api/package.json`
 
 ```bash
 # 安装依赖
-npm install
+pnpm install
 
-# 启动开发服务（tsx 热加载）
-npm run dev
+# 启动开发服务（API + Web 并行）
+pnpm dev
 
-# 生产构建
-npm run build
+# 生产构建（Monorepo）
+pnpm build
 
-# 启动生产服务
-npm start
+# 启动 API
+pnpm start:api
+
+# 启动 Web（可选）
+pnpm start:web
 ```
 
 服务默认监听 `3000` 端口（可通过 `PORT` 环境变量配置）。
@@ -525,11 +528,17 @@ docker run -d \
 # 启动
 docker compose up -d --build
 
-# 查看日志
+# 查看 API 日志
 docker compose logs -f mr-agent
 
-# 重启
+# 查看 Web 日志
+docker compose logs -f mr-agent-web
+
+# 重启 API
 docker compose restart mr-agent
+
+# 重启 Web
+docker compose restart mr-agent-web
 
 # 停止
 docker compose down
@@ -538,6 +547,10 @@ docker compose down
 `docker-compose.yml` 挂载的卷：
 - `./data:/data` — 持久化状态（SQLite、事件存储）
 - `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App 私钥
+
+默认端口映射：
+- API（Webhook/健康检查）：`http://127.0.0.1:3000`
+- Web 控制台（Next.js）：`http://127.0.0.1:3001`
 
 ### 生产部署清单
 
@@ -630,9 +643,14 @@ WEBHOOK_REPLAY_TOKEN=replace-with-strong-random-token
 3. **启动应用**
 
 ```bash
-npm install
-npm run build
-npm start
+pnpm install
+pnpm build
+
+# 启动 API
+pnpm start:api
+
+# 启动 Web（可选）
+pnpm start:web
 ```
 
 服务监听 `PORT`（默认 `3000`）。
@@ -645,11 +663,15 @@ npm start
    - `x-ai-mode: report|comment`
    - `x-gitlab-api-token: <api token>`
    - `x-gitlab-token: <webhook secret>`（仅当已配置 `GITLAB_WEBHOOK_SECRET`）
-6. **Docker 一键启动**
+6. **Docker 一键启动（前后端）**
 
 ```bash
-docker build -t mr-agent:latest .
-docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
+# 推荐：直接使用 compose（同时启动 API / Web / PostgreSQL / Redis）
+docker compose up -d --build
+
+# 或分别构建镜像：
+docker build -t mr-agent-api:latest -f Dockerfile .
+docker build -t mr-agent-web:latest -f Dockerfile.web .
 ```
 
 7. **验证清单**
@@ -669,8 +691,19 @@ docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
 ### Kubernetes 说明
 
 - `k8s/base/deployment.yaml` 依赖 `mr-agent-secrets`（非可选）。
-- 该 Secret 至少需要包含 `DB_PASSWORD` 与 `REDIS_PASSWORD`。
-- 就绪探针使用 `GET /health`；`GET /health?deep=true` 仍可用于人工诊断深度检查。
+- `k8s/base/web-deployment.yaml` 提供 Web 控制台（`mr-agent-web`）的 Deployment。
+- 可直接使用模板：`k8s/templates/secrets.example.yaml`（包含 `mr-agent-secrets` 与 `mr-agent-github-app-key`）。
+- 该 Secret 至少需要包含 `DB_PASSWORD` 与 `REDIS_PASSWORD`；若启用 Web 登录与计费，还需包含：
+  - `BETTER_AUTH_SECRET`
+  - `GITHUB_CLIENT_ID`
+  - `GITHUB_CLIENT_SECRET`
+  - `STRIPE_SECRET_KEY`（启用 Stripe 时）
+  - `STRIPE_WEBHOOK_SECRET`（启用 Stripe 时）
+- 部署后建议执行功能回归脚本：`scripts/ops/functional-regression.sh`（清单见 `docs/ops/functional-regression-checklist.zh.md`）。
+- API 就绪探针使用 `GET /health`；Web 就绪探针使用 `GET /api/health`。
+- 生产建议将 API 与 Web 分域部署：
+  - API：`mr-agent.example.com`（Webhook 与服务接口）
+  - Web：`app.mr-agent.example.com`（控制台）
 
 ### Nginx 反向代理
 

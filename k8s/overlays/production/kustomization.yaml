@@ -4,21 +4,16 @@ namespace: mr-agent-production
 resources:
   - ../../base
   - hpa.yaml
+images:
+  - name: mr-agent-api
+    newTag: production
+  - name: mr-agent-web
+    newTag: production
 patches:
-  - target:
-      kind: Deployment
-      name: mr-agent-api
-    patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 3
-  - target:
-      kind: Deployment
-      name: mr-agent-api
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: mr-agent-api:production
+  - path: patch-api-deployment.yaml
+  - path: patch-web-deployment.yaml
+  - path: patch-api-ingress.yaml
+  - path: patch-web-ingress.yaml
   - target:
       kind: Namespace
       name: mr-agent
@@ -26,13 +21,3 @@ patches:
       - op: replace
         path: /metadata/name
         value: mr-agent-production
-  - target:
-      kind: Ingress
-      name: mr-agent-api
-    patch: |
-      - op: replace
-        path: /spec/rules/0/host
-        value: mr-agent.example.com
-      - op: replace
-        path: /spec/tls/0/hosts/0
-        value: mr-agent.example.com

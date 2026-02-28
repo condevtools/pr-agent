@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mr-agent-web
+  namespace: mr-agent
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: BETTER_AUTH_URL
+              value: https://app.mr-agent.example.com
+            - name: NEXT_PUBLIC_APP_URL
+              value: https://app.mr-agent.example.com

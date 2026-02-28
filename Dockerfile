@@ -19,7 +19,8 @@ COPY packages/ packages/
 COPY apps/api/ apps/api/
 
 RUN pnpm --filter @mr-agent/db db:generate
-RUN pnpm --filter @mr-agent/api run check
+RUN pnpm --filter @mr-agent/db build
+RUN pnpm --filter @mr-agent/api build
 
 FROM node:22-alpine AS runtime
 
@@ -40,10 +41,10 @@ RUN pnpm install --frozen-lockfile
 COPY packages/db/prisma/ packages/db/prisma/
 COPY packages/ packages/
 COPY apps/api/src/ apps/api/src/
-COPY tsconfig.base.json ./
+COPY apps/api/dist/ apps/api/dist/
 
 RUN pnpm --filter @mr-agent/db db:generate
 
 EXPOSE 3000
 
-CMD ["node", "--import", "tsx", "apps/api/src/main.ts"]
+CMD ["pnpm", "--filter", "@mr-agent/api", "start"]

@@ -19,7 +19,9 @@
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:restart": "docker compose restart mr-agent",
+    "docker:restart:web": "docker compose restart mr-agent-web",
     "docker:logs": "docker compose logs -f mr-agent",
+    "docker:logs:web": "docker compose logs -f mr-agent-web",
     "docker:ps": "docker compose ps"
   },
   "devDependencies": {

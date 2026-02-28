@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mr-agent-web
+  namespace: mr-agent
+  labels:
+    app.kubernetes.io/name: mr-agent-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: mr-agent
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.mr-agent.example.com
+      secretName: mr-agent-web-tls
+  rules:
+    - host: app.mr-agent.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mr-agent-web
+                port:
+                  number: 3000

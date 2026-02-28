@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mr-agent-web
+  namespace: mr-agent
+  labels:
+    app.kubernetes.io/name: mr-agent-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: mr-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mr-agent-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mr-agent-web
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: mr-agent
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: web
+          image: mr-agent-web:0.1.0
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: mr-agent-config
+            - secretRef:
+                name: mr-agent-secrets
+                optional: false
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mr-agent-secrets
+                  key: DB_PASSWORD
+                  optional: false
+            - name: DATABASE_URL
+              value: "postgresql://mr-agent:$(DB_PASSWORD)@postgresql:5432/mr-agent"
+            - name: BETTER_AUTH_URL
+              value: "https://app.mr-agent.example.com"
+            - name: NEXT_PUBLIC_APP_URL
+              value: "https://app.mr-agent.example.com"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

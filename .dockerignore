@@ -9,7 +9,6 @@ README-zh.md
 docs
 src
 tests
-apps/web
 apps/worker
 .git
 .claude
