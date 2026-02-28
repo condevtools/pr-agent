@@ -62,10 +62,11 @@ const navItems = [
 ];
 
 type SidebarProps = {
+  currentPlan?: string;
   onNavigate?: () => void;
 };
 
-export function Sidebar({ onNavigate }: SidebarProps) {
+export function Sidebar({ currentPlan, onNavigate }: SidebarProps) {
   const pathname = usePathname();
 
   return (
@@ -111,7 +112,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         <div className="border-t border-gray-800 px-3 py-4">
           <div className="rounded-lg bg-gray-900 px-4 py-3">
             <p className="text-xs font-medium text-gray-400">Current Plan</p>
-            <p className="text-sm font-semibold text-indigo-400">Free Tier</p>
+            <p className="text-sm font-semibold text-indigo-400">{currentPlan ?? "Free Tier"}</p>
             <Link
               href="/dashboard/billing"
               className="mt-2 block text-xs text-gray-500 hover:text-gray-300 transition-colors"

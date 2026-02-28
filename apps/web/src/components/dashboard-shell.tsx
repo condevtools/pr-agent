@@ -7,10 +7,11 @@ import { Header } from "@/components/header";
 type DashboardShellProps = {
   userName?: string | null;
   userEmail?: string | null;
+  currentPlan?: string;
   children: React.ReactNode;
 };
 
-export function DashboardShell({ userName, userEmail, children }: DashboardShellProps) {
+export function DashboardShell({ userName, userEmail, currentPlan, children }: DashboardShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const toggleSidebar = useCallback(() => setSidebarOpen((o) => !o), []);
@@ -20,7 +21,7 @@ export function DashboardShell({ userName, userEmail, children }: DashboardShell
     <div className="flex h-screen overflow-hidden">
       {/* Desktop sidebar — always visible on lg+ */}
       <div className="hidden lg:flex">
-        <Sidebar />
+        <Sidebar currentPlan={currentPlan} />
       </div>
 
       {/* Mobile sidebar overlay */}
@@ -34,7 +35,7 @@ export function DashboardShell({ userName, userEmail, children }: DashboardShell
           />
           {/* Sidebar panel */}
           <div className="relative z-50 flex h-full w-64">
-            <Sidebar onNavigate={closeSidebar} />
+            <Sidebar currentPlan={currentPlan} onNavigate={closeSidebar} />
           </div>
         </div>
       )}

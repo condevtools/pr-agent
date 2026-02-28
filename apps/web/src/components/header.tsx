@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { authClient } from "@/lib/auth-client";
 
 type HeaderProps = {
@@ -18,9 +18,21 @@ function getInitial(name?: string | null, email?: string | null): string {
 
 export function Header({ userName, userEmail, onToggleSidebar }: HeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const avatarInitial = getInitial(userName, userEmail);
   const displayName = userName?.trim() || "User";
   const displayEmail = userEmail?.trim() || "user@example.com";
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
 
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm px-6 py-3">
@@ -51,7 +63,7 @@ export function Header({ userName, userEmail, onToggleSidebar }: HeaderProps) {
         </button>
 
         {/* User menu */}
-        <div className="relative">
+        <div className="relative" ref={menuRef}>
           <button
             onClick={() => setMenuOpen(!menuOpen)}
             className="flex items-center gap-3 rounded-lg px-3 py-1.5 hover:bg-gray-800 transition-colors"
