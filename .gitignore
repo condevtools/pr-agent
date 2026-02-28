@@ -11,3 +11,5 @@ docs/
 .mr-agent-runtime-state.sqlite3-wal
 data/
 secrets/
+.turbo/
+apps/
