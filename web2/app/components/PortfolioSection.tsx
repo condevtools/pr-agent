@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -73,36 +73,37 @@ export default function PortfolioSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="commands" className="bg-black py-24 lg:py-32">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+    <section id="commands" className="bg-black py-20 md:py-24 lg:py-32">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
         <div className="mb-16">
-          <div className="inline-flex items-center gap-2 mb-6">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-6">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-end">
-            <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
+            <div data-gsap="reveal">
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
             </div>
             <div className="flex flex-col gap-4 lg:items-end">
-              <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
-              <Link
+              <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
+              <HashLink
                 href="#process"
+                data-gsap="reveal"
                 className="inline-flex items-center gap-2 text-white/60 text-sm hover:text-white transition-colors w-fit"
               >
                 {copy.cta}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
-              </Link>
+              </HashLink>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div data-gsap="cards" className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {copy.cards.map((project) => (
-            <Link
+            <HashLink
               key={project.name}
               href={project.href}
               className="group relative bg-[#080808] border border-white/8 overflow-hidden aspect-[4/5] flex flex-col justify-between p-6 hover:border-white/20 transition-colors"
@@ -136,7 +137,7 @@ export default function PortfolioSection() {
                 </div>
                 <h3 className="text-white text-xl font-semibold">{project.name}</h3>
               </div>
-            </Link>
+            </HashLink>
           ))}
         </div>
       </div>

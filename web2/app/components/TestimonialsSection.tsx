@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -109,38 +109,39 @@ export default function TestimonialsSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="scenarios" className="bg-black py-24 lg:py-32">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+    <section id="scenarios" className="bg-black py-20 md:py-24 lg:py-32">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
         <div className="mb-16">
-          <div className="inline-flex items-center gap-2 mb-6">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-6">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-end">
-            <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
+            <div data-gsap="reveal">
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
             </div>
             <div className="flex flex-col gap-4 lg:items-end">
-              <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
-              <Link
+              <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
+              <HashLink
                 href="#commands"
+                data-gsap="reveal"
                 className="inline-flex items-center gap-2 text-white/60 text-sm hover:text-white transition-colors w-fit"
               >
                 {copy.cta}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
-              </Link>
+              </HashLink>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div data-gsap="cards" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {copy.cards.map((item) => (
             <div
               key={item.name}
-              className="bg-[#080808] border border-white/8 p-7 flex flex-col gap-5"
+              className="bg-[#080808] border border-white/8 p-6 sm:p-7 flex flex-col gap-5"
             >
               <svg className="w-8 h-8 text-[#0055fe]/40" fill="currentColor" viewBox="0 0 32 32">
                 <path d="M9.352 4C4.456 7.456 1 13.12 1 19.36c0 5.088 3.072 8.064 6.624 8.064 3.36 0 5.856-2.688 5.856-5.856 0-3.168-2.208-5.472-5.088-5.472-.576 0-1.344.096-1.536.192.48-3.264 3.552-7.104 6.624-9.024L9.352 4zm16.512 0c-4.8 3.456-8.256 9.12-8.256 15.36 0 5.088 3.072 8.064 6.624 8.064 3.264 0 5.856-2.688 5.856-5.856 0-3.168-2.304-5.472-5.184-5.472-.576 0-1.248.096-1.44.192.48-3.264 3.456-7.104 6.528-9.024L25.864 4z" />

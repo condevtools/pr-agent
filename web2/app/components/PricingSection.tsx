@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -109,23 +109,23 @@ export default function PricingSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="plans" className="bg-black py-24 lg:py-32">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+    <section id="plans" className="bg-black py-20 md:py-24 lg:py-32">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
         <div className="mb-16 text-center">
-          <div className="inline-flex items-center gap-2 mb-6">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-6">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
-          <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight mb-2">{copy.title}</h2>
-          <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
-          <p className="text-white/50 text-sm leading-relaxed max-w-[520px] mx-auto mt-6">{copy.body}</p>
+          <h2 data-gsap="reveal" className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight mb-2">{copy.title}</h2>
+          <h2 data-gsap="reveal" className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
+          <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[520px] mx-auto mt-6">{copy.body}</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <div data-gsap="cards" className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
           {copy.plans.map((plan) => (
             <div
               key={plan.name}
-              className={`relative border p-8 lg:p-10 flex flex-col gap-6 ${
+              className={`relative border p-6 sm:p-8 lg:p-10 flex flex-col gap-6 ${
                 plan.highlight
                   ? 'border-[#0055fe]/50 bg-[#0055fe]/5'
                   : 'border-white/8 bg-[#080808]'
@@ -145,7 +145,7 @@ export default function PricingSection() {
               </div>
 
               <div className="flex items-end gap-2">
-                <span className="text-5xl font-bold text-white">{plan.price}</span>
+                <span className="text-4xl sm:text-5xl font-bold text-white">{plan.price}</span>
                 <div className="mb-1 flex flex-col">
                   <span className="text-white/40 text-sm">{plan.period}</span>
                 </div>
@@ -178,7 +178,7 @@ export default function PricingSection() {
                 ))}
               </div>
 
-              <Link
+              <HashLink
                 href={plan.highlight ? '#deployment' : '#cta'}
                 className={`inline-flex items-center justify-center gap-2 px-6 py-3.5 text-sm font-medium transition-colors ${
                   plan.highlight
@@ -190,7 +190,7 @@ export default function PricingSection() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
-              </Link>
+              </HashLink>
             </div>
           ))}
         </div>

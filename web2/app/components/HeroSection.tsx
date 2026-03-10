@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import ShaderGradientBg from './ShaderGradientBg'
 import { useLocale } from '../i18n/LocaleProvider'
 
@@ -34,44 +34,56 @@ export default function HeroSection() {
   return (
     <section
       id="overview"
-      className="relative min-h-screen flex flex-col items-center justify-center pt-16 overflow-hidden bg-black"
+      className="relative min-h-screen flex flex-col items-center justify-center pt-20 overflow-hidden bg-black"
     >
       <div className="absolute inset-0 pointer-events-none">
         <ShaderGradientBg />
       </div>
 
-      <div className="relative z-10 max-w-[1440px] mx-auto px-6 lg:px-10 text-center w-full">
-        <div className="inline-flex items-center gap-2.5 px-4 py-2 border border-white/15 rounded-full mb-8">
+      <div className="relative z-10 max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10 text-center w-full">
+        <div
+          data-gsap="hero"
+          className="inline-flex max-w-full items-center gap-2.5 px-4 py-2 border border-white/15 rounded-full mb-8"
+        >
           <span className="w-1.5 h-1.5 rounded-full bg-white" />
           <span className="text-white/70 text-sm">{copy.badge}</span>
         </div>
 
-        <h1 className="text-5xl sm:text-6xl md:text-7xl lg:text-[84px] font-bold text-white leading-[1.05] tracking-tight mb-6 max-w-5xl mx-auto">
+        <h1
+          data-gsap="hero"
+          className="text-4xl sm:text-5xl md:text-6xl lg:text-[84px] font-bold text-white leading-[1.05] tracking-tight mb-6 max-w-5xl mx-auto"
+        >
           {copy.title}
           <br />
           {copy.subtitle}
         </h1>
 
-        <p className="text-white/55 text-lg max-w-[620px] mx-auto mb-10 leading-relaxed">
+        <p
+          data-gsap="hero"
+          className="text-white/55 text-base sm:text-lg max-w-[620px] mx-auto mb-10 leading-relaxed"
+        >
           {copy.body}
         </p>
 
-        <div className="flex flex-wrap items-center justify-center gap-4 mb-16">
-          <Link
+        <div data-gsap="hero" className="flex flex-wrap items-center justify-center gap-4 mb-16 max-w-md sm:max-w-none mx-auto">
+          <HashLink
             href="#features"
-            className="px-8 py-4 bg-[#0055fe] text-white font-medium text-sm hover:bg-[#0044cc] transition-colors"
+            className="w-full sm:w-auto justify-center inline-flex px-8 py-4 bg-[#0055fe] text-white font-medium text-sm hover:bg-[#0044cc] transition-colors"
           >
             {copy.primaryCta}
-          </Link>
-          <Link
+          </HashLink>
+          <HashLink
             href="#deployment"
-            className="px-8 py-4 border border-white/25 text-white/80 text-sm hover:border-white/50 hover:text-white transition-colors"
+            className="w-full sm:w-auto justify-center inline-flex px-8 py-4 border border-white/25 text-white/80 text-sm hover:border-white/50 hover:text-white transition-colors"
           >
             {copy.secondaryCta}
-          </Link>
+          </HashLink>
         </div>
 
-        <div className="inline-flex items-center gap-3 px-5 py-2.5 bg-white/5 border border-white/10 rounded-full">
+        <div
+          data-gsap="hero"
+          className="inline-flex max-w-full flex-wrap items-center justify-center gap-3 px-5 py-2.5 bg-white/5 border border-white/10 rounded-2xl"
+        >
           <div className="flex -space-x-2">
             {[...Array(5)].map((_, i) => (
               <div

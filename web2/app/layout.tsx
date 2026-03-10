@@ -2,11 +2,54 @@ import type { Metadata } from 'next'
 import './globals.css'
 import CustomCursor from './components/CustomCursor'
 import { LocaleProvider } from './i18n/LocaleProvider'
+import { SEO_KEYWORDS, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from '../lib/seo-geo'
 
 export const metadata: Metadata = {
-  title: 'PR Agent | AI-powered Code Review | AI 代码评审服务',
-  description:
-    'AI-powered code review service for GitHub and GitLab pull/merge workflows. 面向 GitHub 与 GitLab PR/MR 流程的 AI 代码评审服务。',
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: SITE_TITLE,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  keywords: SEO_KEYWORDS,
+  alternates: {
+    canonical: '/',
+  },
+  authors: [{ name: 'CondevTools' }],
+  creator: 'CondevTools',
+  publisher: 'CondevTools',
+  category: 'developer tools',
+  icons: {
+    icon: '/icon.svg',
+    shortcut: '/icon.svg',
+    apple: '/icon.svg',
+  },
+  openGraph: {
+    type: 'website',
+    url: SITE_URL,
+    siteName: SITE_NAME,
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: [
+      {
+        url: '/logo.svg',
+        width: 512,
+        height: 512,
+        alt: 'PR Agent',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary',
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: ['/logo.svg'],
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 }
 
 export default function RootLayout({

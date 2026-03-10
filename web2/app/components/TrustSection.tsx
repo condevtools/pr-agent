@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -37,30 +37,30 @@ export default function TrustSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="operations" className="relative bg-black py-24 lg:py-32 overflow-hidden">
+    <section id="operations" className="relative bg-black py-20 md:py-24 lg:py-32 overflow-hidden">
       <div className="absolute inset-0 pointer-events-none">
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] bg-[#0055fe]/8 rounded-full blur-[100px]" />
       </div>
 
-      <div className="relative max-w-[1440px] mx-auto px-6 lg:px-10">
-        <div className="border border-white/8 bg-[#080808] p-12 lg:p-16 text-center flex flex-col items-center gap-8">
-          <div className="inline-flex items-center gap-2">
+      <div className="relative max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
+        <div className="border border-white/8 bg-[#080808] p-8 sm:p-10 lg:p-16 text-center flex flex-col items-center gap-8">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
 
-          <div>
-            <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight">
+          <div data-gsap="reveal">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight">
               {copy.title}
             </h2>
-            <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight">
               {copy.subtitle}
             </h2>
           </div>
 
-          <p className="text-white/50 text-base leading-relaxed max-w-[520px]">{copy.body}</p>
+          <p data-gsap="reveal" className="text-white/50 text-base leading-relaxed max-w-[520px]">{copy.body}</p>
 
-          <div className="flex flex-wrap justify-center gap-8 lg:gap-16 pt-4 border-t border-white/8 w-full">
+          <div data-gsap="cards" className="flex flex-wrap justify-center gap-8 lg:gap-16 pt-4 border-t border-white/8 w-full">
             {copy.stats.map((stat) => (
               <div key={stat.label} className="text-center">
                 <div className="text-3xl font-bold text-white mb-1">{stat.value}</div>
@@ -69,7 +69,7 @@ export default function TrustSection() {
             ))}
           </div>
 
-          <Link
+          <HashLink
             href="#faq"
             className="inline-flex items-center gap-2 text-white/60 text-sm hover:text-white transition-colors"
           >
@@ -77,7 +77,7 @@ export default function TrustSection() {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
             </svg>
-          </Link>
+          </HashLink>
         </div>
       </div>
     </section>

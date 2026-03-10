@@ -42,6 +42,10 @@ html {
   scrollbar-color: rgba(53, 116, 255, 0.82) rgba(255, 255, 255, 0.03);
 }
 
+[id] {
+  scroll-margin-top: 88px;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

@@ -88,21 +88,21 @@ export default function FAQSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="faq" className="bg-black py-24 lg:py-32">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+    <section id="faq" className="bg-black py-20 md:py-24 lg:py-32">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16">
           <div className="flex flex-col gap-6">
-            <div className="inline-flex items-center gap-2">
+            <div data-gsap="reveal" className="inline-flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
               <span className="text-white/50 text-sm">{copy.label}</span>
             </div>
             <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+              <h2 data-gsap="reveal" className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
             </div>
-            <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
+            <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
           </div>
 
-          <div className="flex flex-col divide-y divide-white/8">
+          <div data-gsap="cards" className="flex flex-col divide-y divide-white/8">
             {copy.items.map((faq, idx) => (
               <div key={faq.question}>
                 <button

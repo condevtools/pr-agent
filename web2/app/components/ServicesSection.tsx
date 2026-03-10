@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -95,27 +95,27 @@ export default function ServicesSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="deployment" className="bg-black py-24 lg:py-32">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+    <section id="deployment" className="bg-black py-20 md:py-24 lg:py-32">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
         <div className="mb-16">
-          <div className="inline-flex items-center gap-2 mb-6">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-6">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-end">
-            <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
+            <div data-gsap="reveal">
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
             </div>
-            <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
+            <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-white/8">
+        <div data-gsap="cards" className="grid grid-cols-1 md:grid-cols-3 gap-px bg-white/8">
           {copy.cards.map((service) => (
             <div
               key={service.title}
-              className="bg-black border border-white/8 p-8 lg:p-10 flex flex-col gap-6"
+              className="bg-black border border-white/8 p-6 sm:p-8 lg:p-10 flex flex-col gap-6"
             >
               <span className="inline-flex w-fit px-2.5 py-1 border border-white/12 text-white/45 text-xs">
                 {service.type}
@@ -150,7 +150,7 @@ export default function ServicesSection() {
               </div>
 
               {service.cta ? (
-                <Link
+                <HashLink
                   href="#operations"
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0055fe] text-white text-sm font-medium hover:bg-[#0044cc] transition-colors w-fit"
                 >
@@ -158,7 +158,7 @@ export default function ServicesSection() {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                   </svg>
-                </Link>
+                </HashLink>
               ) : null}
             </div>
           ))}

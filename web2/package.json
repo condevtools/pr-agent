@@ -11,9 +11,11 @@
     "build:vinext": "vite build"
   },
   "dependencies": {
+    "@gsap/react": "^2.1.2",
     "@react-three/fiber": "^9.5.0",
     "@shadergradient/react": "^2.4.20",
     "camera-controls": "^3.1.2",
+    "gsap": "^3.14.2",
     "next": "16.1.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",

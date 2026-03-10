@@ -6,7 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react'
 
@@ -18,21 +18,44 @@ type LocaleContextValue = {
 }
 
 const STORAGE_KEY = 'web2-locale'
+const DEFAULT_LOCALE: Locale = 'en'
+const listeners = new Set<() => void>()
+
+function readStoredLocale(): Locale {
+  if (typeof window === 'undefined') {
+    return DEFAULT_LOCALE
+  }
+
+  return window.localStorage.getItem(STORAGE_KEY) === 'zh' ? 'zh' : 'en'
+}
+
+function emitChange() {
+  listeners.forEach((listener) => listener())
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener)
+
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) {
+      listener()
+    }
+  }
+
+  window.addEventListener('storage', onStorage)
+
+  return () => {
+    listeners.delete(listener)
+    window.removeEventListener('storage', onStorage)
+  }
+}
 
 const LocaleContext = createContext<LocaleContextValue | null>(null)
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    if (typeof window === 'undefined') {
-      return 'en'
-    }
-
-    const storedLocale = window.localStorage.getItem(STORAGE_KEY)
-    return storedLocale === 'zh' ? 'zh' : 'en'
-  })
+  const locale = useSyncExternalStore(subscribe, readStoredLocale, () => DEFAULT_LOCALE)
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, locale)
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
   }, [locale])
 
@@ -40,8 +63,13 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     () => ({
       locale,
       setLocale: (nextLocale) => {
+        if (typeof window === 'undefined') {
+          return
+        }
+
         startTransition(() => {
-          setLocaleState(nextLocale)
+          window.localStorage.setItem(STORAGE_KEY, nextLocale)
+          emitChange()
         })
       },
     }),

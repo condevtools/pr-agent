@@ -1,14 +1,30 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export default function CustomCursor() {
+  const [enabled, setEnabled] = useState(false)
   const cursorRef = useRef<HTMLDivElement>(null)
   const pos = useRef({ x: 0, y: 0 })
   const target = useRef({ x: 0, y: 0 })
   const rafRef = useRef<number>(0)
 
   useEffect(() => {
+    const mediaQuery = window.matchMedia('(hover: hover) and (pointer: fine)')
+    const updateEnabled = () => setEnabled(mediaQuery.matches)
+    updateEnabled()
+    mediaQuery.addEventListener('change', updateEnabled)
+
+    return () => {
+      mediaQuery.removeEventListener('change', updateEnabled)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!enabled) {
+      return
+    }
+
     const onMove = (e: MouseEvent) => {
       target.current = { x: e.clientX, y: e.clientY }
     }
@@ -32,7 +48,11 @@ export default function CustomCursor() {
       window.removeEventListener('mousemove', onMove)
       cancelAnimationFrame(rafRef.current)
     }
-  }, [])
+  }, [enabled])
+
+  if (!enabled) {
+    return null
+  }
 
   return (
     <div

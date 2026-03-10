@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -115,39 +115,40 @@ export default function FeaturesSection() {
   const copy = COPY[locale]
 
   return (
-    <section id="features" className="bg-black py-24 lg:py-32">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
+    <section id="features" className="bg-black py-20 md:py-24 lg:py-32">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10">
         <div className="mb-16">
-          <div className="inline-flex items-center gap-2 mb-6">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-6">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-end">
-            <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
+            <div data-gsap="reveal">
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+              <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
             </div>
             <div className="flex flex-col gap-4 lg:items-end">
-              <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
-              <Link
+              <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
+              <HashLink
                 href="#commands"
+                data-gsap="reveal"
                 className="inline-flex items-center gap-2 text-white/60 text-sm hover:text-white transition-colors w-fit"
               >
                 {copy.cta}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
-              </Link>
+              </HashLink>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-white/8">
+        <div data-gsap="cards" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-white/8">
           {copy.features.map((feature) => (
-            <Link
+            <HashLink
               key={feature.title}
               href="#cta"
-              className="group bg-black p-8 flex flex-col gap-4 border border-white/8 hover:bg-[#080808] transition-colors"
+              className="group bg-black p-6 sm:p-8 flex flex-col gap-4 border border-white/8 hover:bg-[#080808] transition-colors"
             >
               <div className="flex items-start justify-between gap-3">
                 <h3 className="text-white font-semibold text-base leading-snug">{feature.title}</h3>
@@ -165,7 +166,7 @@ export default function FeaturesSection() {
                 {feature.subtitle}
               </p>
               <p className="text-white/50 text-sm leading-relaxed mt-auto">{feature.description}</p>
-            </Link>
+            </HashLink>
           ))}
         </div>
       </div>

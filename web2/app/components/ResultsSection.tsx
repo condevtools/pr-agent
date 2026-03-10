@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -84,9 +84,9 @@ export default function ResultsSection() {
   const items = [...copy.cards, ...copy.cards]
 
   return (
-    <section id="runtime-highlights" className="bg-black py-24 lg:py-32 overflow-hidden">
-      <div className="max-w-[1440px] mx-auto px-6 lg:px-10 mb-16">
-        <div className="inline-flex items-center gap-2 mb-6">
+    <section id="runtime-highlights" className="bg-black py-20 md:py-24 lg:py-32 overflow-hidden">
+      <div className="max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10 mb-16">
+        <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-6">
           <div className="w-6 h-6 rounded-full border border-white/20 flex items-center justify-center">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
           </div>
@@ -94,31 +94,32 @@ export default function ResultsSection() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-end">
-          <div>
-            <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
-            <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
+          <div data-gsap="reveal">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
           </div>
           <div className="flex flex-col gap-4 lg:items-end">
-            <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
-            <Link
+            <p data-gsap="reveal" className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
+            <HashLink
               href="#operations"
+              data-gsap="reveal"
               className="inline-flex items-center gap-3 px-6 py-3 bg-[#0055fe] text-white text-sm font-medium hover:bg-[#0044cc] transition-colors w-fit"
             >
               {copy.cta}
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
               </svg>
-            </Link>
+            </HashLink>
           </div>
         </div>
       </div>
 
       <div className="relative">
-        <div className="flex animate-marquee gap-6" style={{ width: 'max-content' }}>
+        <div data-gsap="cards" className="flex animate-marquee gap-6" style={{ width: 'max-content' }}>
           {items.map((item, idx) => (
             <div
               key={`${item.name}-${idx}`}
-              className="flex-shrink-0 w-80 bg-[#080808] border border-white/8 p-6 flex flex-col gap-4"
+              className="flex-shrink-0 w-[280px] sm:w-80 bg-[#080808] border border-white/8 p-6 flex flex-col gap-4"
             >
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-white font-semibold text-base">{item.name}</h3>

@@ -1,4 +1,5 @@
 import Navbar from './components/Navbar'
+import HomeMotionMain from './components/HomeMotionMain'
 import HeroSection from './components/HeroSection'
 import AboutSection from './components/AboutSection'
 import ResultsSection from './components/ResultsSection'
@@ -12,10 +13,17 @@ import PricingSection from './components/PricingSection'
 import TestimonialsSection from './components/TestimonialsSection'
 import FAQSection from './components/FAQSection'
 import CTASection from './components/CTASection'
+import { buildJsonLdGraph } from '../lib/seo-geo'
 
 export default function Home() {
+  const jsonLd = buildJsonLdGraph()
+
   return (
-    <main className="bg-black min-h-screen">
+    <HomeMotionMain>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <Navbar />
       <HeroSection />
       <AboutSection />
@@ -30,6 +38,6 @@ export default function Home() {
       <TestimonialsSection />
       <FAQSection />
       <CTASection />
-    </main>
+    </HomeMotionMain>
   )
 }

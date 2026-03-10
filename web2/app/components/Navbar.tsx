@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale, type Locale } from '../i18n/LocaleProvider'
+import { GITHUB_REPO_URL, INSTALL_URL } from '../../lib/seo-geo'
 
 const NAV_LINKS = {
   en: [
@@ -23,8 +25,13 @@ const NAV_LINKS = {
 } as const
 
 const CTA_LABEL = {
-  en: 'Get Started',
-  zh: '开始接入',
+  en: 'GitHub',
+  zh: 'GitHub',
+}
+
+const INSTALL_LABEL = {
+  en: 'Install',
+  zh: 'Install',
 }
 
 function LocaleSwitch({
@@ -75,20 +82,20 @@ export default function Navbar() {
       }`}
     >
       <div className="max-w-[1440px] mx-auto px-6 lg:px-10 h-16 flex items-center justify-between gap-4">
-        <Link href="#overview" className="flex items-center gap-3">
+        <HashLink href="#overview" className="flex items-center gap-3" onNavigate={() => setMobileOpen(false)}>
           <Image src="/logo.svg" alt="PR Agent" width={32} height={32} priority />
           <span className="text-sm font-semibold tracking-[0.16em] text-white/90">PR AGENT</span>
-        </Link>
+        </HashLink>
 
         <div className="hidden md:flex items-center gap-8">
           {links.map((link) => (
-            <Link
+            <HashLink
               key={link.label}
               href={link.href}
               className="text-sm font-medium text-white/90 hover:text-white transition-colors"
             >
               {link.label}
-            </Link>
+            </HashLink>
           ))}
         </div>
 
@@ -99,10 +106,20 @@ export default function Navbar() {
             className="inline-flex items-center border border-white/10 bg-white/5"
           />
           <Link
-            href="#cta"
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noreferrer"
             className="px-5 py-2.5 bg-[#0055fe] text-white text-sm font-medium hover:bg-[#0044cc] transition-colors"
           >
             {CTA_LABEL[locale]}
+          </Link>
+          <Link
+            href={INSTALL_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="px-5 py-2.5 border border-white/20 text-white/85 text-sm font-medium hover:border-white/40 hover:text-white transition-colors"
+          >
+            {INSTALL_LABEL[locale]}
           </Link>
         </div>
 
@@ -126,28 +143,41 @@ export default function Navbar() {
       {mobileOpen && (
         <div className="md:hidden bg-[#080808] border-t border-white/10 px-6 py-4 flex flex-col gap-2">
           {links.map((link) => (
-            <Link
+            <HashLink
               key={link.label}
               href={link.href}
-              className="text-white/70 hover:text-white transition-colors py-2 border-b border-white/5"
-              onClick={() => setMobileOpen(false)}
+              className="text-left text-white/70 hover:text-white transition-colors py-2 border-b border-white/5"
+              onNavigate={() => setMobileOpen(false)}
             >
               {link.label}
-            </Link>
+            </HashLink>
           ))}
-          <div className="flex items-center justify-between pt-3">
+          <div className="flex items-center justify-between pt-3 gap-3">
             <LocaleSwitch
               locale={locale}
               setLocale={setLocale}
               className="inline-flex items-center border border-white/10 bg-white/5"
             />
-            <Link
-              href="#cta"
-              className="px-5 py-3 bg-[#0055fe] text-white text-sm font-medium text-center"
-              onClick={() => setMobileOpen(false)}
-            >
-              {CTA_LABEL[locale]}
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                href={GITHUB_REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="px-5 py-3 bg-[#0055fe] text-white text-sm font-medium text-center"
+                onClick={() => setMobileOpen(false)}
+              >
+                {CTA_LABEL[locale]}
+              </Link>
+              <Link
+                href={INSTALL_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="px-5 py-3 border border-white/20 text-white text-sm font-medium text-center"
+                onClick={() => setMobileOpen(false)}
+              >
+                {INSTALL_LABEL[locale]}
+              </Link>
+            </div>
           </div>
         </div>
       )}

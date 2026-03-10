@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
 const COPY = {
@@ -40,35 +40,36 @@ export default function CTASection() {
 
   return (
     <>
-      <section id="cta" className="relative bg-black py-24 lg:py-32 overflow-hidden">
+      <section id="cta" className="relative bg-black py-20 md:py-24 lg:py-32 overflow-hidden">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#0055fe]/12 rounded-full blur-[100px]" />
         </div>
 
-        <div className="relative max-w-[1440px] mx-auto px-6 lg:px-10 text-center">
-          <div className="inline-flex items-center gap-2 mb-8">
+        <div className="relative max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10 text-center">
+          <div data-gsap="reveal" className="inline-flex items-center gap-2 mb-8">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
             <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
 
-          <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight mb-3">
+          <h2 data-gsap="reveal" className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight mb-3">
             {copy.title}
           </h2>
-          <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight mb-8">
+          <h2 data-gsap="reveal" className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white leading-tight mb-8">
             {copy.subtitle}
           </h2>
 
-          <p className="text-white/50 text-base leading-relaxed max-w-[520px] mx-auto mb-10">{copy.body}</p>
+          <p data-gsap="reveal" className="text-white/50 text-base leading-relaxed max-w-[520px] mx-auto mb-10">{copy.body}</p>
 
-          <Link
+          <HashLink
             href="#deployment"
-            className="inline-flex items-center gap-3 px-10 py-4 bg-[#0055fe] text-white font-medium hover:bg-[#0044cc] transition-colors"
+            data-gsap="reveal"
+            className="inline-flex w-full sm:w-auto justify-center items-center gap-3 px-10 py-4 bg-[#0055fe] text-white font-medium hover:bg-[#0044cc] transition-colors"
           >
             {copy.cta}
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
             </svg>
-          </Link>
+          </HashLink>
         </div>
       </section>
 
@@ -81,13 +82,13 @@ export default function CTASection() {
           </div>
           <div className="flex items-center gap-6">
             {copy.footerLinks.map((link) => (
-              <Link
+              <HashLink
                 key={link.label}
                 href={link.href}
                 className="text-white/40 text-sm hover:text-white/70 transition-colors"
               >
                 {link.label}
-              </Link>
+              </HashLink>
             ))}
           </div>
         </div>
