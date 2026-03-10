@@ -1,11 +1,12 @@
 # PR Agent
 
-AI-powered code review service built with TypeScript + NestJS. Automatically reviews Pull Requests and Merge Requests using LLM providers, with support for GitHub (App & Webhook) and GitLab.
+AI-powered code review service built with TypeScript + NestJS. This repository is now a `pnpm` monorepo: the backend service lives in `backend/`, and the Next.js frontend lives in `frontend/`.
 
 [中文文档](./README-zh.md)
 
 ## Table of Contents
 
+- [Beta Status](#beta-status)
 - [Features](#features)
 - [Review Triggers](#review-triggers)
 - [Roadmap & Process Assets](#roadmap--process-assets)
@@ -24,6 +25,12 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 
 ---
 
+## Beta Status
+
+- PR Agent is currently in **beta**.
+- The only officially supported integration mode is **GitHub App**.
+- Plain GitHub Webhook and GitLab code paths may still exist in the repository, but they are not part of the supported deployment surface right now.
+
 ## Features
 
 **Core Review**
@@ -34,7 +41,6 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 - Mermaid change-structure diagrams in reports (directory/file visualization)
 - Secret leak detection in diffs (lightweight regex-based scanning)
 - Auto-labeling (bugfix / feature / refactor / docs / security)
-- GitLab review-mode override via webhook header (`x-ai-mode: report|comment`)
 
 **Interactive Commands**
 - `/ai-review` — trigger manual review (comment or report mode)
@@ -66,10 +72,10 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 - Issue creation/edit pre-check and PR pre-merge validation (GitHub)
 - Default issue auto-triage (feasibility + suggestions + similar issues + labels) when `.pr-agent.yml` is absent
 
-**Multi-Platform**
-- GitHub App (recommended, fully tested)
-- Plain GitHub Webhook (not fully tested)
-- GitLab Webhook (not fully tested)
+**Current Support**
+- GitHub App only
+- Plain GitHub Webhook — unsupported in the current beta
+- GitLab Webhook — unsupported in the current beta
 - GitHub Actions — not supported
 
 **Multi-Provider AI**
@@ -89,7 +95,7 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 | `/ai-review` comment command | comment / report | 5 min |
 | `/ai-review report` | report | 5 min |
 | `/ai-review comment` | comment | 5 min |
-| Webhook header `x-ai-mode` (GitLab only) | report / comment | 5 min |
+| Webhook header `x-ai-mode` (GitLab only, unsupported in current beta) | report / comment | 5 min |
 | Issue created / edited | pre-check (GitHub) + default auto-triage when policy file is missing | 5 min |
 | PR created / edited / synced | pre-merge check (GitHub) | — |
 
@@ -110,6 +116,18 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 ---
 
 ## Architecture
+
+### Repository Topology
+
+```mermaid
+graph LR
+    ROOT[pr-agent monorepo]
+    ROOT --> BE[backend/<br/>NestJS + Probot + tests]
+    ROOT --> FE[frontend/<br/>Next.js marketing / console]
+    ROOT --> OPS[Docker / Compose<br/>backend deployment]
+    ROOT --> NP[Nixpacks<br/>frontend deployment]
+    ROOT --> DOCS[docs/<br/>roadmaps and process assets]
+```
 
 ### High-Level Overview
 
@@ -256,7 +274,7 @@ flowchart LR
         E5["/health /metrics /webhook/events"]
     end
 
-    subgraph GHA["GitHub App Event Routing (src/app.ts)"]
+    subgraph GHA["GitHub App Event Routing (backend/src/app.ts)"]
         A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
         A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
         A3["resolveGitHubPullRequestAutoReviewPolicy"]
@@ -265,7 +283,7 @@ flowchart LR
         A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
     end
 
-    subgraph GHW["Plain GitHub Webhook (src/integrations/github/github-webhook.ts)"]
+    subgraph GHW["Plain GitHub Webhook (backend/src/integrations/github/github-webhook.ts)"]
         B1["handlePlainGitHubWebhook"]
         B2["verifyWebhookSignature + payload schema"]
         B3["pull_request / issues / issue_comment / review_thread dispatch"]
@@ -273,7 +291,7 @@ flowchart LR
         B5["handleGitHubIssueCommentCommand"]
     end
 
-    subgraph GLW["GitLab Webhook (src/integrations/gitlab/gitlab-review.ts)"]
+    subgraph GLW["GitLab Webhook (backend/src/integrations/gitlab/gitlab-review.ts)"]
         C1["runGitLabWebhook"]
         C2["verify token + payload schema"]
         C3["handleGitLabMergeRequestWebhook"]
@@ -374,124 +392,56 @@ flowchart LR
 
 ```
 pr-agent/
-├── src/
-│   ├── main.ts                     # NestJS bootstrap & server startup
-│   ├── app.module.ts               # Root module (imports all sub-modules)
-│   ├── app.controller.ts           # Health, metrics, replay endpoints
-│   ├── app.ts                      # Probot event handlers (GitHub App)
-│   │
-│   ├── core/                       # Shared infrastructure
-│   │   ├── ask-session.ts          #   Ask multi-turn session management
-│   │   ├── cache.ts                #   TTL-based in-memory cache
-│   │   ├── clock.ts                #   Clock abstraction (testable time)
-│   │   ├── dedupe.ts               #   FNV hash request deduplication
-│   │   ├── env.ts                  #   Environment variable helpers
-│   │   ├── errors.ts               #   Typed error classes (4xx/5xx)
-│   │   ├── fnv.ts                  #   FNV-1a hash implementation
-│   │   ├── http.ts                 #   HTTP client with retry & backoff
-│   │   ├── i18n.ts                 #   Locale detection (zh/en)
-│   │   ├── logger.ts               #   Core structured logging
-│   │   ├── path.ts                 #   Path encoding utilities
-│   │   ├── rate-limit.ts           #   Per-scope rate limiting
-│   │   ├── runtime-state.ts        #   Pluggable state backend
-│   │   ├── runtime-state-file.ts   #   File-based state persistence
-│   │   ├── runtime-state-in-memory.ts # In-memory state store
-│   │   ├── runtime-state-snapshot.ts #  State snapshot merge utilities
-│   │   ├── runtime-state-sqlite.ts #   SQLite state persistence
-│   │   └── secret-patterns.ts      #   Regex-based secret detection
-│   │
-│   ├── review/                     # AI review domain
-│   │   ├── ai-reviewer.ts          #   Multi-provider AI abstraction
-│   │   ├── ai-prompts.ts           #   System & user prompt builders
-│   │   ├── ai-concurrency.ts       #   Concurrent request limiter
-│   │   ├── ai-client-cache.ts      #   OpenAI client instance cache
-│   │   ├── ai-provider-anthropic.ts #  Anthropic provider adapter
-│   │   ├── ai-provider-gemini.ts   #   Gemini provider adapter
-│   │   ├── ai-provider-json.ts     #   JSON response parser
-│   │   ├── ai-result-normalization.ts # Result normalization & severity
-│   │   ├── patch.ts                #   Git diff parsing & line mapping
-│   │   ├── report-renderer.ts      #   Markdown report formatting
-│   │   ├── review-policy.ts        #   Code file detection & line mapping
-│   │   ├── review-types.ts         #   Data models
-│   │   ├── review-utils.ts         #   Review helper utilities
-│   │   └── similar-issue.ts        #   Similar issue search logic
-│   │
-│   ├── integrations/
-│   │   ├── github/                 #   GitHub review, policy, content
-│   │   │   ├── github-review.ts    #     Review orchestration
-│   │   │   ├── github-review-types.ts #  Interfaces & type definitions
-│   │   │   ├── github-command-workflows.ts # /ask, /describe, /changelog workflows
-│   │   │   ├── github-issue-comment-command.ts # Comment command dispatch
-│   │   │   ├── github-issue-triage.ts #  Issue auto-triage
-│   │   │   ├── github-rest-client.ts #   REST-based Octokit client
-│   │   │   ├── github-content.ts   #     File content fetching
-│   │   │   ├── github-policy.ts    #     Policy checks & validation
-│   │   │   ├── github-policy-config.ts # Policy YAML parsing & caching
-│   │   │   ├── github-policy-templates.ts # Template discovery & sections
-│   │   │   ├── github-webhook.ts   #     Webhook event dispatching
-│   │   │   └── github-lifecycle.ts #     PR/Issue lifecycle workflows
-│   │   ├── gitlab/                 #   GitLab review & command handling
-│   │   │   ├── gitlab-review.ts    #     Review orchestration
-│   │   │   ├── gitlab-command-workflows.ts # /ask, /describe workflows
-│   │   │   ├── gitlab-http.ts      #     GitLab API HTTP client
-│   │   │   └── gitlab-webhook-security.ts # Webhook signature verification
-│   │   ├── shared/                 #   Cross-platform shared utilities
-│   │   │   ├── managed-comments.ts #     Comment upsert & dedup markers
-│   │   │   ├── review-triggers.ts  #     Trigger classification & TTL
-│   │   │   ├── feedback-signals.ts #     Review feedback learning
-│   │   │   ├── secret-scan.ts      #     Secret leak scanning
-│   │   │   ├── auto-labels.ts      #     Auto-labeling inference
-│   │   │   ├── similar-issue.ts    #     Similar issue search
-│   │   │   ├── process-guidelines.ts #   Guideline file loading
-│   │   │   ├── command-builders.ts #     Slash command rule builders
-│   │   │   ├── command-dispatch.ts #     Registry-based command dispatch
-│   │   │   ├── command-messages.ts #     Command response message templates
-│   │   │   ├── changelog.ts        #     Changelog generation logic
-│   │   │   ├── describe-question.ts #    Describe prompt construction
-│   │   │   ├── diff-context.ts     #     Diff context extraction
-│   │   │   ├── http-retry-options.ts #   Shared HTTP retry options
-│   │   │   ├── public-error.ts     #     Safe error message sanitization
-│   │   │   ├── review-messages.ts  #     Review comment formatting
-│   │   │   ├── review-policy-parser.ts # Policy file parsing
-│   │   │   ├── review-state.ts     #     Review state management
-│   │   │   ├── secret-warning.ts   #     Secret detection warnings
-│   │   │   └── yaml.ts             #     YAML parsing utilities
-│   │   └── notify/                 #   Webhook notifications
-│   │
-│   ├── modules/
-│   │   ├── github/                 #   NestJS GitHub Webhook module
-│   │   ├── gitlab/                 #   NestJS GitLab Webhook module
-│   │   ├── github-app/             #   NestJS GitHub App module (Probot)
-│   │   └── webhook/                #   Health, metrics, shutdown, replay
-│   │
-│   └── common/
-│       ├── filters/
-│       │   └── http-error.filter.ts  # Global exception filter
-│       └── types/
-│           └── raw-body-request.ts   # Shared RawBodyRequest interface
-│
-├── tests/                          # Node.js test runner (35+ test files)
-├── README-zh.md                    # Chinese version of this documentation
-├── docs/                           # Design docs & roadmap
-├── Dockerfile                      # Multi-stage Docker build
-├── docker-compose.yml              # Docker Compose setup
-├── .env.example                    # Full env var reference
-├── .env.github-app.min.example     # Minimal GitHub App config
-├── .env.github-webhook.min.example # Minimal GitHub Webhook config
-└── .env.gitlab.min.example         # Minimal GitLab Webhook config
+├── backend/
+│   ├── src/
+│   │   ├── main.ts                 # NestJS bootstrap & server startup
+│   │   ├── app.ts                  # Probot event handlers (GitHub App)
+│   │   ├── app.module.ts           # Root NestJS module
+│   │   ├── common/                 # Filters and shared request types
+│   │   ├── core/                   # Runtime state, cache, env, i18n, HTTP
+│   │   ├── integrations/           # GitHub / GitLab / notify adapters
+│   │   ├── modules/                # NestJS webhook, health, replay modules
+│   │   └── review/                 # AI review engine and report rendering
+│   ├── tests/                      # Backend test suite
+│   ├── package.json
+│   └── tsconfig.json
+├── frontend/
+│   ├── app/                        # Next.js App Router pages and layouts
+│   ├── components/                 # Frontend UI components
+│   ├── public/                     # Static assets
+│   ├── package.json
+│   └── next.config.ts
+├── docs/                           # Product docs, roadmaps, process assets
+├── data/                           # Local/runtime persisted state mount
+├── secrets/                        # Local private key mount (not committed)
+├── Dockerfile                      # Backend container image
+├── docker-compose.yml              # Backend deployment and local ops
+├── nixpacks.toml                   # Root Nixpacks entry for frontend
+├── package.json                    # Workspace scripts
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+├── turbo.json
+├── README-zh.md
+└── README.md
 ```
 
-### Path Aliases
+### Workspace Notes
 
-The project uses Node.js ESM subpath imports (configured in both `tsconfig.json` and `package.json`):
+- The repository root `.env` is shared by local backend development and Docker Compose.
+- `backend/` is the deployable review service. `frontend/` is deployed separately when using root `nixpacks.toml`.
+- Persistent backend state defaults to `/data/pr-agent/...` inside containers and `data/pr-agent/...` on the host.
+
+### Backend Path Aliases
+
+The backend package uses Node.js ESM subpath imports (configured in `backend/tsconfig.json` and `backend/package.json`):
 
 | Alias | Maps to |
 |---|---|
-| `#core` | `src/core/index.ts` |
-| `#review` | `src/review/index.ts` |
-| `#integrations/github` | `src/integrations/github/index.ts` |
-| `#integrations/gitlab` | `src/integrations/gitlab/index.ts` |
-| `#integrations/notify` | `src/integrations/notify/index.ts` |
+| `#core` | `backend/src/core/index.ts` |
+| `#review` | `backend/src/review/index.ts` |
+| `#integrations/github` | `backend/src/integrations/github/index.ts` |
+| `#integrations/gitlab` | `backend/src/integrations/gitlab/index.ts` |
+| `#integrations/notify` | `backend/src/integrations/notify/index.ts` |
 
 ---
 
@@ -500,25 +450,31 @@ The project uses Node.js ESM subpath imports (configured in both `tsconfig.json`
 ### Prerequisites
 
 - Node.js >= 22
-- npm
+- pnpm >= 10
 
 ### Local Development
 
 ```bash
-# Install dependencies
-npm install
+# Install workspace dependencies
+pnpm install
 
-# Start dev server (with tsx hot-reload)
-npm run dev
+# Prepare env file at repository root
+cp .env.example .env
 
-# Build for production
-npm run build
+# Start backend locally (reads ../.env from backend package)
+pnpm dev:backend
 
-# Start production server
-npm start
+# Start frontend locally
+pnpm dev:frontend
+
+# Build backend for production
+pnpm --filter backend build
+
+# Start built backend
+pnpm --filter backend start
 ```
 
-The server listens on port `3000` by default (configurable via `PORT`).
+The backend listens on port `3000` by default (configurable via `PORT`). The frontend also defaults to `3000` when run separately.
 
 ### Health Check
 
@@ -526,7 +482,6 @@ The server listens on port `3000` by default (configurable via `PORT`).
 curl http://localhost:3000/health
 curl http://localhost:3000/health?deep=true   # Tests AI provider connectivity
 curl http://localhost:3000/github/health       # GitHub config status
-curl http://localhost:3000/gitlab/health       # GitLab config status
 ```
 
 ---
@@ -535,11 +490,11 @@ curl http://localhost:3000/gitlab/health       # GitLab config status
 
 ### Environment Variables
 
-Copy `.env.example` and fill in the required values. Minimal configs are also available:
+Copy `.env.example` and fill in the required values. The supported minimal configuration is:
 
 - `.env.github-app.min.example` — GitHub App minimum
-- `.env.github-webhook.min.example` — Plain GitHub Webhook minimum
-- `.env.gitlab.min.example` — GitLab Webhook minimum
+
+Legacy minimal examples for plain GitHub Webhook and GitLab remain in the repository for reference only; they are not part of the supported beta deployment path.
 
 ### AI Provider
 
@@ -678,7 +633,7 @@ See `.env.example` for the baseline variable reference; advanced runtime knobs a
 ```mermaid
 graph LR
     subgraph Docker Build
-        B1[Stage 1: Build<br/>node:22-alpine<br/>npm ci + tsc]
+        B1[Stage 1: Build<br/>node:22-alpine<br/>pnpm install + backend build]
         B2[Stage 2: Runtime<br/>node:22-alpine<br/>prod deps only]
         B1 -->|COPY dist/| B2
     end
@@ -717,6 +672,14 @@ The `docker-compose.yml` mounts:
 - `./data:/data` — persistent state (SQLite, event store)
 - `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App private key
 
+### Nixpacks (Frontend Only)
+
+The root `nixpacks.toml` is for deploying `frontend/` from the repository root. It does not build or start the backend service.
+
+- Install: `pnpm install --frozen-lockfile`
+- Build: `pnpm --filter frontend build`
+- Start: `pnpm --filter frontend start`
+
 ### Production Deployment Checklist
 
 ```mermaid
@@ -736,24 +699,18 @@ graph TD
     G --> H[Test with /ai-review Command]
 ```
 
-1. **Choose integration mode** — GitHub App is recommended for fine-grained permissions
+1. **Use GitHub App integration mode** — this is the only supported integration in the current beta
 2. **Configure AI provider** — Set `AI_PROVIDER` and the corresponding API key / model
 3. **Enable state persistence** — Use `RUNTIME_STATE_BACKEND=sqlite` for production
 4. **Deploy the container** — Docker, Docker Compose, Render, Railway, Fly.io, or K8s
-5. **Set webhook URL** on your platform:
-   - GitHub App: `https://<domain>/api/github/webhooks`
-   - GitHub Webhook: `https://<domain>/github/trigger`
-   - GitLab: `https://<domain>/gitlab/trigger`
+5. **Set webhook URL** to `https://<domain>/api/github/webhooks`
 6. **Verify** via health endpoints and a test `/ai-review` comment
 
 ### Quick Deployment Reference
 
 This is a compact deployment path for Render/Railway/Fly.io/Docker/K8s.
 
-1. **Choose mode**
-   - GitHub App (recommended)
-   - Plain GitHub Webhook
-   - Optional GitLab Webhook
+1. **Use GitHub App mode**
 2. **Use minimal environment variables**
 
 **GitHub App minimum (`.env.github-app.min.example`)**
@@ -763,26 +720,6 @@ APP_ID=123456
 PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 # PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
 WEBHOOK_SECRET=replace-with-webhook-secret
-AI_PROVIDER=openai
-OPENAI_API_KEY=replace-with-openai-key
-OPENAI_MODEL=gpt-4.1-mini
-```
-
-**Plain GitHub Webhook minimum (`.env.github-webhook.min.example`)**
-
-```env
-GITHUB_WEBHOOK_SECRET=replace-with-webhook-secret
-GITHUB_WEBHOOK_TOKEN=replace-with-github-token
-AI_PROVIDER=openai
-OPENAI_API_KEY=replace-with-openai-key
-OPENAI_MODEL=gpt-4.1-mini
-```
-
-**GitLab Webhook minimum (`.env.gitlab.min.example`)**
-
-```env
-GITLAB_TOKEN=replace-with-gitlab-token
-# GITLAB_WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
@@ -805,35 +742,28 @@ WEBHOOK_REPLAY_ENABLED=true
 WEBHOOK_REPLAY_TOKEN=replace-with-strong-random-token
 ```
 
-3. **Start application**
+3. **Start backend application**
 
 ```bash
-npm install
-npm run build
-npm start
+pnpm install --frozen-lockfile
+pnpm --filter backend build
+pnpm --filter backend start
 ```
 
-Server listens on `PORT` (default `3000`).
+The backend listens on `PORT` (default `3000`).
 
-4. **Configure webhook addresses**
+4. **Configure webhook address**
    - GitHub App: `https://<domain>/api/github/webhooks`
-   - GitHub Webhook: `https://<domain>/github/trigger`
-   - GitLab Webhook: `https://<domain>/gitlab/trigger`
-5. **GitLab recommended headers**
-   - `x-ai-mode: report|comment`
-   - `x-gitlab-api-token: <api token>`
-   - `x-gitlab-token: <webhook secret>` (only when `GITLAB_WEBHOOK_SECRET` is configured)
-6. **Docker one-liner**
+5. **Docker one-liner**
 
 ```bash
 docker build -t pr-agent:latest .
 docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
 ```
 
-7. **Verification checklist**
+6. **Verification checklist**
    - `GET /health`
    - `GET /github/health`
-   - `GET /gitlab/health`
    - `GET /metrics`
    - Test PR/MR commands: `/ai-review`, `/ai-review comment`
    - Webhook failure response includes structured fields: `error/type/status/path/method/timestamp`
@@ -841,7 +771,6 @@ docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
 If replay is enabled:
 - `GET /webhook/events`
 - `POST /github/replay/:eventId`
-- `POST /gitlab/replay/:eventId`
 - Header: `x-pr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
 
 ### Nginx Reverse Proxy
@@ -867,7 +796,7 @@ server {
 
 ## Platform Integration
 
-### GitHub App (Recommended)
+### GitHub App (Only Supported Mode)
 
 1. Create a GitHub App with the following permissions:
    - **Pull requests**: Read & write
@@ -890,54 +819,16 @@ PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
-- GitHub App enablement condition (see `src/modules/github-app/github-app.bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
+- GitHub App enablement condition (see `backend/src/modules/github-app/github-app.bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
 - `docker-compose.yml` mounts the private key at `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`. If `secrets/` or the PEM file is missing, `docker compose up` will fail.
 - Recommended local prep: `mkdir -p secrets data`. Docker usually auto-creates `data`, but pre-creating it is more predictable.
 
-> If `APP_ID` + `PRIVATE_KEY` (+ `WEBHOOK_SECRET`) are not configured, GitHub App mode is automatically disabled; plain webhook mode remains available.
+> If `APP_ID` + `PRIVATE_KEY` (+ `WEBHOOK_SECRET`) are not configured, GitHub App mode is disabled and the beta deployment is considered incomplete.
 
-### Plain GitHub Webhook
+### Unsupported Integrations In Current Beta
 
-1. In repo Settings > Webhooks, add `https://<domain>/github/trigger`
-2. Set content type to `application/json`
-3. Select events: `Pull requests`, `Issues`, `Issue comments`, `Pull request review threads`
-4. Configure:
-
-```env
-GITHUB_WEBHOOK_SECRET=your-secret
-GITHUB_WEBHOOK_TOKEN=ghp_...    # PAT with repo scope (falls back to GITHUB_TOKEN)
-```
-
-Optional debug-only switch:
-
-```env
-GITHUB_WEBHOOK_SKIP_SIGNATURE=false
-```
-
-> `GITHUB_WEBHOOK_SKIP_SIGNATURE=true` is rejected in production (`NODE_ENV=production`).
-
-### GitLab Webhook
-
-1. In project Settings > Webhooks, add `https://<domain>/gitlab/trigger`
-2. Select triggers:
-   - `Merge request events` (open / reopen / update / merge)
-   - `Note events` (for comment commands: `/ai-review`, `/ask`, `/checks`, `/describe`, `/generate_tests`, `/changelog`, `/improve`, `/add_doc`, `/reflect`, `/similar_issue`, `/feedback`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/improve_component`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`)
-3. Optionally add secret token
-4. Configure:
-
-```env
-GITLAB_TOKEN=glpat-...
-GITLAB_WEBHOOK_SECRET=your-secret    # Optional
-GITLAB_REQUIRE_WEBHOOK_SECRET=false  # Optional hard-enforcement switch
-```
-
-GitLab-specific headers:
-- `x-ai-mode: report|comment` — override review mode
-- `x-gitlab-api-token: <token>` — per-request API token (recommended)
-- `x-gitlab-token` — webhook signature verification (only when `GITLAB_WEBHOOK_SECRET` is set)
-- `x-push-url` / `x-qwx-robot-url` — optional notification webhook override
-
-> **Compatibility**: When `GITLAB_WEBHOOK_SECRET` is not configured, `x-gitlab-token` is used as the API token instead of for signature verification.
+- Plain GitHub Webhook is not a supported deployment target right now.
+- GitLab Webhook is not a supported deployment target right now.
 
 ---
 
@@ -1106,7 +997,7 @@ Prometheus-format metrics are exposed at `GET /metrics`:
 | `GET /health` | Liveness probe |
 | `GET /health?deep=true` | Deep check (AI provider connectivity) |
 | `GET /github/health` | GitHub webhook config validation |
-| `GET /gitlab/health` | GitLab webhook config validation |
+| `GET /gitlab/health` | Legacy GitLab webhook config validation (unsupported in current beta) |
 
 ### Error Handling
 
@@ -1153,17 +1044,20 @@ Endpoints (require `x-pr-agent-replay-token` header):
 ## Testing
 
 ```bash
-# Run tests
-npm test
+# Backend tests
+pnpm test:backend
 
-# Run with coverage
-npm run test:coverage
+# Backend coverage
+pnpm --filter backend test:coverage
 
-# Type check only
-npm run check
+# Backend type check
+pnpm --filter backend check
+
+# Frontend production build check
+pnpm --filter frontend build
 ```
 
-Tests use the Node.js built-in test runner (`node:test`). Coverage includes:
+Backend tests use the Node.js built-in test runner (`node:test`). Recommended regression coverage includes:
 - AI concurrency control
 - Cache & dedup behavior
 - Diff parsing & hunk prioritization

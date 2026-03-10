@@ -17,7 +17,7 @@ type LocaleContextValue = {
   setLocale: (locale: Locale) => void
 }
 
-const STORAGE_KEY = 'web2-locale'
+const STORAGE_KEY = 'frontend-locale'
 const DEFAULT_LOCALE: Locale = 'en'
 const listeners = new Set<() => void>()
 

@@ -10,7 +10,7 @@ nixPkgs = ["nodejs_22", "pnpm"]
 cmds = ["pnpm install --frozen-lockfile"]
 
 [phases.build]
-cmds = ["pnpm --filter web2 build"]
+cmds = ["pnpm --filter frontend build"]
 
 [start]
-cmd = "pnpm --filter web2 start"
+cmd = "pnpm --filter frontend start"

@@ -1,7 +1,6 @@
 packages:
   - "backend"
-  - "web"
-  - "web2"
+  - "frontend"
 
 ignoredBuiltDependencies:
   - sharp

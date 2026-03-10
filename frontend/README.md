@@ -16,7 +16,7 @@ Open [http://localhost:3000](http://localhost:3000) to preview.
 ## Project Structure
 
 ```
-web2/
+frontend/
 ├── app/
 │   ├── components/     # UI sections (Hero, Features, Pricing …)
 │   ├── i18n/           # en / zh locale provider
@@ -85,7 +85,7 @@ flowchart LR
         O2["buildIssueCommentMarkdown"]
         O3["createComment / notes / managed upsert"]
         O4["publishNotification (optional)"]
-        O5["mr_agent_* metrics + replay store"]
+        O5["pr_agent_* metrics + replay store"]
     end
 
     E1 --> A1
@@ -140,17 +140,17 @@ flowchart LR
 Build and run in production:
 
 ```bash
-pnpm --filter web2 build
-pnpm --filter web2 start
+pnpm --filter frontend build
+pnpm --filter frontend exec next start -H 0.0.0.0 -p ${PORT:-3000}
 ```
 
-### Coolify + Nixpacks (deploy `web2` from repository root)
+### Coolify + Nixpacks (deploy `frontend` from repository root)
 
 The repository root now includes `nixpacks.toml` with:
 
 - Install: `pnpm install --frozen-lockfile`
-- Build: `pnpm --filter web2 build`
-- Start: `pnpm --filter web2 exec next start -H 0.0.0.0 -p ${PORT:-3000}`
+- Build: `pnpm --filter frontend build`
+- Start: `pnpm --filter frontend exec next start -H 0.0.0.0 -p ${PORT:-3000}`
 
 Recommended Coolify settings:
 

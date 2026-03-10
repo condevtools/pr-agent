@@ -1,11 +1,12 @@
 # PR Agent
 
-基于 TypeScript + NestJS 构建的 AI 代码评审服务。通过 LLM 自动评审 Pull Request 和 Merge Request，支持 GitHub（App 与 Webhook）及 GitLab。
+基于 TypeScript + NestJS 构建的 AI 代码评审服务。当前仓库已经调整为 `pnpm` monorepo：后端服务位于 `backend/`，Next.js 前端位于 `frontend/`。
 
 [English README](./README.md)
 
 ## 目录
 
+- [Beta 阶段说明](#beta-阶段说明)
 - [功能特性](#功能特性)
 - [评审触发](#评审触发)
 - [路线图与流程资产](#路线图与流程资产)
@@ -24,6 +25,12 @@
 
 ---
 
+## Beta 阶段说明
+
+- PR Agent 当前处于 **beta** 阶段。
+- 当前唯一正式支持的接入方式是 **GitHub App**。
+- 仓库里仍可能保留普通 GitHub Webhook 和 GitLab 的代码路径，但它们目前不属于受支持的部署范围。
+
 ## 功能特性
 
 **核心评审**
@@ -34,7 +41,6 @@
 - 报告内 Mermaid 变更结构图（按目录/文件可视化）
 - Diff 中疑似密钥泄露检测（轻量正则扫描）
 - 自动标签（bugfix / feature / refactor / docs / security）
-- GitLab 可通过 Webhook Header 指定评审模式（`x-ai-mode: report|comment`）
 
 **交互命令**
 - `/ai-review` — 手动触发评审（comment 或 report 模式）
@@ -66,10 +72,10 @@
 - Issue 创建/编辑时流程预检、PR 创建/编辑/同步时合并前预检（GitHub）
 - 仓库缺少 `.pr-agent.yml` 时，Issue 自动分诊（可行性/建议/相似 Issue/自动标签）
 
-**多平台支持**
-- GitHub App（推荐，已完整测试）
-- 普通 GitHub Webhook（未完整测试）
-- GitLab Webhook（未完整测试）
+**当前支持范围**
+- 仅支持 GitHub App
+- 普通 GitHub Webhook — 当前 beta 不支持
+- GitLab Webhook — 当前 beta 不支持
 - GitHub Actions — 暂不支持
 
 **多模型 Provider**
@@ -89,7 +95,7 @@
 | `/ai-review` 评论命令 | comment / report | 5 分钟 |
 | `/ai-review report` | report | 5 分钟 |
 | `/ai-review comment` | comment | 5 分钟 |
-| Webhook Header `x-ai-mode`（仅 GitLab） | report / comment | 5 分钟 |
+| Webhook Header `x-ai-mode`（仅 GitLab，当前 beta 不支持） | report / comment | 5 分钟 |
 | Issue 创建 / 编辑 | 流程预检（GitHub）+ 缺省策略自动分诊（无策略文件时） | 5 分钟 |
 | PR 创建 / 编辑 / 同步 | 合并前预检（GitHub） | — |
 
@@ -110,6 +116,18 @@
 ---
 
 ## 系统架构
+
+### 仓库拓扑
+
+```mermaid
+graph LR
+    ROOT[pr-agent monorepo]
+    ROOT --> BE[backend/<br/>NestJS + Probot + tests]
+    ROOT --> FE[frontend/<br/>Next.js 官网 / 控制台]
+    ROOT --> OPS[Docker / Compose<br/>后端部署]
+    ROOT --> NP[Nixpacks<br/>前端部署]
+    ROOT --> DOCS[docs/<br/>路线图与流程资产]
+```
 
 ### 整体架构
 
@@ -256,7 +274,7 @@ flowchart LR
         E5["/health /metrics /webhook/events"]
     end
 
-    subgraph GHA["GitHub App 事件路由 (src/app.ts)"]
+    subgraph GHA["GitHub App 事件路由 (backend/src/app.ts)"]
         A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
         A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
         A3["resolveGitHubPullRequestAutoReviewPolicy"]
@@ -265,7 +283,7 @@ flowchart LR
         A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
     end
 
-    subgraph GHW["原生 GitHub Webhook (src/integrations/github/github-webhook.ts)"]
+    subgraph GHW["原生 GitHub Webhook (backend/src/integrations/github/github-webhook.ts)"]
         B1["handlePlainGitHubWebhook"]
         B2["verifyWebhookSignature + payload schema"]
         B3["pull_request / issues / issue_comment / review_thread dispatch"]
@@ -273,7 +291,7 @@ flowchart LR
         B5["handleGitHubIssueCommentCommand"]
     end
 
-    subgraph GLW["GitLab Webhook (src/integrations/gitlab/gitlab-review.ts)"]
+    subgraph GLW["GitLab Webhook (backend/src/integrations/gitlab/gitlab-review.ts)"]
         C1["runGitLabWebhook"]
         C2["verify token + payload schema"]
         C3["handleGitLabMergeRequestWebhook"]
@@ -374,124 +392,56 @@ flowchart LR
 
 ```
 pr-agent/
-├── src/
-│   ├── main.ts                     # NestJS 启动入口
-│   ├── app.module.ts               # 根模块（导入所有子模块）
-│   ├── app.controller.ts           # 健康检查、指标、回放路由
-│   ├── app.ts                      # Probot 事件处理（GitHub App）
-│   │
-│   ├── core/                       # 公共基础设施
-│   │   ├── ask-session.ts          #   Ask 多轮会话管理
-│   │   ├── cache.ts                #   TTL 内存缓存
-│   │   ├── clock.ts                #   时钟抽象（可测试时间）
-│   │   ├── dedupe.ts               #   FNV 哈希请求去重
-│   │   ├── env.ts                  #   环境变量工具
-│   │   ├── errors.ts               #   类型化错误类（4xx/5xx）
-│   │   ├── fnv.ts                  #   FNV-1a 哈希实现
-│   │   ├── http.ts                 #   HTTP 客户端（重试 & 退避）
-│   │   ├── i18n.ts                 #   语言检测（中文/英文）
-│   │   ├── logger.ts               #   核心结构化日志
-│   │   ├── path.ts                 #   路径编码工具
-│   │   ├── rate-limit.ts           #   按作用域限流
-│   │   ├── runtime-state.ts        #   可插拔状态后端
-│   │   ├── runtime-state-file.ts   #   文件持久化状态存储
-│   │   ├── runtime-state-in-memory.ts # 内存状态存储
-│   │   ├── runtime-state-snapshot.ts #  状态快照合并工具
-│   │   ├── runtime-state-sqlite.ts #   SQLite 状态持久化
-│   │   └── secret-patterns.ts      #   正则密钥检测
-│   │
-│   ├── review/                     # AI 评审领域
-│   │   ├── ai-reviewer.ts          #   多 Provider AI 抽象
-│   │   ├── ai-prompts.ts           #   系统 & 用户 Prompt 构建
-│   │   ├── ai-concurrency.ts       #   并发请求限制器
-│   │   ├── ai-client-cache.ts      #   OpenAI 客户端实例缓存
-│   │   ├── ai-provider-anthropic.ts #  Anthropic 提供商适配器
-│   │   ├── ai-provider-gemini.ts   #   Gemini 提供商适配器
-│   │   ├── ai-provider-json.ts     #   JSON 响应解析器
-│   │   ├── ai-result-normalization.ts # 结果标准化 & 严重等级
-│   │   ├── patch.ts                #   Git diff 解析 & 行号映射
-│   │   ├── report-renderer.ts      #   Markdown 报告格式化
-│   │   ├── review-policy.ts        #   代码文件检测 & 行号解析
-│   │   ├── review-types.ts         #   数据模型
-│   │   ├── review-utils.ts         #   评审辅助工具
-│   │   └── similar-issue.ts        #   相似 Issue 搜索逻辑
-│   │
-│   ├── integrations/
-│   │   ├── github/                 #   GitHub 评审、策略、内容获取
-│   │   │   ├── github-review.ts    #     评审编排
-│   │   │   ├── github-review-types.ts #  接口 & 类型定义
-│   │   │   ├── github-command-workflows.ts # /ask、/describe、/changelog 工作流
-│   │   │   ├── github-issue-comment-command.ts # 评论命令分发
-│   │   │   ├── github-issue-triage.ts #  Issue 自动分诊
-│   │   │   ├── github-rest-client.ts #   REST Octokit 客户端
-│   │   │   ├── github-content.ts   #     文件内容获取
-│   │   │   ├── github-policy.ts    #     策略检查 & 校验
-│   │   │   ├── github-policy-config.ts # 策略 YAML 解析 & 缓存
-│   │   │   ├── github-policy-templates.ts # 模板发现 & 段落提取
-│   │   │   ├── github-webhook.ts   #     Webhook 事件分发
-│   │   │   └── github-lifecycle.ts #     PR/Issue 生命周期工作流
-│   │   ├── gitlab/                 #   GitLab 评审 & 命令处理
-│   │   │   ├── gitlab-review.ts    #     评审编排
-│   │   │   ├── gitlab-command-workflows.ts # /ask、/describe 工作流
-│   │   │   ├── gitlab-http.ts      #     GitLab API HTTP 客户端
-│   │   │   └── gitlab-webhook-security.ts # Webhook 签名验证
-│   │   ├── shared/                 #   跨平台共享工具
-│   │   │   ├── managed-comments.ts #     评论去重 & 更新标记
-│   │   │   ├── review-triggers.ts  #     触发分类 & TTL 计算
-│   │   │   ├── feedback-signals.ts #     评审反馈学习
-│   │   │   ├── secret-scan.ts      #     密钥泄露扫描
-│   │   │   ├── auto-labels.ts      #     自动标签推断
-│   │   │   ├── similar-issue.ts    #     相似 Issue 搜索
-│   │   │   ├── process-guidelines.ts #   流程规范文件加载
-│   │   │   ├── command-builders.ts #     斜杠命令规则构建器
-│   │   │   ├── command-dispatch.ts #     注册式命令分发
-│   │   │   ├── command-messages.ts #     命令响应消息模板
-│   │   │   ├── changelog.ts        #     Changelog 生成逻辑
-│   │   │   ├── describe-question.ts #    Describe Prompt 构建
-│   │   │   ├── diff-context.ts     #     Diff 上下文提取
-│   │   │   ├── http-retry-options.ts #   共享 HTTP 重试选项
-│   │   │   ├── public-error.ts     #     安全错误消息过滤
-│   │   │   ├── review-messages.ts  #     评审评论格式化
-│   │   │   ├── review-policy-parser.ts # 策略文件解析
-│   │   │   ├── review-state.ts     #     评审状态管理
-│   │   │   ├── secret-warning.ts   #     密钥检测警告
-│   │   │   └── yaml.ts             #     YAML 解析工具
-│   │   └── notify/                 #   Webhook 通知推送
-│   │
-│   ├── modules/
-│   │   ├── github/                 #   NestJS GitHub Webhook 模块
-│   │   ├── gitlab/                 #   NestJS GitLab Webhook 模块
-│   │   ├── github-app/             #   NestJS GitHub App 模块（Probot）
-│   │   └── webhook/                #   健康检查、指标、关停、回放
-│   │
-│   └── common/
-│       ├── filters/
-│       │   └── http-error.filter.ts  # 全局异常过滤器
-│       └── types/
-│           └── raw-body-request.ts   # 共享 RawBodyRequest 接口
-│
-├── tests/                          # Node.js 测试（35+ 测试文件）
-├── README.md                       # 当前文档的英文版本
-├── docs/                           # 设计文档 & 路线图
-├── Dockerfile                      # 多阶段 Docker 构建
-├── docker-compose.yml              # Docker Compose 配置
-├── .env.example                    # 完整环境变量参考
-├── .env.github-app.min.example     # GitHub App 最小配置
-├── .env.github-webhook.min.example # GitHub Webhook 最小配置
-└── .env.gitlab.min.example         # GitLab Webhook 最小配置
+├── backend/
+│   ├── src/
+│   │   ├── main.ts                 # NestJS 启动入口
+│   │   ├── app.ts                  # Probot 事件处理（GitHub App）
+│   │   ├── app.module.ts           # NestJS 根模块
+│   │   ├── common/                 # 过滤器与共享请求类型
+│   │   ├── core/                   # 运行时状态、缓存、环境变量、i18n、HTTP
+│   │   ├── integrations/           # GitHub / GitLab / 通知适配层
+│   │   ├── modules/                # Webhook、健康检查、回放等 NestJS 模块
+│   │   └── review/                 # AI 评审引擎与报告渲染
+│   ├── tests/                      # 后端测试套件
+│   ├── package.json
+│   └── tsconfig.json
+├── frontend/
+│   ├── app/                        # Next.js App Router 页面与布局
+│   ├── components/                 # 前端 UI 组件
+│   ├── public/                     # 静态资源
+│   ├── package.json
+│   └── next.config.ts
+├── docs/                           # 产品文档、路线图、流程资产
+├── data/                           # 本地/运行时持久化数据挂载点
+├── secrets/                        # 本地私钥挂载目录（不提交）
+├── Dockerfile                      # 后端容器镜像
+├── docker-compose.yml              # 后端部署与本地运维
+├── nixpacks.toml                   # 根目录 Nixpacks 入口，部署 frontend
+├── package.json                    # Workspace 脚本
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+├── turbo.json
+├── README.md
+└── README-zh.md
 ```
 
-### 路径别名
+### Workspace 说明
 
-项目使用 Node.js ESM subpath imports（在 `tsconfig.json` 和 `package.json` 中同步配置）：
+- 仓库根目录 `.env` 同时供本地后端开发和 Docker Compose 使用。
+- `backend/` 是可部署的评审服务；使用根目录 `nixpacks.toml` 时部署的是 `frontend/`，不是后端。
+- 容器内后端持久化路径默认是 `/data/pr-agent/...`，宿主机对应为 `data/pr-agent/...`。
+
+### 后端路径别名
+
+后端包使用 Node.js ESM subpath imports（配置位于 `backend/tsconfig.json` 和 `backend/package.json`）：
 
 | 别名 | 映射路径 |
 |---|---|
-| `#core` | `src/core/index.ts` |
-| `#review` | `src/review/index.ts` |
-| `#integrations/github` | `src/integrations/github/index.ts` |
-| `#integrations/gitlab` | `src/integrations/gitlab/index.ts` |
-| `#integrations/notify` | `src/integrations/notify/index.ts` |
+| `#core` | `backend/src/core/index.ts` |
+| `#review` | `backend/src/review/index.ts` |
+| `#integrations/github` | `backend/src/integrations/github/index.ts` |
+| `#integrations/gitlab` | `backend/src/integrations/gitlab/index.ts` |
+| `#integrations/notify` | `backend/src/integrations/notify/index.ts` |
 
 ---
 
@@ -500,25 +450,31 @@ pr-agent/
 ### 前置条件
 
 - Node.js >= 22
-- npm
+- pnpm >= 10
 
 ### 本地开发
 
 ```bash
-# 安装依赖
-npm install
+# 安装 workspace 依赖
+pnpm install
 
-# 启动开发服务（tsx 热加载）
-npm run dev
+# 在仓库根目录准备环境变量文件
+cp .env.example .env
 
-# 生产构建
-npm run build
+# 启动后端（backend 包会读取 ../.env）
+pnpm dev:backend
 
-# 启动生产服务
-npm start
+# 启动前端
+pnpm dev:frontend
+
+# 生产构建后端
+pnpm --filter backend build
+
+# 启动已构建的后端
+pnpm --filter backend start
 ```
 
-服务默认监听 `3000` 端口（可通过 `PORT` 环境变量配置）。
+后端默认监听 `3000` 端口（可通过 `PORT` 环境变量配置）。前端单独运行时也默认使用 `3000`。
 
 ### 健康检查
 
@@ -526,7 +482,6 @@ npm start
 curl http://localhost:3000/health
 curl http://localhost:3000/health?deep=true   # 测试 AI Provider 连通性
 curl http://localhost:3000/github/health       # GitHub 配置状态
-curl http://localhost:3000/gitlab/health       # GitLab 配置状态
 ```
 
 ---
@@ -535,11 +490,11 @@ curl http://localhost:3000/gitlab/health       # GitLab 配置状态
 
 ### 环境变量
 
-复制 `.env.example` 并填入所需值。也提供了最小配置模板：
+复制 `.env.example` 并填入所需值。当前受支持的最小配置模板是：
 
 - `.env.github-app.min.example` — GitHub App 最小配置
-- `.env.github-webhook.min.example` — 普通 GitHub Webhook 最小配置
-- `.env.gitlab.min.example` — GitLab Webhook 最小配置
+
+普通 GitHub Webhook 和 GitLab 的最小示例文件仍保留在仓库中，仅供参考，不属于当前 beta 的受支持部署路径。
 
 ### AI Provider 配置
 
@@ -678,7 +633,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 ```mermaid
 graph LR
     subgraph Docker 构建
-        B1[阶段 1：构建<br/>node:22-alpine<br/>npm ci + tsc]
+        B1[阶段 1：构建<br/>node:22-alpine<br/>pnpm install + backend build]
         B2[阶段 2：运行时<br/>node:22-alpine<br/>仅生产依赖]
         B1 -->|COPY dist/| B2
     end
@@ -717,6 +672,14 @@ docker compose down
 - `./data:/data` — 持久化状态（SQLite、事件存储）
 - `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App 私钥
 
+### Nixpacks（仅前端）
+
+根目录 `nixpacks.toml` 用于从仓库根目录部署 `frontend/`，不会构建或启动后端。
+
+- Install: `pnpm install --frozen-lockfile`
+- Build: `pnpm --filter frontend build`
+- Start: `pnpm --filter frontend start`
+
 ### 生产部署清单
 
 ```mermaid
@@ -736,24 +699,18 @@ graph TD
     G --> H[测试 /ai-review 命令]
 ```
 
-1. **选择接入模式** — 推荐 GitHub App，权限粒度更细
+1. **使用 GitHub App 接入模式** — 这是当前 beta 唯一受支持的接入方式
 2. **配置 AI Provider** — 设置 `AI_PROVIDER` 及对应的 API Key / 模型名称
 3. **启用状态持久化** — 生产环境推荐 `RUNTIME_STATE_BACKEND=sqlite`
 4. **部署容器** — Docker、Docker Compose、Render、Railway、Fly.io 或 K8s
-5. **在平台配置 Webhook URL**：
-   - GitHub App：`https://<域名>/api/github/webhooks`
-   - GitHub Webhook：`https://<域名>/github/trigger`
-   - GitLab：`https://<域名>/gitlab/trigger`
+5. **配置 Webhook URL** 为 `https://<域名>/api/github/webhooks`
 6. **验证** — 访问健康检查端点，并在 PR 中测试 `/ai-review` 命令
 
 ### 快速部署参考
 
 这是一个适用于 Render/Railway/Fly.io/Docker/K8s 的精简部署路径。
 
-1. **选择模式**
-   - GitHub App（推荐）
-   - 普通 GitHub Webhook
-   - 可选 GitLab Webhook
+1. **使用 GitHub App 模式**
 2. **使用最小环境变量**
 
 **GitHub App 最小配置（`.env.github-app.min.example`）**
@@ -763,26 +720,6 @@ APP_ID=123456
 PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 # PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
 WEBHOOK_SECRET=replace-with-webhook-secret
-AI_PROVIDER=openai
-OPENAI_API_KEY=replace-with-openai-key
-OPENAI_MODEL=gpt-4.1-mini
-```
-
-**普通 GitHub Webhook 最小配置（`.env.github-webhook.min.example`）**
-
-```env
-GITHUB_WEBHOOK_SECRET=replace-with-webhook-secret
-GITHUB_WEBHOOK_TOKEN=replace-with-github-token
-AI_PROVIDER=openai
-OPENAI_API_KEY=replace-with-openai-key
-OPENAI_MODEL=gpt-4.1-mini
-```
-
-**GitLab Webhook 最小配置（`.env.gitlab.min.example`）**
-
-```env
-GITLAB_TOKEN=replace-with-gitlab-token
-# GITLAB_WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
@@ -805,35 +742,28 @@ WEBHOOK_REPLAY_ENABLED=true
 WEBHOOK_REPLAY_TOKEN=replace-with-strong-random-token
 ```
 
-3. **启动应用**
+3. **启动后端应用**
 
 ```bash
-npm install
-npm run build
-npm start
+pnpm install --frozen-lockfile
+pnpm --filter backend build
+pnpm --filter backend start
 ```
 
-服务监听 `PORT`（默认 `3000`）。
+后端服务监听 `PORT`（默认 `3000`）。
 
 4. **配置 Webhook 地址**
    - GitHub App：`https://<域名>/api/github/webhooks`
-   - GitHub Webhook：`https://<域名>/github/trigger`
-   - GitLab Webhook：`https://<域名>/gitlab/trigger`
-5. **GitLab 推荐请求头**
-   - `x-ai-mode: report|comment`
-   - `x-gitlab-api-token: <api token>`
-   - `x-gitlab-token: <webhook secret>`（仅当已配置 `GITLAB_WEBHOOK_SECRET`）
-6. **Docker 一键启动**
+5. **Docker 一键启动**
 
 ```bash
 docker build -t pr-agent:latest .
 docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
 ```
 
-7. **验证清单**
+6. **验证清单**
    - `GET /health`
    - `GET /github/health`
-   - `GET /gitlab/health`
    - `GET /metrics`
    - 在 PR/MR 评论中测试：`/ai-review`、`/ai-review comment`
    - Webhook 失败响应应包含结构化字段：`error/type/status/path/method/timestamp`
@@ -841,7 +771,6 @@ docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
 如果开启 replay：
 - `GET /webhook/events`
 - `POST /github/replay/:eventId`
-- `POST /gitlab/replay/:eventId`
 - 请求头：`x-pr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
 
 ### Nginx 反向代理
@@ -867,7 +796,7 @@ server {
 
 ## 平台接入
 
-### GitHub App（推荐）
+### GitHub App（当前唯一支持的方式）
 
 1. 创建 GitHub App，配置以下权限：
    - **Pull requests**：Read & write
@@ -890,54 +819,16 @@ PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
-- GitHub App 启用条件（见 `src/modules/github-app/github-app.bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
+- GitHub App 启用条件（见 `backend/src/modules/github-app/github-app.bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
 - `docker-compose.yml` 默认挂载私钥路径为 `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`。如果本地缺少 `secrets/` 目录或 PEM 文件，`docker compose up` 会失败。
 - 建议本地预先创建：`mkdir -p secrets data`。`data` 目录通常可由 Docker 自动创建，但手动创建更可控。
 
-> 若未配置 `APP_ID` + `PRIVATE_KEY`（+ `WEBHOOK_SECRET`），GitHub App 模式会自动禁用，但普通 Webhook 仍可用。
+> 若未配置 `APP_ID` + `PRIVATE_KEY`（+ `WEBHOOK_SECRET`），GitHub App 模式会被禁用，此时当前 beta 部署也视为不完整。
 
-### 普通 GitHub Webhook
+### 当前 Beta 不支持的集成方式
 
-1. 在仓库 Settings > Webhooks 中添加 `https://<域名>/github/trigger`
-2. Content type 选择 `application/json`
-3. 选择事件：`Pull requests`、`Issues`、`Issue comments`、`Pull request review threads`
-4. 配置环境变量：
-
-```env
-GITHUB_WEBHOOK_SECRET=your-secret
-GITHUB_WEBHOOK_TOKEN=ghp_...    # 具有 repo 权限的 PAT（可用 GITHUB_TOKEN 兜底）
-```
-
-可选（仅调试）：
-
-```env
-GITHUB_WEBHOOK_SKIP_SIGNATURE=false
-```
-
-> `GITHUB_WEBHOOK_SKIP_SIGNATURE=true` 在生产环境（`NODE_ENV=production`）会被拒绝。
-
-### GitLab Webhook
-
-1. 在项目 Settings > Webhooks 中添加 `https://<域名>/gitlab/trigger`
-2. 选择触发事件：
-   - `Merge request events`（open / reopen / update / merge）
-   - `Note events`（在 MR 评论里触发 `/ai-review`、`/ask`、`/checks`、`/describe`、`/generate_tests`、`/changelog`、`/improve`、`/add_doc`、`/reflect`、`/similar_issue`、`/feedback`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/improve_component`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`）
-3. 可选配置 Secret Token
-4. 配置环境变量：
-
-```env
-GITLAB_TOKEN=glpat-...
-GITLAB_WEBHOOK_SECRET=your-secret    # 可选
-GITLAB_REQUIRE_WEBHOOK_SECRET=false  # 可选强制开关
-```
-
-GitLab 特有请求头：
-- `x-ai-mode: report|comment` — 覆盖评审模式
-- `x-gitlab-api-token: <token>` — 按请求指定 API Token（推荐）
-- `x-gitlab-token` — Webhook 签名验证（仅当配置了 `GITLAB_WEBHOOK_SECRET` 时使用）
-- `x-push-url` / `x-qwx-robot-url` — 可选，覆盖通知 Webhook 地址
-
-> **兼容行为**：当未配置 `GITLAB_WEBHOOK_SECRET` 时，`x-gitlab-token` 会兼容作为 API Token 使用，而非用于签名验证。
+- 普通 GitHub Webhook 目前不是受支持的部署目标。
+- GitLab Webhook 目前不是受支持的部署目标。
 
 ---
 
@@ -1106,7 +997,7 @@ Prometheus 格式指标通过 `GET /metrics` 暴露：
 | `GET /health` | 存活探针 |
 | `GET /health?deep=true` | 深度检查（AI Provider 连通性） |
 | `GET /github/health` | GitHub Webhook 配置校验 |
-| `GET /gitlab/health` | GitLab Webhook 配置校验 |
+| `GET /gitlab/health` | GitLab Webhook 遗留配置校验（当前 beta 不支持） |
 
 ### 错误处理
 
@@ -1153,17 +1044,20 @@ WEBHOOK_REPLAY_TOKEN=your-secret-token
 ## 测试
 
 ```bash
-# 运行测试
-npm test
+# 后端测试
+pnpm test:backend
 
-# 带覆盖率运行
-npm run test:coverage
+# 后端覆盖率
+pnpm --filter backend test:coverage
 
-# 仅类型检查
-npm run check
+# 后端类型检查
+pnpm --filter backend check
+
+# 前端生产构建回归检查
+pnpm --filter frontend build
 ```
 
-测试使用 Node.js 内置测试运行器（`node:test`），覆盖范围包括：
+后端测试使用 Node.js 内置测试运行器（`node:test`）。建议的回归检查覆盖：
 - AI 并发控制
 - 缓存与去重行为
 - Diff 解析与 Hunk 优先级

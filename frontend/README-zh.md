@@ -16,7 +16,7 @@ pnpm dev
 ## 项目结构
 
 ```
-web2/
+frontend/
 ├── app/
 │   ├── components/     # UI 区块（Hero、Features、Pricing …）
 │   ├── i18n/           # en / zh 多语言
@@ -85,7 +85,7 @@ flowchart LR
         O2["buildIssueCommentMarkdown"]
         O3["createComment / notes / managed upsert"]
         O4["publishNotification (可选)"]
-        O5["mr_agent_* 指标 + replay 存储"]
+        O5["pr_agent_* 指标 + replay 存储"]
     end
 
     E1 --> A1
@@ -140,17 +140,17 @@ flowchart LR
 构建并运行生产环境：
 
 ```bash
-pnpm --filter web2 build
-pnpm --filter web2 start
+pnpm --filter frontend build
+pnpm --filter frontend exec next start -H 0.0.0.0 -p ${PORT:-3000}
 ```
 
-### Coolify + Nixpacks（根目录部署 web2）
+### Coolify + Nixpacks（根目录部署 frontend）
 
 仓库根目录已提供 `nixpacks.toml`，核心命令如下：
 
 - Install: `pnpm install --frozen-lockfile`
-- Build: `pnpm --filter web2 build`
-- Start: `pnpm --filter web2 exec next start -H 0.0.0.0 -p ${PORT:-3000}`
+- Build: `pnpm --filter frontend build`
+- Start: `pnpm --filter frontend exec next start -H 0.0.0.0 -p ${PORT:-3000}`
 
 Coolify 中建议设置：
 

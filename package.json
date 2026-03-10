@@ -6,8 +6,7 @@
   "scripts": {
     "dev:backend": "pnpm --filter backend dev",
     "test:backend": "pnpm --filter backend test",
-    "dev:web": "pnpm --filter web dev",
-    "dev:web2": "pnpm --filter web2 dev",
+    "dev:frontend": "pnpm --filter frontend dev",
     "dev:all": "turbo dev",
     "build:all": "turbo build",
     "lint:all": "turbo lint",
