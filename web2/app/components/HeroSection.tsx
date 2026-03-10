@@ -1,14 +1,16 @@
 'use client'
 
+import { useState, useEffect, Suspense, lazy } from 'react'
 import HashLink from './HashLink'
-import ShaderGradientBg from './ShaderGradientBg'
 import { useLocale } from '../i18n/LocaleProvider'
+
+const ShaderGradientBg = lazy(() => import('./ShaderGradientBg'))
 
 const COPY = {
   en: {
     badge: 'GitHub App · TypeScript + NestJS',
     title: 'AI code review',
-    subtitle: 'for GitHub App.',
+    subtitle: 'for GitHub App',
     body:
       'PR Agent focuses on GitHub App workflows: automatic pull request review, structured summaries, policy-aware feedback, and operational endpoints for real-world rollout.',
     primaryCta: 'View Capabilities',
@@ -18,7 +20,7 @@ const COPY = {
   zh: {
     badge: 'GitHub App · TypeScript + NestJS',
     title: 'GitHub App 的',
-    subtitle: 'AI 代码评审服务。',
+    subtitle: 'AI 代码评审服务',
     body:
       'PR Agent 当前聚焦 GitHub App 工作流，提供 Pull Request 自动评审、结构化总结、策略感知反馈，以及适合真实接入的运维端点。',
     primaryCta: '查看能力',
@@ -30,6 +32,15 @@ const COPY = {
 export default function HeroSection() {
   const { locale } = useLocale()
   const copy = COPY[locale]
+  const [showShader, setShowShader] = useState(false)
+
+  useEffect(() => {
+    const id = requestIdleCallback(
+      () => setShowShader(true),
+      { timeout: 2000 }
+    )
+    return () => cancelIdleCallback(id)
+  }, [])
 
   return (
     <section
@@ -37,7 +48,11 @@ export default function HeroSection() {
       className="relative min-h-screen flex flex-col items-center justify-center pt-20 overflow-hidden bg-black"
     >
       <div className="absolute inset-0 pointer-events-none">
-        <ShaderGradientBg />
+        {showShader && (
+          <Suspense fallback={null}>
+            <ShaderGradientBg />
+          </Suspense>
+        )}
       </div>
 
       <div className="relative z-10 max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10 text-center w-full">

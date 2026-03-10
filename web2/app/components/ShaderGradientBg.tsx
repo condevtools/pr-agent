@@ -26,7 +26,7 @@ export default function ShaderGradientBg() {
     gizmoHelper: 'hide',
     grain: 'on',
     lightType: 'env',
-    pixelDensity: 1.5,
+    pixelDensity: 1,
     positionX: -0.1,
     positionY: 0,
     positionZ: 0,

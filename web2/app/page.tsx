@@ -1,19 +1,21 @@
+import dynamic from 'next/dynamic'
 import Navbar from './components/Navbar'
 import HomeMotionMain from './components/HomeMotionMain'
 import HeroSection from './components/HeroSection'
 import AboutSection from './components/AboutSection'
 import ResultsSection from './components/ResultsSection'
-import ProcessSection from './components/ProcessSection'
-import FeaturesSection from './components/FeaturesSection'
-import BenefitsSection from './components/BenefitsSection'
-import PortfolioSection from './components/PortfolioSection'
-import ServicesSection from './components/ServicesSection'
-import TrustSection from './components/TrustSection'
-import PricingSection from './components/PricingSection'
-import TestimonialsSection from './components/TestimonialsSection'
-import FAQSection from './components/FAQSection'
-import CTASection from './components/CTASection'
 import { buildJsonLdGraph } from '../lib/seo-geo'
+
+const ProcessSection = dynamic(() => import('./components/ProcessSection'))
+const FeaturesSection = dynamic(() => import('./components/FeaturesSection'))
+const BenefitsSection = dynamic(() => import('./components/BenefitsSection'))
+const PortfolioSection = dynamic(() => import('./components/PortfolioSection'))
+const ServicesSection = dynamic(() => import('./components/ServicesSection'))
+const TrustSection = dynamic(() => import('./components/TrustSection'))
+const PricingSection = dynamic(() => import('./components/PricingSection'))
+const TestimonialsSection = dynamic(() => import('./components/TestimonialsSection'))
+const FAQSection = dynamic(() => import('./components/FAQSection'))
+const CTASection = dynamic(() => import('./components/CTASection'))
 
 export default function Home() {
   const jsonLd = buildJsonLdGraph()

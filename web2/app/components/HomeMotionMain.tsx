@@ -36,11 +36,10 @@ export default function HomeMotionMain({ children }: { children: ReactNode }) {
       gsap.utils.toArray<HTMLElement>('[data-gsap="reveal"]').forEach((element) => {
         gsap.fromTo(
           element,
-          { opacity: 0, y: 36, filter: 'blur(10px)' },
+          { opacity: 0, y: 36 },
           {
             opacity: 1,
             y: 0,
-            filter: 'blur(0px)',
             duration: 0.9,
             ease: 'power3.out',
             scrollTrigger: {

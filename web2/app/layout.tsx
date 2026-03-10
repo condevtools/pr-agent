@@ -21,9 +21,9 @@ export const metadata: Metadata = {
   publisher: 'CondevTools',
   category: 'developer tools',
   icons: {
-    icon: '/icon.svg',
-    shortcut: '/icon.svg',
-    apple: '/icon.svg',
+    icon: '/logo.svg',
+    shortcut: '/logo.svg',
+    apple: '/logo.svg',
   },
   openGraph: {
     type: 'website',
@@ -59,6 +59,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        {/* 慢速网络检测：在 CSS/字体加载前同步执行，2G/3G 用户跳过 Geist Sans */}
+        <script dangerouslySetInnerHTML={{ __html: `try{var c=navigator.connection;if(c&&/slow-2g|2g|3g/.test(c.effectiveType)){document.documentElement.classList.add('slow-network')}}catch(e){}` }} />
+      </head>
       <body className="antialiased">
         <LocaleProvider>
           <CustomCursor />

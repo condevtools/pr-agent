@@ -8,6 +8,7 @@ export default function CustomCursor() {
   const pos = useRef({ x: 0, y: 0 })
   const target = useRef({ x: 0, y: 0 })
   const rafRef = useRef<number>(0)
+  const moving = useRef(false)
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(hover: hover) and (pointer: fine)')
@@ -27,22 +28,32 @@ export default function CustomCursor() {
 
     const onMove = (e: MouseEvent) => {
       target.current = { x: e.clientX, y: e.clientY }
+      if (!moving.current) {
+        moving.current = true
+        rafRef.current = requestAnimationFrame(loop)
+      }
     }
 
     const loop = () => {
       const ease = 0.12
-      pos.current.x += (target.current.x - pos.current.x) * ease
-      pos.current.y += (target.current.y - pos.current.y) * ease
+      const dx = target.current.x - pos.current.x
+      const dy = target.current.y - pos.current.y
+      pos.current.x += dx * ease
+      pos.current.y += dy * ease
 
       if (cursorRef.current) {
         cursorRef.current.style.transform = `translate(${pos.current.x}px, ${pos.current.y}px)`
+      }
+
+      if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+        moving.current = false
+        return
       }
 
       rafRef.current = requestAnimationFrame(loop)
     }
 
     window.addEventListener('mousemove', onMove)
-    rafRef.current = requestAnimationFrame(loop)
 
     return () => {
       window.removeEventListener('mousemove', onMove)

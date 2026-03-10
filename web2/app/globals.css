@@ -1,3 +1,9 @@
+/* Geist Sans — 仅加载实际使用的字重 + Latin 子集，减少不必要下载 */
+@import "@fontsource/geist-sans/latin-400.css";
+@import "@fontsource/geist-sans/latin-500.css";
+@import "@fontsource/geist-sans/latin-600.css";
+@import "@fontsource/geist-sans/latin-700.css";
+
 @import "tailwindcss";
 
 @theme inline {
@@ -5,12 +11,18 @@
   --color-foreground: #ffffff;
   --color-accent: #0055fe;
   --color-card: #080808;
+  --font-sans: 'Geist Sans', 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 
 body {
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* 慢速网络降级：跳过自定义字体，直接使用系统字体，避免字体文件阻塞渲染 */
+.slow-network body {
+  font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 
 @keyframes marquee {
