@@ -1,58 +1,97 @@
-import Link from 'next/link'
+'use client'
 
-const PROJECTS = [
-  {
-    name: 'Way Fields',
-    year: '2024',
-    tags: ['E-Commerce', 'Portfolio'],
-    href: '/portfolio/wayfields',
-    color: 'from-emerald-900/40 to-black',
+import Link from 'next/link'
+import { useLocale } from '../i18n/LocaleProvider'
+
+const COPY = {
+  en: {
+    label: 'Commands + Scenarios',
+    title: 'The PR thread is not just output.',
+    subtitle: 'It is also the operator interface.',
+    body:
+      'Auto review is useful as a default pass. Comment commands matter when you need targeted follow-up inside a live discussion.',
+    cta: 'See Workflow',
+    cards: [
+      {
+        name: '/ai-review',
+        year: 'Primary Command',
+        tags: ['PR / MR', 'Comment / Report'],
+        href: '#faq',
+        color: 'from-emerald-900/40 to-black',
+      },
+      {
+        name: 'Interactive Commands',
+        year: 'Discussion Thread',
+        tags: ['ask / checks', 'generate_tests'],
+        href: '#benefits',
+        color: 'from-violet-900/40 to-black',
+      },
+      {
+        name: 'Policy Guardrails',
+        year: 'Repository Process',
+        tags: ['Templates', 'CODEOWNERS'],
+        href: '#deployment',
+        color: 'from-sky-900/40 to-black',
+      },
+    ],
   },
-  {
-    name: 'Raven Studio',
-    year: '2025',
-    tags: ['Business', 'Agency'],
-    href: '/portfolio/raven-studio',
-    color: 'from-violet-900/40 to-black',
+  zh: {
+    label: '命令与场景',
+    title: 'PR 讨论区不只是输出面板。',
+    subtitle: '它也是你的操作入口。',
+    body:
+      '自动评审适合作为默认首轮检查；评论命令则适合在真实讨论中做更有针对性的追加操作。',
+    cta: '查看流程',
+    cards: [
+      {
+        name: '/ai-review',
+        year: '主命令',
+        tags: ['PR / MR', 'Comment / Report'],
+        href: '#faq',
+        color: 'from-emerald-900/40 to-black',
+      },
+      {
+        name: '交互命令',
+        year: '评论区',
+        tags: ['ask / checks', 'generate_tests'],
+        href: '#benefits',
+        color: 'from-violet-900/40 to-black',
+      },
+      {
+        name: '策略护栏',
+        year: '仓库流程',
+        tags: ['Templates', 'CODEOWNERS'],
+        href: '#deployment',
+        color: 'from-sky-900/40 to-black',
+      },
+    ],
   },
-  {
-    name: 'White Stag',
-    year: '2024',
-    tags: ['SASS', 'Landing Page'],
-    href: '/portfolio/whitestag',
-    color: 'from-sky-900/40 to-black',
-  },
-]
+} as const
 
 export default function PortfolioSection() {
+  const { locale } = useLocale()
+  const copy = COPY[locale]
+
   return (
-    <section className="bg-black py-24 lg:py-32">
+    <section id="commands" className="bg-black py-24 lg:py-32">
       <div className="max-w-[1440px] mx-auto px-6 lg:px-10">
-        {/* Header */}
         <div className="mb-16">
           <div className="inline-flex items-center gap-2 mb-6">
             <span className="w-1.5 h-1.5 rounded-full bg-white/60" />
-            <span className="text-white/50 text-sm">Portfolio</span>
+            <span className="text-white/50 text-sm">{copy.label}</span>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-end">
             <div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">
-                Our Selected Projects
-              </h2>
-              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">
-                That Propel Your Website.
-              </h2>
+              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.title}</h2>
+              <h2 className="text-4xl md:text-5xl font-bold text-white leading-tight">{copy.subtitle}</h2>
             </div>
             <div className="flex flex-col gap-4 lg:items-end">
-              <p className="text-white/50 text-sm leading-relaxed max-w-[380px]">
-                Explore our curated work, showcasing collaborations with visionary clients across
-                diverse industries.
-              </p>
+              <p className="text-white/50 text-sm leading-relaxed max-w-[420px]">{copy.body}</p>
               <Link
-                href="/portfolio"
+                href="#process"
                 className="inline-flex items-center gap-2 text-white/60 text-sm hover:text-white transition-colors w-fit"
               >
-                View Portfolio
+                {copy.cta}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
@@ -61,20 +100,17 @@ export default function PortfolioSection() {
           </div>
         </div>
 
-        {/* Project cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {PROJECTS.map((project) => (
+          {copy.cards.map((project) => (
             <Link
               key={project.name}
               href={project.href}
               className="group relative bg-[#080808] border border-white/8 overflow-hidden aspect-[4/5] flex flex-col justify-between p-6 hover:border-white/20 transition-colors"
             >
-              {/* Background gradient */}
               <div
                 className={`absolute inset-0 bg-gradient-to-b ${project.color} opacity-60 group-hover:opacity-80 transition-opacity`}
               />
 
-              {/* Year */}
               <div className="relative z-10 flex items-start justify-between">
                 <span className="text-white/40 text-sm">{project.year}</span>
                 <svg
@@ -87,7 +123,6 @@ export default function PortfolioSection() {
                 </svg>
               </div>
 
-              {/* Tags + Name */}
               <div className="relative z-10">
                 <div className="flex flex-wrap gap-2 mb-3">
                   {project.tags.map((tag) => (

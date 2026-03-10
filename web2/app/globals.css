@@ -1,7 +1,6 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-dm-sans);
   --color-background: #000000;
   --color-foreground: #ffffff;
   --color-accent: #0055fe;
@@ -11,8 +10,7 @@
 body {
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
-  cursor: none;
+  font-family: "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
 @keyframes marquee {
@@ -28,10 +26,42 @@ body {
   animation: marquee 60s linear infinite;
 }
 
+::selection {
+  background-color: #0055fe;
+  color: #ffffff;
+}
+
 * {
   box-sizing: border-box;
 }
 
 html {
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(53, 116, 255, 0.82) rgba(255, 255, 255, 0.03);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(78, 138, 255, 0.82), rgba(0, 85, 254, 0.42));
+  border: 2px solid rgba(0, 0, 0, 0.9);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(108, 168, 255, 0.96), rgba(26, 102, 255, 0.64));
+}
+
+::-webkit-scrollbar-corner {
+  background: rgba(255, 255, 255, 0.02);
 }
