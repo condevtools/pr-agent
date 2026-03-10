@@ -2,23 +2,32 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm install -g pnpm
 
-COPY tsconfig.json ./
-COPY src ./src
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY backend/package.json ./backend/
 
-RUN npm run build
+RUN pnpm install --filter backend --frozen-lockfile
+
+COPY backend/tsconfig.json ./backend/
+COPY backend/src ./backend/src
+
+RUN pnpm --filter backend build
 
 FROM node:22-alpine AS runtime
 
-WORKDIR /app
+WORKDIR /app/backend
+
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm install -g pnpm
 
-COPY --from=build /app/dist ./dist
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml /app/
+COPY backend/package.json ./
+
+RUN pnpm install --filter backend --prod --frozen-lockfile
+
+COPY --from=build /app/backend/dist ./dist
 
 EXPOSE 3000
 

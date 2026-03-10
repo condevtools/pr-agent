@@ -51,7 +51,7 @@
       "subtitle": "评审自动化、流程检查、安全提示与工作流感知反馈。",
       "headers": ["能力", "详情", "来源"],
       "autoReview": ["自动 PR/MR 评审", "在 opened/edited/synchronize/merged 事件时运行，支持评论或报告模式。", "README 功能 + 评审触发"],
-      "policyGuardrails": ["策略护栏", "检查 Issue/PR 模板完整性，通过 .mr-agent.yml 支持提醒/强制策略模式。", "README 仓库策略"],
+      "policyGuardrails": ["策略护栏", "检查 Issue/PR 模板完整性，通过 .pr-agent.yml 支持提醒/强制策略模式。", "README 仓库策略"],
       "securitySignals": ["安全 + 质量信号", "密钥模式扫描、去重保护、反馈学习信号与自动标签。"],
       "processReview": ["流程感知评审", "检测 workflows/templates/CODEOWNERS/CONTRIBUTING 的变更，并生成流程相关反馈。"]
     },

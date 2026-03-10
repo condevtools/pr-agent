@@ -59,12 +59,12 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 - `/feedback` — provide learning signals to improve future reviews
 
 **Process Guardrails**
-- `.mr-agent.yml` per-repo policy (remind or enforce mode)
+- `.pr-agent.yml` per-repo policy (remind or enforce mode)
 - Issue & PR template completeness checks
 - GitHub Check integration for branch protection (`enforce` mode)
 - Process guideline detection (`.github/.gitlab` workflows, templates, CODEOWNERS, CONTRIBUTING) with compliance suggestions
 - Issue creation/edit pre-check and PR pre-merge validation (GitHub)
-- Default issue auto-triage (feasibility + suggestions + similar issues + labels) when `.mr-agent.yml` is absent
+- Default issue auto-triage (feasibility + suggestions + similar issues + labels) when `.pr-agent.yml` is absent
 
 **Multi-Platform**
 - GitHub App (recommended, fully tested)
@@ -103,8 +103,8 @@ AI-powered code review service built with TypeScript + NestJS. Automatically rev
 
 **Recommended GitHub Flow baseline:**
 
-1. Enable branch protection — require `MR Agent Policy` check and CI to pass.
-2. Set `mode: enforce` in `.mr-agent.yml` (start with core repositories, then roll out).
+1. Enable branch protection — require `PR Agent Policy` check and CI to pass.
+2. Set `mode: enforce` in `.pr-agent.yml` (start with core repositories, then roll out).
 3. Use standardized issue/PR templates to prevent missing requirements and test plans.
 
 ---
@@ -242,6 +242,116 @@ graph LR
     GHP --> CACHE
 ```
 
+### Detailed Request Flow
+
+The following diagram traces every request path — from webhook entry through event routing, command parsing, the common review engine, and output delivery.
+
+```mermaid
+flowchart LR
+    subgraph E["Entry Endpoints (NestJS + Probot)"]
+        E1["/api/github/webhooks<br/>GithubAppBootstrapService"]
+        E2["/github/trigger<br/>GithubWebhookController"]
+        E3["/gitlab/trigger<br/>GitlabWebhookController"]
+        E4["/github/replay/:eventId<br/>/gitlab/replay/:eventId"]
+        E5["/health /metrics /webhook/events"]
+    end
+
+    subgraph GHA["GitHub App Event Routing (src/app.ts)"]
+        A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
+        A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
+        A3["resolveGitHubPullRequestAutoReviewPolicy"]
+        A4["pull_request.closed (merged)<br/>resolveGitHubReviewBehaviorPolicy"]
+        A5["issue_comment.created (PR + Issue)<br/>handleGitHubIssueCommentCommand"]
+        A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
+    end
+
+    subgraph GHW["Plain GitHub Webhook (src/integrations/github/github-webhook.ts)"]
+        B1["handlePlainGitHubWebhook"]
+        B2["verifyWebhookSignature + payload schema"]
+        B3["pull_request / issues / issue_comment / review_thread dispatch"]
+        B4["runGitHubPullRequestPolicyCheck + runGitHubIssuePolicyCheck"]
+        B5["handleGitHubIssueCommentCommand"]
+    end
+
+    subgraph GLW["GitLab Webhook (src/integrations/gitlab/gitlab-review.ts)"]
+        C1["runGitLabWebhook"]
+        C2["verify token + payload schema"]
+        C3["handleGitLabMergeRequestWebhook"]
+        C4["handleGitLabNoteWebhook"]
+        C5["resolveGitLabReviewPolicy (.pr-agent.yml)"]
+    end
+
+    subgraph CMD["Command Parsing Surface"]
+        D1["parseReviewCommand"]
+        D2["parseAsk / parseMention / parseChecks / parseGenerateTests"]
+        D3["parseDescribe / parseChangelog"]
+        D4["parseImprove / parseAddDoc / parseReflect / parseSimilarIssue / parseFeedback"]
+    end
+
+    subgraph CORE["Common Review Engine"]
+        R1["runGitHubReview / runGitLabReview"]
+        R2["dedupe + rate-limit + incremental head + feedback signals"]
+        R3["collect context: diff/files/ci/policy"]
+        R4["analyzePullRequest / answerPullRequestQuestion"]
+        R5["patch parser + hunk prioritize + line mapping"]
+        R6["secret scan + auto label"]
+    end
+
+    subgraph OUT["Output + Ops"]
+        O1["buildReportCommentMarkdown"]
+        O2["buildIssueCommentMarkdown"]
+        O3["createComment / notes / managed upsert"]
+        O4["publishNotification (optional)"]
+        O5["pr_agent_* metrics + replay store"]
+    end
+
+    E1 --> A1
+    E1 --> A2 --> A3 --> R1
+    E1 --> A4 --> R1
+    E1 --> A5
+    E1 --> A6
+
+    E2 --> B1 --> B2 --> B3
+    B3 --> B4 --> R1
+    B3 --> B5
+
+    E3 --> C1 --> C2
+    C2 --> C3 --> C5 --> R1
+    C2 --> C4 --> C5
+
+    A5 --> D1
+    A5 --> D2
+    A5 --> D3
+    A5 --> D4
+    B5 --> D1
+    B5 --> D2
+    B5 --> D3
+    B5 --> D4
+    C4 --> D1
+    C4 --> D2
+    C4 --> D3
+    C4 --> D4
+
+    D1 --> R1
+    D2 --> R4
+    D3 --> R4
+    D4 --> R1
+
+    R1 --> R2 --> R3 --> R4 --> R5
+    R4 --> R6
+    R5 --> O1 --> O3
+    R5 --> O2 --> O3
+    R6 --> O3
+    O3 --> O4
+
+    E4 --> B1
+    E4 --> C1
+    E5 --> O5
+    E2 --> O5
+    E3 --> O5
+    O3 -. feedback signals .-> R2
+```
+
 ---
 
 ## Tech Stack
@@ -263,7 +373,7 @@ graph LR
 ## Project Structure
 
 ```
-mr-agent/
+pr-agent/
 ├── src/
 │   ├── main.ts                     # NestJS bootstrap & server startup
 │   ├── app.module.ts               # Root module (imports all sub-modules)
@@ -482,7 +592,7 @@ GEMINI_MODEL=gemini-2.0-flash
 
 ```env
 RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/mr-agent/runtime-state.sqlite3
+RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
 ```
 
 ### Notifications (Optional)
@@ -528,9 +638,9 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITHUB_MERGED_DEDUPE_TTL_MS` | `86400000` (24h) | Dedup window for merged + report events |
 | `GITHUB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000` (30d) | Feedback signal retention window |
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache lifetime |
-| `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.mr-agent.yml` cache for policy/review behavior |
+| `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` cache for policy/review behavior |
 | `GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS` | `600000` (10min) | Dedup window for policy reminder comments |
-| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | Enable default issue auto-triage on `issues.opened/edited` when no `.mr-agent.yml` exists |
+| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | Enable default issue auto-triage on `issues.opened/edited` when no `.pr-agent.yml` exists |
 | `GITHUB_ISSUE_AUTO_TRIAGE_AUTO_LABELS` | `true` | Add inferred labels for default issue auto-triage |
 | `GITHUB_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS` | `300000` (5min) | Dedup window for issue auto-triage comments |
 | `GITHUB_ISSUE_AUTO_TRIAGE_SIMILAR_LIMIT` | `5` | Max number of similar issues shown in auto-triage output |
@@ -545,7 +655,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITLAB_MERGED_DEDUPE_TTL_MS` | `86400000` (24h) | Merged + report event dedup window |
 | `GITLAB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache |
 | `GITLAB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000` (30d) | Feedback learning signal retention |
-| `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.mr-agent.yml` policy cache |
+| `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` policy cache |
 | `GITLAB_CHANGELOG_PATH` | `CHANGELOG.md` | File path for `/changelog --apply` |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/gitlab/trigger` payload size |
 | `GITLAB_REQUIRE_WEBHOOK_SECRET` | `false` | Require `GITLAB_WEBHOOK_SECRET`, otherwise reject unsigned webhooks |
@@ -572,19 +682,19 @@ graph LR
         B2[Stage 2: Runtime<br/>node:22-alpine<br/>prod deps only]
         B1 -->|COPY dist/| B2
     end
-    B2 -->|Expose 3000| SRV[mr-agent container]
+    B2 -->|Expose 3000| SRV[pr-agent container]
 ```
 
 **Build & Run**
 
 ```bash
-docker build -t mr-agent:latest .
+docker build -t pr-agent:latest .
 docker run -d \
-  --name mr-agent \
+  --name pr-agent \
   -p 3000:3000 \
   --env-file .env \
   -v ./data:/data \
-  mr-agent:latest
+  pr-agent:latest
 ```
 
 ### Docker Compose
@@ -594,10 +704,10 @@ docker run -d \
 docker compose up -d --build
 
 # View logs
-docker compose logs -f mr-agent
+docker compose logs -f pr-agent
 
 # Restart
-docker compose restart mr-agent
+docker compose restart pr-agent
 
 # Stop
 docker compose down
@@ -682,7 +792,7 @@ OPENAI_MODEL=gpt-4.1-mini
 
 ```env
 RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/mr-agent/runtime-state.sqlite3
+RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
 WEBHOOK_EVENT_STORE_ENABLED=false
 WEBHOOK_REPLAY_ENABLED=false
 ```
@@ -716,8 +826,8 @@ Server listens on `PORT` (default `3000`).
 6. **Docker one-liner**
 
 ```bash
-docker build -t mr-agent:latest .
-docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
+docker build -t pr-agent:latest .
+docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
 ```
 
 7. **Verification checklist**
@@ -732,7 +842,7 @@ If replay is enabled:
 - `GET /webhook/events`
 - `POST /github/replay/:eventId`
 - `POST /gitlab/replay/:eventId`
-- Header: `x-mr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
+- Header: `x-pr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
 
 ### Nginx Reverse Proxy
 
@@ -741,7 +851,7 @@ There is no committed `deploy/nginx/` sample in this repository; use the snippet
 ```nginx
 server {
     listen 443 ssl;
-    server_name mr-agent.example.com;
+    server_name pr-agent.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:3000;
@@ -865,7 +975,7 @@ All commands are triggered via PR/MR comments. Commands marked with **(PR only)*
 | `/feedback resolved\|dismissed\|up\|down [note]` | Provide review quality feedback |
 
 Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
-Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`; `/reflect` depends on `askCommandEnabled`; `/improve_component` depends on `improveCommandEnabled`; `/generate_labels` depends on `autoLabelEnabled`.
+Policy toggles in `.pr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`; `/reflect` depends on `askCommandEnabled`; `/improve_component` depends on `improveCommandEnabled`; `/generate_labels` depends on `autoLabelEnabled`.
 
 > **Note:** `/ask`, `/feedback`, `/similar_issue`, `/help_docs`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` (GitHub App slug) or `GITHUB_BOT_LOGIN` (exact bot login) to enable `@mention` detection. Mentions with and without the `[bot]` suffix are both supported.
 
@@ -873,7 +983,7 @@ Policy toggles in `.mr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/ge
 
 ## Repository Policy
 
-Add `.mr-agent.yml` to the repository root to configure per-repo behavior:
+Add `.pr-agent.yml` to the repository root to configure per-repo behavior:
 
 ```yaml
 mode: remind          # remind = comment only, enforce = fail GitHub Check
@@ -927,11 +1037,11 @@ review:
     - No new `any` types allowed
 ```
 
-GitLab currently reads only the `review:` section from `.mr-agent.yml`. Top-level `mode`, `issue`, and `pullRequest` checks are enforced in GitHub policy flows.
+GitLab currently reads only the `review:` section from `.pr-agent.yml`. Top-level `mode`, `issue`, and `pullRequest` checks are enforced in GitHub policy flows.
 
 **Modes:**
 - `remind` — posts a comment noting missing fields; does not block merge
-- `enforce` — creates a failing GitHub Check (`MR Agent Policy`) that can be required in branch protection rules
+- `enforce` — creates a failing GitHub Check (`PR Agent Policy`) that can be required in branch protection rules
 
 **Template fallback behavior:**
 - When `requiredSections` is not configured, section headings are automatically extracted from repository templates:
@@ -976,18 +1086,18 @@ GitLab currently reads only the `review:` section from `.mr-agent.yml`. Top-leve
 
 Prometheus-format metrics are exposed at `GET /metrics`:
 
-- `mr_agent_webhook_requests_total` — webhook request count by platform & event
-- `mr_agent_webhook_results_total` — results by platform & outcome (ok/error)
-- `mr_agent_webhook_replay_total` — replay execution outcomes
-- `mr_agent_webhook_store_writes_total` — persisted debug-event write count
-- `mr_agent_webhook_store_trim_total` — debug-event store trim operations
-- `mr_agent_health_checks_total` — health endpoint call count
-- `mr_agent_http_errors_total` — global HTTP error count
-- `mr_agent_process_uptime_seconds` — process uptime
-- `mr_agent_ai_requests_active` — active AI request count
-- `mr_agent_ai_wait_queue_size` — queued AI request count
-- `mr_agent_ai_shutdown_requested` — AI shutdown flag (0/1)
-- `mr_agent_runtime_state_backend_info{backend=...}` — selected runtime-state backend info gauge
+- `pr_agent_webhook_requests_total` — webhook request count by platform & event
+- `pr_agent_webhook_results_total` — results by platform & outcome (ok/error)
+- `pr_agent_webhook_replay_total` — replay execution outcomes
+- `pr_agent_webhook_store_writes_total` — persisted debug-event write count
+- `pr_agent_webhook_store_trim_total` — debug-event store trim operations
+- `pr_agent_health_checks_total` — health endpoint call count
+- `pr_agent_http_errors_total` — global HTTP error count
+- `pr_agent_process_uptime_seconds` — process uptime
+- `pr_agent_ai_requests_active` — active AI request count
+- `pr_agent_ai_wait_queue_size` — queued AI request count
+- `pr_agent_ai_shutdown_requested` — AI shutdown flag (0/1)
+- `pr_agent_runtime_state_backend_info{backend=...}` — selected runtime-state backend info gauge
 
 ### Health Checks
 
@@ -1026,7 +1136,7 @@ WEBHOOK_REPLAY_ENABLED=true
 WEBHOOK_REPLAY_TOKEN=your-secret-token
 ```
 
-Endpoints (require `x-mr-agent-replay-token` header):
+Endpoints (require `x-pr-agent-replay-token` header):
 - `GET /webhook/events` — list stored events
 - `POST /github/replay/:eventId` — replay a GitHub event
 - `POST /gitlab/replay/:eventId` — replay a GitLab event

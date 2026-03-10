@@ -14,7 +14,7 @@ const TAGS = {
     'SQLite',
     'Prometheus',
     'Replay',
-    '.mr-agent.yml',
+    '.pr-agent.yml',
   ],
   zh: [
     'GitHub App',
@@ -26,7 +26,7 @@ const TAGS = {
     'SQLite',
     'Prometheus',
     '回放',
-    '.mr-agent.yml',
+    '.pr-agent.yml',
   ],
 } as const
 

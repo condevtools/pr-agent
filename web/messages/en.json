@@ -51,7 +51,7 @@
       "subtitle": "Review automation, process checks, security hints, and workflow-aware feedback.",
       "headers": ["Capability", "Details", "Source"],
       "autoReview": ["Automatic PR/MR review", "Runs on opened/edited/synchronize/merged events with configurable comment/report mode.", "README Feature + Review Triggers"],
-      "policyGuardrails": ["Policy guardrails", "Checks issue/PR template completeness and supports remind/enforce policy mode via .mr-agent.yml.", "README Repository Policy"],
+      "policyGuardrails": ["Policy guardrails", "Checks issue/PR template completeness and supports remind/enforce policy mode via .pr-agent.yml.", "README Repository Policy"],
       "securitySignals": ["Security + quality signals", "Secret pattern scanning, dedupe protection, feedback learning signals, and auto-labeling."],
       "processReview": ["Process-aware review", "Detects changes in workflows/templates/CODEOWNERS/CONTRIBUTING and emits process-focused feedback."]
     },

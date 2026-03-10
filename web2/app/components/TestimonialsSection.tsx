@@ -38,7 +38,7 @@ const COPY = {
           'We care about workflows, templates, and CODEOWNERS changes as much as application code changes.',
         name: 'Repository Administrators',
         role: 'Process compliance',
-        company: '.mr-agent.yml',
+        company: '.pr-agent.yml',
       },
       {
         quote:
@@ -86,7 +86,7 @@ const COPY = {
         quote: '除了业务代码变化，还同样关心 workflow、模板与 CODEOWNERS 这类流程资产。',
         name: '仓库管理员',
         role: '流程合规',
-        company: '.mr-agent.yml',
+        company: '.pr-agent.yml',
       },
       {
         quote: '真正上线之后，关键要求是可观测性，因为 webhook、模型和运行时问题都需要明确的排障入口。',

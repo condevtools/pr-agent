@@ -16,7 +16,7 @@ const COPY = {
     bullets: [
       'Supports GitHub App, GitHub Webhook, and GitLab Webhook modes.',
       'Supports comment/report modes with line-aware diff mapping.',
-      'Uses .mr-agent.yml for policy reminders, command switches, and review guardrails.',
+      'Uses .pr-agent.yml for policy reminders, command switches, and review guardrails.',
     ],
     cta: 'View Capabilities',
   },
@@ -31,7 +31,7 @@ const COPY = {
     bullets: [
       '支持 GitHub App、GitHub Webhook 与 GitLab Webhook 三种接入方式。',
       '支持 comment / report 模式，并按行映射 diff 输出反馈。',
-      '通过 .mr-agent.yml 管理策略提醒、命令开关与评审护栏。',
+      '通过 .pr-agent.yml 管理策略提醒、命令开关与评审护栏。',
     ],
     cta: '查看能力',
   },

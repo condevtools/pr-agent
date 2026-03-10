@@ -28,7 +28,7 @@ const COPY = {
       {
         question: 'How do policy checks and branch protection fit in?',
         answer:
-          'The .mr-agent.yml file controls review switches, auto-labeling, and policy behavior. On GitHub, you can also connect policy output to a GitHub Check and use it with branch protection.',
+          'The .pr-agent.yml file controls review switches, auto-labeling, and policy behavior. On GitHub, you can also connect policy output to a GitHub Check and use it with branch protection.',
       },
       {
         question: 'What runtime state backend is recommended for production?',
@@ -66,7 +66,7 @@ const COPY = {
       {
         question: '策略检查和 Branch Protection 如何配合？',
         answer:
-          '.mr-agent.yml 可控制评审开关、自动标签与策略行为；在 GitHub 场景下，还可以把策略输出接到 GitHub Check，再配合 Branch Protection 使用。',
+          '.pr-agent.yml 可控制评审开关、自动标签与策略行为；在 GitHub 场景下，还可以把策略输出接到 GitHub Check，再配合 Branch Protection 使用。',
       },
       {
         question: '生产环境推荐什么运行时状态后端？',

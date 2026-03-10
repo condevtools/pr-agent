@@ -1,0 +1,8 @@
+packages:
+  - "backend"
+  - "web"
+  - "web2"
+
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver

@@ -59,12 +59,12 @@
 - `/feedback` — 评审质量反馈，持续优化后续评审
 
 **流程守卫**
-- `.mr-agent.yml` 仓库级策略（提醒 / 强制模式）
+- `.pr-agent.yml` 仓库级策略（提醒 / 强制模式）
 - Issue 与 PR 模板完整性检查
 - GitHub Check 集成，可接 Branch Protection（`enforce` 模式）
 - `.github/.gitlab` 模板/流程文件识别（workflow/template/CODEOWNERS/CONTRIBUTING）并给出流程建议
 - Issue 创建/编辑时流程预检、PR 创建/编辑/同步时合并前预检（GitHub）
-- 仓库缺少 `.mr-agent.yml` 时，Issue 自动分诊（可行性/建议/相似 Issue/自动标签）
+- 仓库缺少 `.pr-agent.yml` 时，Issue 自动分诊（可行性/建议/相似 Issue/自动标签）
 
 **多平台支持**
 - GitHub App（推荐，已完整测试）
@@ -103,8 +103,8 @@
 
 **建议的 GitHub Flow 基线：**
 
-1. 开启 Branch Protection，至少要求 `MR Agent Policy` 与 CI 必过。
-2. 在仓库启用 `.mr-agent.yml` 的 `mode: enforce`（可先从核心仓库灰度）。
+1. 开启 Branch Protection，至少要求 `PR Agent Policy` 与 CI 必过。
+2. 在仓库启用 `.pr-agent.yml` 的 `mode: enforce`（可先从核心仓库灰度）。
 3. 统一使用 Issue/PR 模板，避免需求与验证信息缺失。
 
 ---
@@ -242,6 +242,116 @@ graph LR
     GHP --> CACHE
 ```
 
+### 详细请求流
+
+下图追踪每一条请求路径——从 Webhook 入口经过事件路由、命令解析、通用评审引擎，到最终输出与运维。
+
+```mermaid
+flowchart LR
+    subgraph E["入口端点 (NestJS + Probot)"]
+        E1["/api/github/webhooks<br/>GithubAppBootstrapService"]
+        E2["/github/trigger<br/>GithubWebhookController"]
+        E3["/gitlab/trigger<br/>GitlabWebhookController"]
+        E4["/github/replay/:eventId<br/>/gitlab/replay/:eventId"]
+        E5["/health /metrics /webhook/events"]
+    end
+
+    subgraph GHA["GitHub App 事件路由 (src/app.ts)"]
+        A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
+        A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
+        A3["resolveGitHubPullRequestAutoReviewPolicy"]
+        A4["pull_request.closed (merged)<br/>resolveGitHubReviewBehaviorPolicy"]
+        A5["issue_comment.created (PR + Issue)<br/>handleGitHubIssueCommentCommand"]
+        A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
+    end
+
+    subgraph GHW["原生 GitHub Webhook (src/integrations/github/github-webhook.ts)"]
+        B1["handlePlainGitHubWebhook"]
+        B2["verifyWebhookSignature + payload schema"]
+        B3["pull_request / issues / issue_comment / review_thread dispatch"]
+        B4["runGitHubPullRequestPolicyCheck + runGitHubIssuePolicyCheck"]
+        B5["handleGitHubIssueCommentCommand"]
+    end
+
+    subgraph GLW["GitLab Webhook (src/integrations/gitlab/gitlab-review.ts)"]
+        C1["runGitLabWebhook"]
+        C2["verify token + payload schema"]
+        C3["handleGitLabMergeRequestWebhook"]
+        C4["handleGitLabNoteWebhook"]
+        C5["resolveGitLabReviewPolicy (.pr-agent.yml)"]
+    end
+
+    subgraph CMD["命令解析层"]
+        D1["parseReviewCommand"]
+        D2["parseAsk / parseMention / parseChecks / parseGenerateTests"]
+        D3["parseDescribe / parseChangelog"]
+        D4["parseImprove / parseAddDoc / parseReflect / parseSimilarIssue / parseFeedback"]
+    end
+
+    subgraph CORE["通用评审引擎"]
+        R1["runGitHubReview / runGitLabReview"]
+        R2["去重 + 限流 + 增量 head + 反馈信号"]
+        R3["收集上下文: diff/files/ci/policy"]
+        R4["analyzePullRequest / answerPullRequestQuestion"]
+        R5["patch 解析 + hunk 优先级 + 行映射"]
+        R6["密钥扫描 + 自动标签"]
+    end
+
+    subgraph OUT["输出与运维"]
+        O1["buildReportCommentMarkdown"]
+        O2["buildIssueCommentMarkdown"]
+        O3["createComment / notes / managed upsert"]
+        O4["publishNotification (可选)"]
+        O5["pr_agent_* 指标 + replay 存储"]
+    end
+
+    E1 --> A1
+    E1 --> A2 --> A3 --> R1
+    E1 --> A4 --> R1
+    E1 --> A5
+    E1 --> A6
+
+    E2 --> B1 --> B2 --> B3
+    B3 --> B4 --> R1
+    B3 --> B5
+
+    E3 --> C1 --> C2
+    C2 --> C3 --> C5 --> R1
+    C2 --> C4 --> C5
+
+    A5 --> D1
+    A5 --> D2
+    A5 --> D3
+    A5 --> D4
+    B5 --> D1
+    B5 --> D2
+    B5 --> D3
+    B5 --> D4
+    C4 --> D1
+    C4 --> D2
+    C4 --> D3
+    C4 --> D4
+
+    D1 --> R1
+    D2 --> R4
+    D3 --> R4
+    D4 --> R1
+
+    R1 --> R2 --> R3 --> R4 --> R5
+    R4 --> R6
+    R5 --> O1 --> O3
+    R5 --> O2 --> O3
+    R6 --> O3
+    O3 --> O4
+
+    E4 --> B1
+    E4 --> C1
+    E5 --> O5
+    E2 --> O5
+    E3 --> O5
+    O3 -. 反馈信号 .-> R2
+```
+
 ---
 
 ## 技术栈
@@ -263,7 +373,7 @@ graph LR
 ## 项目结构
 
 ```
-mr-agent/
+pr-agent/
 ├── src/
 │   ├── main.ts                     # NestJS 启动入口
 │   ├── app.module.ts               # 根模块（导入所有子模块）
@@ -482,7 +592,7 @@ GEMINI_MODEL=gemini-2.0-flash
 
 ```env
 RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/mr-agent/runtime-state.sqlite3
+RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
 ```
 
 ### 通知推送（可选）
@@ -528,9 +638,9 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITHUB_MERGED_DEDUPE_TTL_MS` | `86400000`（24 小时） | `merged + report` 事件去重窗口 |
 | `GITHUB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000`（30 天） | 反馈学习信号保留时长 |
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审 SHA 缓存有效期 |
-| `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.mr-agent.yml` 策略/评审配置缓存 |
+| `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略/评审配置缓存 |
 | `GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS` | `600000`（10 分钟） | 流程提醒评论去重窗口 |
-| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | 当仓库缺少 `.mr-agent.yml` 时，在 `issues.opened/edited` 自动执行 Issue 分诊 |
+| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | 当仓库缺少 `.pr-agent.yml` 时，在 `issues.opened/edited` 自动执行 Issue 分诊 |
 | `GITHUB_ISSUE_AUTO_TRIAGE_AUTO_LABELS` | `true` | Issue 自动分诊后自动追加推断标签 |
 | `GITHUB_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS` | `300000`（5 分钟） | Issue 自动分诊评论去重窗口 |
 | `GITHUB_ISSUE_AUTO_TRIAGE_SIMILAR_LIMIT` | `5` | 自动分诊输出中最多展示的相似 Issue 数量 |
@@ -545,7 +655,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITLAB_MERGED_DEDUPE_TTL_MS` | `86400000`（24 小时） | `merged + report` 去重窗口 |
 | `GITLAB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审状态缓存 |
 | `GITLAB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000`（30 天） | 反馈学习信号保留窗口 |
-| `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.mr-agent.yml` 策略缓存 |
+| `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略缓存 |
 | `GITLAB_CHANGELOG_PATH` | `CHANGELOG.md` | `/changelog --apply` 写回路径 |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/gitlab/trigger` 的额外请求体硬上限 |
 | `GITLAB_REQUIRE_WEBHOOK_SECRET` | `false` | 设为 `true` 时必须配置 `GITLAB_WEBHOOK_SECRET` |
@@ -572,19 +682,19 @@ graph LR
         B2[阶段 2：运行时<br/>node:22-alpine<br/>仅生产依赖]
         B1 -->|COPY dist/| B2
     end
-    B2 -->|暴露 3000 端口| SRV[mr-agent 容器]
+    B2 -->|暴露 3000 端口| SRV[pr-agent 容器]
 ```
 
 **构建 & 运行**
 
 ```bash
-docker build -t mr-agent:latest .
+docker build -t pr-agent:latest .
 docker run -d \
-  --name mr-agent \
+  --name pr-agent \
   -p 3000:3000 \
   --env-file .env \
   -v ./data:/data \
-  mr-agent:latest
+  pr-agent:latest
 ```
 
 ### Docker Compose
@@ -594,10 +704,10 @@ docker run -d \
 docker compose up -d --build
 
 # 查看日志
-docker compose logs -f mr-agent
+docker compose logs -f pr-agent
 
 # 重启
-docker compose restart mr-agent
+docker compose restart pr-agent
 
 # 停止
 docker compose down
@@ -682,7 +792,7 @@ OPENAI_MODEL=gpt-4.1-mini
 
 ```env
 RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/mr-agent/runtime-state.sqlite3
+RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
 WEBHOOK_EVENT_STORE_ENABLED=false
 WEBHOOK_REPLAY_ENABLED=false
 ```
@@ -716,8 +826,8 @@ npm start
 6. **Docker 一键启动**
 
 ```bash
-docker build -t mr-agent:latest .
-docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
+docker build -t pr-agent:latest .
+docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
 ```
 
 7. **验证清单**
@@ -732,7 +842,7 @@ docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
 - `GET /webhook/events`
 - `POST /github/replay/:eventId`
 - `POST /gitlab/replay/:eventId`
-- 请求头：`x-mr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
+- 请求头：`x-pr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
 
 ### Nginx 反向代理
 
@@ -741,7 +851,7 @@ docker run -d --name mr-agent -p 3000:3000 --env-file .env mr-agent:latest
 ```nginx
 server {
     listen 443 ssl;
-    server_name mr-agent.example.com;
+    server_name pr-agent.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:3000;
@@ -865,7 +975,7 @@ GitLab 特有请求头：
 | `/feedback resolved\|dismissed\|up\|down [备注]` | 评审质量反馈 |
 
 支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
-`.mr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`；`/reflect` 依赖 `askCommandEnabled`；`/improve_component` 依赖 `improveCommandEnabled`；`/generate_labels` 依赖 `autoLabelEnabled`。
+`.pr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`；`/reflect` 依赖 `askCommandEnabled`；`/improve_component` 依赖 `improveCommandEnabled`；`/generate_labels` 依赖 `autoLabelEnabled`。
 
 > **提示：** `/ask`、`/feedback`、`/similar_issue`、`/help_docs` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。可设置 `GITHUB_APP_SLUG`（GitHub App 的 slug）或 `GITHUB_BOT_LOGIN`（Bot 账号 login）启用 `@提及` 检测。带或不带 `[bot]` 后缀都支持。
 
@@ -873,7 +983,7 @@ GitLab 特有请求头：
 
 ## 仓库策略配置
 
-在仓库根目录添加 `.mr-agent.yml` 来配置仓库级行为：
+在仓库根目录添加 `.pr-agent.yml` 来配置仓库级行为：
 
 ```yaml
 mode: remind          # remind = 仅评论提醒，enforce = 写入失败 GitHub Check
@@ -927,11 +1037,11 @@ review:
     - 不允许新增 any 类型
 ```
 
-GitLab 当前只读取 `.mr-agent.yml` 中的 `review:` 段。顶层 `mode`、`issue`、`pullRequest` 的流程校验是 GitHub 流程能力。
+GitLab 当前只读取 `.pr-agent.yml` 中的 `review:` 段。顶层 `mode`、`issue`、`pullRequest` 的流程校验是 GitHub 流程能力。
 
 **模式说明：**
 - `remind` — 评论提醒缺失项，不阻止合并
-- `enforce` — 创建失败的 GitHub Check（`MR Agent Policy`），可在 Branch Protection 中设为必需
+- `enforce` — 创建失败的 GitHub Check（`PR Agent Policy`），可在 Branch Protection 中设为必需
 
 **模板回退行为：**
 - 未配置 `requiredSections` 时，会自动从仓库模板提取段落标题进行检查：
@@ -976,18 +1086,18 @@ GitLab 当前只读取 `.mr-agent.yml` 中的 `review:` 段。顶层 `mode`、`i
 
 Prometheus 格式指标通过 `GET /metrics` 暴露：
 
-- `mr_agent_webhook_requests_total` — 按平台和事件统计的 Webhook 请求数
-- `mr_agent_webhook_results_total` — 按平台和结果（ok/error）统计
-- `mr_agent_webhook_replay_total` — 回放执行结果统计
-- `mr_agent_webhook_store_writes_total` — 调试事件存储写入次数
-- `mr_agent_webhook_store_trim_total` — 调试事件存储裁剪次数
-- `mr_agent_health_checks_total` — 健康检查端点调用次数
-- `mr_agent_http_errors_total` — 全局 HTTP 错误计数
-- `mr_agent_process_uptime_seconds` — 进程运行时间
-- `mr_agent_ai_requests_active` — 当前 AI 活跃请求数
-- `mr_agent_ai_wait_queue_size` — AI 并发等待队列长度
-- `mr_agent_ai_shutdown_requested` — AI 关停标记（0/1）
-- `mr_agent_runtime_state_backend_info{backend=...}` — 当前状态后端信息指标
+- `pr_agent_webhook_requests_total` — 按平台和事件统计的 Webhook 请求数
+- `pr_agent_webhook_results_total` — 按平台和结果（ok/error）统计
+- `pr_agent_webhook_replay_total` — 回放执行结果统计
+- `pr_agent_webhook_store_writes_total` — 调试事件存储写入次数
+- `pr_agent_webhook_store_trim_total` — 调试事件存储裁剪次数
+- `pr_agent_health_checks_total` — 健康检查端点调用次数
+- `pr_agent_http_errors_total` — 全局 HTTP 错误计数
+- `pr_agent_process_uptime_seconds` — 进程运行时间
+- `pr_agent_ai_requests_active` — 当前 AI 活跃请求数
+- `pr_agent_ai_wait_queue_size` — AI 并发等待队列长度
+- `pr_agent_ai_shutdown_requested` — AI 关停标记（0/1）
+- `pr_agent_runtime_state_backend_info{backend=...}` — 当前状态后端信息指标
 
 ### 健康检查
 
@@ -1026,7 +1136,7 @@ WEBHOOK_REPLAY_ENABLED=true
 WEBHOOK_REPLAY_TOKEN=your-secret-token
 ```
 
-端点（需携带 `x-mr-agent-replay-token` 请求头）：
+端点（需携带 `x-pr-agent-replay-token` 请求头）：
 - `GET /webhook/events` — 列出已存储的事件
 - `POST /github/replay/:eventId` — 回放 GitHub 事件
 - `POST /gitlab/replay/:eventId` — 回放 GitLab 事件

@@ -36,7 +36,7 @@ const diagram = `flowchart LR
         C2["verify token + payload schema"]
         C3["handleGitLabMergeRequestWebhook"]
         C4["handleGitLabNoteWebhook"]
-        C5["resolveGitLabReviewPolicy (.mr-agent.yml)"]
+        C5["resolveGitLabReviewPolicy (.pr-agent.yml)"]
     end
 
     subgraph CMD["Command Parsing Surface"]
@@ -156,7 +156,7 @@ export function MermaidArchitecture() {
           },
         });
 
-        const host = document.getElementById("mr-agent-mermaid");
+        const host = document.getElementById("pr-agent-mermaid");
         if (!host) {
           return;
         }
@@ -289,7 +289,7 @@ export function MermaidArchitecture() {
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
           }}
         >
-          <div id="mr-agent-mermaid" className={`mermaid ${styles.mermaidHost}`}>
+          <div id="pr-agent-mermaid" className={`mermaid ${styles.mermaidHost}`}>
             {diagram}
           </div>
         </div>
