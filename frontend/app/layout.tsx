@@ -58,7 +58,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         {/* 慢速网络检测：在 CSS/字体加载前同步执行，2G/3G 用户跳过 Geist Sans */}
         <script dangerouslySetInnerHTML={{ __html: `try{var c=navigator.connection;if(c&&/slow-2g|2g|3g/.test(c.effectiveType)){document.documentElement.classList.add('slow-network')}}catch(e){}` }} />

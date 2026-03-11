@@ -1,10 +1,28 @@
 'use client'
 
-import { useState, useEffect, Suspense, lazy } from 'react'
+import { startTransition, useEffect, useState } from 'react'
+import dynamic from 'next/dynamic'
 import HashLink from './HashLink'
 import { useLocale } from '../i18n/LocaleProvider'
 
-const ShaderGradientBg = lazy(() => import('./ShaderGradientBg'))
+const UnicornHeroBg = dynamic(() => import('./UnicornHeroBg'), {
+  ssr: false,
+  loading: () => null,
+})
+
+type HeroBackgroundMode = 'static' | 'interactive'
+
+const MOBILE_MEDIA_QUERY = '(max-width: 767px)'
+const REDUCED_MOTION_MEDIA_QUERY = '(prefers-reduced-motion: reduce)'
+
+function getHeroBackgroundMode(): HeroBackgroundMode {
+  const isMobile = globalThis.matchMedia(MOBILE_MEDIA_QUERY).matches
+  const prefersReducedMotion = globalThis.matchMedia(
+    REDUCED_MOTION_MEDIA_QUERY
+  ).matches
+
+  return isMobile || prefersReducedMotion ? 'static' : 'interactive'
+}
 
 const COPY = {
   en: {
@@ -32,15 +50,52 @@ const COPY = {
 export default function HeroSection() {
   const { locale } = useLocale()
   const copy = COPY[locale]
-  const [showShader, setShowShader] = useState(false)
+  const [backgroundMode, setBackgroundMode] = useState<HeroBackgroundMode>('static')
+  const [showUnicornBg, setShowUnicornBg] = useState(false)
 
   useEffect(() => {
-    const id = requestIdleCallback(
-      () => setShowShader(true),
-      { timeout: 2000 }
+    const updateMode = () => {
+      setBackgroundMode(getHeroBackgroundMode())
+    }
+
+    updateMode()
+
+    const mobileMediaQuery = globalThis.matchMedia(MOBILE_MEDIA_QUERY)
+    const reducedMotionMediaQuery = globalThis.matchMedia(
+      REDUCED_MOTION_MEDIA_QUERY
     )
-    return () => cancelIdleCallback(id)
+
+    mobileMediaQuery.addEventListener?.('change', updateMode)
+    reducedMotionMediaQuery.addEventListener?.('change', updateMode)
+
+    return () => {
+      mobileMediaQuery.removeEventListener?.('change', updateMode)
+      reducedMotionMediaQuery.removeEventListener?.('change', updateMode)
+    }
   }, [])
+
+  useEffect(() => {
+    if (backgroundMode === 'static' || showUnicornBg) {
+      return
+    }
+
+    const revealBg = () => {
+      startTransition(() => {
+        setShowUnicornBg(true)
+      })
+    }
+
+    const requestIdle = globalThis.requestIdleCallback?.bind(globalThis)
+    const cancelIdle = globalThis.cancelIdleCallback?.bind(globalThis)
+
+    if (requestIdle && cancelIdle) {
+      const idleId = requestIdle(revealBg, { timeout: 1500 })
+      return () => cancelIdle(idleId)
+    }
+
+    const timeoutId = globalThis.setTimeout(revealBg, 1200)
+    return () => globalThis.clearTimeout(timeoutId)
+  }, [backgroundMode, showUnicornBg])
 
   return (
     <section
@@ -48,11 +103,11 @@ export default function HeroSection() {
       className="relative min-h-screen flex flex-col items-center justify-center pt-20 overflow-hidden bg-black"
     >
       <div className="absolute inset-0 pointer-events-none">
-        {showShader && (
-          <Suspense fallback={null}>
-            <ShaderGradientBg />
-          </Suspense>
-        )}
+        <div
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-90"
+          style={{ backgroundImage: "url('/hero.webp')" }}
+        />
+        {backgroundMode !== 'static' && showUnicornBg ? <UnicornHeroBg /> : null}
       </div>
 
       <div className="relative z-10 max-w-[1440px] mx-auto px-5 sm:px-6 lg:px-10 text-center w-full">
