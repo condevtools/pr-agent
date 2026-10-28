@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   clearDuplicateRecord,
   ensureError,
@@ -89,6 +90,14 @@ export type {
   LoggerLike,
   MinimalGitHubOctokit,
 } from "./github-review-types.js";
+import { PendingPublicationError, PublicationDefiniteFailureError } from "../../harness/publication.js";
+import {
+  publishGitHubInlineCommentDurably,
+  publishGitHubIssueCommentDurably,
+  publishGitHubLabelsDurably,
+  type GitHubPublicationRuntime,
+} from "./github-publication.js";
+import { resolvePublicationRuntime } from "../../harness/runtime.js";
 import type {
   GitHubAskRunParams,
   GitHubChangelogRunParams,
@@ -292,8 +301,35 @@ export async function runGitHubReview(
     secretScanCustomPatterns = [],
     enableAutoLabel = true,
     throwOnError = false,
+    publicationRuntime,
+    sourceKey,
+    sourceHash,
   } = params;
   const { owner, repo } = context.repo();
+  const resolvedPublicationRuntime = publicationRuntime ??
+    (await resolvePublicationRuntime({
+      platform: "github",
+      origin: readOptionalStringEnv("GITHUB_API_URL") ?? "https://api.github.com",
+      repository: `${owner}/${repo}`,
+    }));
+  if (resolvedPublicationRuntime?.binding && resolvedPublicationRuntime.binding.platform !== "github") {
+    throw new Error("GitHub review resolved a non-GitHub publication binding");
+  }
+  let activePublicationRuntime = resolvedPublicationRuntime as GitHubPublicationRuntime | undefined;
+  const durableSourceKey = sourceKey;
+  const durableSourceHash = sourceHash;
+  if (activePublicationRuntime?.batchStore && activePublicationRuntime.batchCoordinator && activePublicationRuntime.createAdapter) {
+    if (!durableSourceKey || !durableSourceHash) throw new Error("durable GitHub review requires an authenticated source key and hash");
+    const existing = await activePublicationRuntime.batchStore.findBySource(
+      { ...activePublicationRuntime.scope, target: String(pullNumber), revision: "source-lookup" },
+      durableSourceKey,
+      durableSourceHash,
+    );
+    if (existing) {
+      assertGitHubBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter));
+      return;
+    }
+  }
   const locale = resolveUiLocale();
   const requestKey = [
     `github:${owner}/${repo}#${pullNumber}:${mode}:${trigger}`,
@@ -303,8 +339,9 @@ export async function runGitHubReview(
     .join(":");
   const dedupeTtlMs = resolveDedupeTtlMs(trigger, mode, "GITHUB");
 
-  if (isDuplicateRequest(requestKey, dedupeTtlMs)) {
+  if (!activePublicationRuntime && isDuplicateRequest(requestKey, dedupeTtlMs)) {
     if (trigger === "comment-command") {
+      if (activePublicationRuntime) return;
       await context.octokit.issues.createComment({
         owner,
         repo,
@@ -348,6 +385,7 @@ export async function runGitHubReview(
       return;
     }
     if (
+      !activePublicationRuntime &&
       trigger === "pr-edited" &&
       incrementalBaseSha &&
       incrementalBaseSha === prMeta.data.head.sha
@@ -361,7 +399,7 @@ export async function runGitHubReview(
   }
 
   let progressCommentId: number | undefined;
-  if (trigger === "comment-command") {
+  if (trigger === "comment-command" && !activePublicationRuntime) {
     const progress = await context.octokit.issues.createComment({
       owner,
       repo,
@@ -383,6 +421,15 @@ export async function runGitHubReview(
       feedbackSignals,
       pullSummary: preloadedPullSummary,
     });
+    const batch = await prepareGitHubPublicationBatch({
+      runtime: activePublicationRuntime,
+      pullNumber,
+      revision: collected.headSha,
+      sourceKey: durableSourceKey ?? "legacy",
+      sourceHash: durableSourceHash ?? stableEventHash({ owner, repo, pullNumber, mode, trigger, dedupeSuffix }),
+    });
+    if (batch.resumed) return;
+    activePublicationRuntime = batch.runtime;
 
     if (collected.files.length === 0) {
       const noDiffBody = collected.filesTruncated
@@ -391,15 +438,30 @@ export async function runGitHubReview(
             locale,
           )
         : undefined;
-      await publishGitHubNoDiffStatus({
-        context,
-        owner,
-        repo,
-        pullNumber,
-        progressCommentId,
-        markerKey: "review-no-diff",
-        body: noDiffBody,
-      });
+      if (activePublicationRuntime) {
+        await publishGitHubIssueCommentDurably({
+          runtime: activePublicationRuntime,
+          context,
+          owner,
+          repo,
+          pullNumber,
+          revision: collected.headSha,
+          slot: "review-no-diff",
+          body: noDiffBody ?? reviewMessage("reviewNoDiffSkipped", locale),
+          managedMarkerKey: "review-no-diff",
+        });
+      } else {
+        await publishGitHubNoDiffStatus({
+          context,
+          owner,
+          repo,
+          pullNumber,
+          progressCommentId,
+          markerKey: "review-no-diff",
+          body: noDiffBody,
+        });
+      }
+      await batch.finish();
       rememberIncrementalHead(reviewPrKey, collected.headSha);
       return;
     }
@@ -412,6 +474,7 @@ export async function runGitHubReview(
         collected,
         reviewResult,
         locale,
+        activePublicationRuntime,
       );
       const summaryBody = [
         reviewMessage("reviewCommentModeTitle", locale),
@@ -431,7 +494,21 @@ export async function runGitHubReview(
         collected.filesTruncated,
         locale,
       );
-      if (shouldUseManagedReviewSummary(trigger)) {
+      if (activePublicationRuntime) {
+        await publishGitHubIssueCommentDurably({
+          runtime: activePublicationRuntime,
+          context,
+          owner,
+          repo,
+          pullNumber,
+          revision: collected.headSha,
+          slot: "review-comment-summary",
+          body: summaryBodyWithWarning,
+          managedMarkerKey: shouldUseManagedReviewSummary(trigger)
+            ? "review-comment-summary"
+            : undefined,
+        });
+      } else if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitHubManagedIssueComment({
           context,
           owner,
@@ -463,7 +540,21 @@ export async function runGitHubReview(
         collected.filesTruncated,
         locale,
       );
-      if (shouldUseManagedReviewSummary(trigger)) {
+      if (activePublicationRuntime) {
+        await publishGitHubIssueCommentDurably({
+          runtime: activePublicationRuntime,
+          context,
+          owner,
+          repo,
+          pullNumber,
+          revision: collected.headSha,
+          slot: "review-report",
+          body: bodyWithWarning,
+          managedMarkerKey: shouldUseManagedReviewSummary(trigger)
+            ? "review-report"
+            : undefined,
+        });
+      } else if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitHubManagedIssueComment({
           context,
           owner,
@@ -496,6 +587,7 @@ export async function runGitHubReview(
           pullNumber,
           headSha: collected.headSha,
           findings,
+          publicationRuntime: activePublicationRuntime,
         });
       }
 
@@ -512,6 +604,8 @@ export async function runGitHubReview(
           repo,
           pullNumber,
           labels,
+          revision: collected.headSha,
+          publicationRuntime: activePublicationRuntime,
         });
       }
     } else if (enableAutoLabel) {
@@ -527,9 +621,12 @@ export async function runGitHubReview(
         repo,
         pullNumber,
         labels,
+        revision: collected.headSha,
+        publicationRuntime: activePublicationRuntime,
       });
     }
 
+    await batch.finish();
     rememberIncrementalHead(reviewPrKey, collected.headSha);
 
     if (progressCommentId) {
@@ -541,7 +638,7 @@ export async function runGitHubReview(
       });
     }
 
-    try {
+    if (!activePublicationRuntime) try {
       await publishNotification({
         pushUrl:
           readOptionalStringEnv("GITHUB_PUSH_URL") ??
@@ -574,12 +671,20 @@ export async function runGitHubReview(
   } catch (error) {
     clearDuplicateRecord(requestKey);
 
+    if (error instanceof PendingPublicationError) {
+      throw error;
+    }
+
     const reason = getErrorMessage(error);
     const publicReason = getPublicErrorMessage(error);
     context.log.error(
       { owner, repo, pullNumber, mode, trigger, error: reason },
       "GitHub AI review failed",
     );
+
+    if (activePublicationRuntime) {
+      throw ensureError(error);
+    }
 
     try {
       await context.octokit.issues.createComment({
@@ -679,6 +784,46 @@ export async function runGitHubReview(
       throw ensureError(error);
     }
   }
+}
+
+async function prepareGitHubPublicationBatch(params: {
+  runtime?: GitHubPublicationRuntime;
+  pullNumber: number;
+  revision: string;
+  sourceKey: string;
+  sourceHash: string;
+}): Promise<{ runtime?: GitHubPublicationRuntime; resumed: boolean; finish(): Promise<void> }> {
+  const { runtime } = params;
+  if (!runtime?.batchStore || !runtime.batchCoordinator || !runtime.createAdapter) {
+    return { runtime, resumed: false, finish: async () => undefined };
+  }
+  const scope = { ...runtime.scope, target: String(params.pullNumber), revision: params.revision };
+  const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
+  if (existing) {
+    assertGitHubBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter));
+    return { runtime, resumed: true, finish: async () => undefined };
+  }
+  const operations: Array<{ slot: string; payload: Record<string, unknown> }> = [];
+  const collectingRuntime = { ...runtime, planOperation: (operation: { slot: string; payload: Record<string, unknown> }) => operations.push(operation) };
+  return {
+    runtime: collectingRuntime,
+    resumed: false,
+    finish: async () => {
+      if (operations.length === 0) throw new Error("durable GitHub review produced no frozen publication operations");
+      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations });
+      assertGitHubBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!));
+    },
+  };
+}
+
+function stableEventHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function assertGitHubBatchSucceeded(batch: { id: string; status: string }): void {
+  if (batch.status === "succeeded") return;
+  if (batch.status === "failed_definite") throw new PublicationDefiniteFailureError(batch.id, "publication_batch_failed_definite");
+  throw new PendingPublicationError(batch.id);
 }
 
 export function maybeAppendGitHubFilesTruncatedWarning(
@@ -940,6 +1085,7 @@ async function publishGitHubLineComments(
   collected: GitHubCollectedContext,
   reviewResult: PullRequestReviewResult,
   locale: UiLocale,
+  publicationRuntime?: GitHubPublicationRuntime,
 ): Promise<{ posted: number; skipped: number }> {
   const { owner, repo } = collected;
   let posted = 0;
@@ -959,18 +1105,37 @@ async function publishGitHubLineComments(
     }
 
     try {
-      await context.octokit.pulls.createReviewComment({
-        owner,
-        repo,
-        pull_number: collected.input.number,
-        body: buildIssueCommentMarkdown(review, { platform: "github", locale }),
-        commit_id: collected.headSha,
-        path: file.newPath,
-        line,
-        side: review.type === "new" ? "RIGHT" : "LEFT",
-      });
+      const body = buildIssueCommentMarkdown(review, { platform: "github", locale });
+      const side = review.type === "new" ? "RIGHT" : "LEFT";
+      if (publicationRuntime) {
+        await publishGitHubInlineCommentDurably({
+          runtime: publicationRuntime,
+          context,
+          owner,
+          repo,
+          pullNumber: collected.input.number,
+          revision: collected.headSha,
+          slot: `review-inline:${file.newPath}:${line}:${side}`,
+          body,
+          path: file.newPath,
+          line,
+          side,
+        });
+      } else {
+        await context.octokit.pulls.createReviewComment({
+          owner,
+          repo,
+          pull_number: collected.input.number,
+          body,
+          commit_id: collected.headSha,
+          path: file.newPath,
+          line,
+          side,
+        });
+      }
       posted += 1;
-    } catch {
+    } catch (error) {
+      if (publicationRuntime) throw error;
       skipped += 1;
     }
   }
@@ -1149,6 +1314,7 @@ async function publishSecretWarningComment(params: {
   pullNumber: number;
   headSha: string;
   findings: SecretFinding[];
+  publicationRuntime?: GitHubPublicationRuntime;
 }): Promise<void> {
   const dedupeKey = [
     "github-secret-scan",
@@ -1161,15 +1327,29 @@ async function publishSecretWarningComment(params: {
   }
   const locale = resolveUiLocale();
 
+  const body = buildSecretWarningComment({
+    platform: "github",
+    findings: params.findings,
+    locale,
+  });
+  if (params.publicationRuntime) {
+    await publishGitHubIssueCommentDurably({
+      runtime: params.publicationRuntime,
+      context: params.context,
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      revision: params.headSha,
+      slot: `secret-warning:${params.headSha}`,
+      body,
+    });
+    return;
+  }
   await params.context.octokit.issues.createComment({
     owner: params.owner,
     repo: params.repo,
     issue_number: params.pullNumber,
-    body: buildSecretWarningComment({
-      platform: "github",
-      findings: params.findings,
-      locale,
-    }),
+    body,
   });
 }
 
@@ -1197,11 +1377,26 @@ async function tryAddPullRequestLabels(params: {
   repo: string;
   pullNumber: number;
   labels: string[];
+  revision: string;
+  publicationRuntime?: GitHubPublicationRuntime;
 }): Promise<void> {
   if (!params.context.octokit.issues.addLabels || params.labels.length === 0) {
     return;
   }
 
+  if (params.publicationRuntime) {
+    await publishGitHubLabelsDurably({
+      runtime: params.publicationRuntime,
+      context: params.context,
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      revision: params.revision,
+      slot: "review-labels",
+      labels: params.labels,
+    });
+    return;
+  }
   try {
     await params.context.octokit.issues.addLabels({
       owner: params.owner,

@@ -7,8 +7,10 @@ import { json, urlencoded } from "express";
 import { prepareRuntimeStateBackend, readOptionalStringEnv } from "#core";
 import { AppModule } from "./app.module.js";
 import type { RawBodyRequest } from "./common/types/raw-body-request.js";
+import { requireOnlinePublicationAuthority, startHarnessRecovery } from "./harness/runtime.js";
 
 async function bootstrap(): Promise<void> {
+  requireOnlinePublicationAuthority();
   await prepareRuntimeStateBackend();
 
   const app = await NestFactory.create(AppModule, {
@@ -32,6 +34,7 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   const port = resolvePort(readOptionalStringEnv("PORT"));
+  await startHarnessRecovery();
   await app.listen(port);
 
   Logger.log(`PR Agent listening on port ${port}`, "Bootstrap");

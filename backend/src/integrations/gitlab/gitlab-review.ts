@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   BadWebhookRequestError,
   clearDuplicateRecord,
@@ -123,6 +124,15 @@ import {
 } from "../shared/similar-issue.js";
 import { createGitLabCommandWorkflows } from "./gitlab-command-workflows.js";
 import { gitLabApiRequest } from "./gitlab-http.js";
+import { PendingPublicationError, PublicationDefiniteFailureError } from "../../harness/publication.js";
+import {
+  publishGitLabDiscussionDurably,
+  publishGitLabLabelsDurably,
+  publishGitLabNoteDurably,
+  type GitLabPublicationRuntime,
+} from "./gitlab-publication.js";
+import { resolvePublicationRuntime } from "../../harness/runtime.js";
+import { DurableUnadaptedWriterBlockedError } from "../github/github-issue-comment-command.js";
 import {
   verifyGitLabWebhookBodySize,
   verifyGitLabWebhookToken,
@@ -426,6 +436,7 @@ interface GitLabReviewRunParams {
   secretScanCustomPatterns?: string[];
   enableAutoLabel?: boolean;
   throwOnError?: boolean;
+  publicationRuntime?: GitLabPublicationRuntime;
 }
 
 interface GitLabAskRunParams {
@@ -788,11 +799,18 @@ export async function runGitLabWebhook(params: {
       return { ok: true, message: "ignored closed merge request event" };
     }
 
-    const gitlabToken = requireGitLabToken(params.headers);
     const baseUrl = resolveGitLabBaseUrl(
       readOptionalStringEnv("GITLAB_BASE_URL"),
       payload.project.web_url,
     );
+    const publicationRuntime = await resolvePublicationRuntime({
+      platform: "gitlab",
+      origin: baseUrl,
+      repository: payload.project.path_with_namespace ?? String(payload.project.id),
+    });
+    const gitlabToken = publicationRuntime?.resolveCredential
+      ? await publicationRuntime.resolveCredential()
+      : requireGitLabToken(params.headers);
     const actionKind = mapGitLabActionToReviewEvent(action);
     const { policy } = await resolveGitLabReviewPolicy({
       baseUrl,
@@ -831,6 +849,7 @@ export async function runGitLabWebhook(params: {
       enableSecretScan: policy.secretScanEnabled,
       secretScanCustomPatterns: policy.secretScanCustomPatterns,
       enableAutoLabel: policy.autoLabelEnabled,
+      publicationRuntime: publicationRuntime as GitLabPublicationRuntime | undefined,
     });
   }
 
@@ -857,6 +876,7 @@ export async function runGitLabReview(
     secretScanCustomPatterns = [],
     enableAutoLabel = true,
     throwOnError = false,
+    publicationRuntime,
   } = params;
   if (payload.object_kind && payload.object_kind !== "merge_request") {
     return { ok: true, message: `ignored object_kind=${payload.object_kind}` };
@@ -869,6 +889,34 @@ export async function runGitLabReview(
   }
 
   const mode = modeOverride ?? parseMode(headers["x-ai-mode"]) ?? "report";
+  const reviewTarget = buildGitLabCommentTargetFromPayload({
+    payload,
+    baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
+  });
+  const resolvedPublicationRuntime = publicationRuntime ??
+    (await resolvePublicationRuntime({
+      platform: "gitlab",
+      origin: reviewTarget.baseUrl,
+      repository:
+        payload.project.path_with_namespace ?? String(payload.project.id),
+    }));
+  if (resolvedPublicationRuntime?.binding && resolvedPublicationRuntime.binding.platform !== "gitlab") {
+    throw new Error("GitLab review resolved a non-GitLab publication binding");
+  }
+  let activePublicationRuntime = resolvedPublicationRuntime as GitLabPublicationRuntime | undefined;
+  const durableSourceKey = headers["x-gitlab-event-uuid"] ?? `gitlab:canonical:${stableGitLabEventHash(payload)}`;
+  const durableSourceHash = stableGitLabEventHash({ payload, mode, trigger });
+  if (activePublicationRuntime?.batchStore && activePublicationRuntime.batchCoordinator && activePublicationRuntime.createAdapter) {
+    const existing = await activePublicationRuntime.batchStore.findBySource(
+      { ...activePublicationRuntime.scope, target: String(reviewTarget.mrId), revision: "source-lookup" },
+      durableSourceKey,
+      durableSourceHash,
+    );
+    if (existing) {
+      assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter));
+      return { ok: true, message: "existing durable publication batch resumed" };
+    }
+  }
   const locale = resolveUiLocale();
   const requestKey = [
     `gitlab:${payload.project.id}#${payload.object_attributes.iid}:${mode}:${trigger}`,
@@ -876,7 +924,7 @@ export async function runGitLabReview(
   ]
     .filter(Boolean)
     .join(":");
-  if (isDuplicateRequest(requestKey, resolveDedupeTtlMs(trigger, mode, "GITLAB"))) {
+  if (!activePublicationRuntime && isDuplicateRequest(requestKey, resolveDedupeTtlMs(trigger, mode, "GITLAB"))) {
     return { ok: true, message: "duplicate request ignored" };
   }
 
@@ -884,13 +932,16 @@ export async function runGitLabReview(
     return { ok: true, message: "draft merge request skipped" };
   }
 
-  const gitlabToken = requireGitLabToken(headers);
+  const gitlabToken = activePublicationRuntime?.resolveCredential
+    ? await activePublicationRuntime.resolveCredential()
+    : requireGitLabToken(headers);
   const reviewMrKey = `${payload.project.id}#${payload.object_attributes.iid}`;
   const incrementalBaseSha = shouldUseIncrementalReview(trigger)
     ? getIncrementalHead(reviewMrKey)
     : undefined;
   const currentHeadSha = payload.object_attributes.last_commit?.id?.trim();
   if (
+    !activePublicationRuntime &&
     trigger === "pr-edited" &&
     incrementalBaseSha &&
     currentHeadSha &&
@@ -919,6 +970,15 @@ export async function runGitLabReview(
       includeCiChecks,
       feedbackSignals,
     });
+    const batch = await prepareGitLabPublicationBatch({
+      runtime: activePublicationRuntime,
+      mrId: collected.mrId,
+      revision: collected.diffRefs.headSha,
+      sourceKey: durableSourceKey,
+      sourceHash: durableSourceHash,
+    });
+    if (batch.resumed) return { ok: true, message: "existing durable publication batch resumed" };
+    activePublicationRuntime = batch.runtime;
 
     logger.info(
       {
@@ -933,29 +993,67 @@ export async function runGitLabReview(
     if (collected.files.length === 0) {
       const noDiffBody = reviewMessage("reviewNoDiffSkipped", locale);
       if (shouldUseManagedReviewSummary(trigger)) {
-        await upsertGitLabManagedComment({
-          gitlabToken,
-          target: collected,
-          body: noDiffBody,
-          markerKey: "review-no-diff",
-          logger,
-        });
+        if (activePublicationRuntime) {
+          await publishGitLabNoteDurably({
+            runtime: activePublicationRuntime,
+            token: gitlabToken,
+            target: collected,
+            revision: collected.diffRefs.headSha,
+            slot: "review-no-diff",
+            body: noDiffBody,
+            managedMarkerKey: "review-no-diff",
+          });
+        } else {
+          await upsertGitLabManagedComment({
+            gitlabToken,
+            target: collected,
+            body: noDiffBody,
+            markerKey: "review-no-diff",
+            logger,
+          });
+        }
       } else {
-        await publishGitLabGeneralComment(gitlabToken, collected, noDiffBody);
+        await publishGitLabReviewNote({
+          publicationRuntime: activePublicationRuntime,
+          gitlabToken,
+          collected,
+          body: noDiffBody,
+          slot: "review-no-diff",
+        });
       }
+      await batch.finish();
       rememberIncrementalHead(reviewMrKey, collected.diffRefs.headSha);
       return { ok: true, message: "no textual diff to review" };
     }
 
     const result = await analyzePullRequest(collected.input);
     if (mode === "comment") {
-      await publishGitLabLineComments(gitlabToken, collected, result, logger, locale);
+      await publishGitLabLineComments(
+        gitlabToken,
+        collected,
+        result,
+        logger,
+        locale,
+        activePublicationRuntime,
+      );
       const summaryBody = [
         reviewMessage("reviewCommentModeTitle", locale),
         "",
         reviewMessage("reviewCommentModeHint", locale),
       ].join("\n");
-      if (shouldUseManagedReviewSummary(trigger)) {
+      if (activePublicationRuntime) {
+        await publishGitLabNoteDurably({
+          runtime: activePublicationRuntime,
+          token: gitlabToken,
+          target: collected,
+          revision: collected.diffRefs.headSha,
+          slot: "review-comment-summary",
+          body: summaryBody,
+          managedMarkerKey: shouldUseManagedReviewSummary(trigger)
+            ? "review-comment-summary"
+            : undefined,
+        });
+      } else if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitLabManagedComment({
           gitlabToken,
           target: collected,
@@ -975,7 +1073,17 @@ export async function runGitLabReview(
       }, {
         locale,
       });
-      if (shouldUseManagedReviewSummary(trigger)) {
+      if (activePublicationRuntime) {
+        await publishGitLabNoteDurably({
+          runtime: activePublicationRuntime,
+          token: gitlabToken,
+          target: collected,
+          revision: collected.diffRefs.headSha,
+          slot: "review-report",
+          body: markdown,
+          managedMarkerKey: shouldUseManagedReviewSummary(trigger) ? "review-report" : undefined,
+        });
+      } else if (shouldUseManagedReviewSummary(trigger)) {
         await upsertGitLabManagedComment({
           gitlabToken,
           target: collected,
@@ -1000,7 +1108,13 @@ export async function runGitLabReview(
           findings,
           locale,
         });
-        await publishGitLabGeneralComment(gitlabToken, collected, warning);
+        await publishGitLabReviewNote({
+          publicationRuntime: activePublicationRuntime,
+          gitlabToken,
+          collected,
+          body: warning,
+          slot: `secret-warning:${collected.diffRefs.headSha}`,
+        });
       }
 
       if (enableAutoLabel) {
@@ -1015,6 +1129,7 @@ export async function runGitLabReview(
           collected,
           labels,
           logger,
+          publicationRuntime: activePublicationRuntime,
         });
       }
     } else if (enableAutoLabel) {
@@ -1029,9 +1144,11 @@ export async function runGitLabReview(
         collected,
         labels,
         logger,
+        publicationRuntime: activePublicationRuntime,
       });
     }
 
+    await batch.finish();
     rememberIncrementalHead(reviewMrKey, collected.diffRefs.headSha);
 
     const pushUrl =
@@ -1039,7 +1156,7 @@ export async function runGitLabReview(
       headers["x-qwx-robot-url"] ??
       readOptionalStringEnv("GITLAB_PUSH_URL") ??
       readOptionalStringEnv("NOTIFY_WEBHOOK_URL");
-    try {
+    if (!activePublicationRuntime) try {
       await publishNotification({
         pushUrl,
         author: collected.author,
@@ -1070,6 +1187,10 @@ export async function runGitLabReview(
     const publicReason = getPublicErrorMessage(originalError);
 
     logger.error({ error: reason }, "GitLab AI review failed");
+
+    if (error instanceof PendingPublicationError || activePublicationRuntime) {
+      throw originalError;
+    }
 
     try {
       const failureTarget = buildGitLabCommentTargetFromPayload({
@@ -1147,6 +1268,46 @@ export async function runGitLabReview(
   }
 }
 
+async function prepareGitLabPublicationBatch(params: {
+  runtime?: GitLabPublicationRuntime;
+  mrId: number;
+  revision: string;
+  sourceKey: string;
+  sourceHash: string;
+}): Promise<{ runtime?: GitLabPublicationRuntime; resumed: boolean; finish(): Promise<void> }> {
+  const { runtime } = params;
+  if (!runtime?.batchStore || !runtime.batchCoordinator || !runtime.createAdapter) {
+    return { runtime, resumed: false, finish: async () => undefined };
+  }
+  const scope = { ...runtime.scope, target: String(params.mrId), revision: params.revision };
+  const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
+  if (existing) {
+    assertGitLabBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter));
+    return { runtime, resumed: true, finish: async () => undefined };
+  }
+  const operations: Array<{ slot: string; payload: Record<string, unknown> }> = [];
+  const collectingRuntime = { ...runtime, planOperation: (operation: { slot: string; payload: Record<string, unknown> }) => operations.push(operation) };
+  return {
+    runtime: collectingRuntime,
+    resumed: false,
+    finish: async () => {
+      if (operations.length === 0) throw new Error("durable GitLab review produced no frozen publication operations");
+      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations });
+      assertGitLabBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!));
+    },
+  };
+}
+
+function stableGitLabEventHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function assertGitLabBatchSucceeded(batch: { id: string; status: string }): void {
+  if (batch.status === "succeeded") return;
+  if (batch.status === "failed_definite") throw new PublicationDefiniteFailureError(batch.id, "publication_batch_failed_definite");
+  throw new PendingPublicationError(batch.id);
+}
+
 export function recordGitLabFeedbackSignal(params: {
   projectId: number;
   signal: string;
@@ -1200,11 +1361,21 @@ async function handleGitLabNoteWebhook(params: {
   }
 
   const mergePayload = buildMergeRequestPayloadFromNote(payload);
-  const gitlabToken = requireGitLabToken(params.headers);
   const target = buildGitLabCommentTargetFromPayload({
     payload: mergePayload,
     baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
   });
+  const durableRuntime = await resolvePublicationRuntime({
+    platform: "gitlab",
+    origin: target.baseUrl,
+    repository: payload.project.path_with_namespace ?? String(payload.project.id),
+  });
+  if (durableRuntime && !parseReviewCommand(body).matched) {
+    throw new DurableUnadaptedWriterBlockedError("gitlab", body.split(/\s+/u, 1)[0] ?? "unknown");
+  }
+  const gitlabToken = durableRuntime?.resolveCredential
+    ? await durableRuntime.resolveCredential()
+    : requireGitLabToken(params.headers);
   const commentUserName = payload.user?.username;
   const baseUrl = resolveGitLabBaseUrl(
     readOptionalStringEnv("GITLAB_BASE_URL"),
@@ -2236,6 +2407,7 @@ async function publishGitLabLineComments(
   result: PullRequestReviewResult,
   logger: LoggerLike,
   locale: UiLocale,
+  publicationRuntime?: GitLabPublicationRuntime,
 ): Promise<void> {
   let failed = 0;
   for (const review of result.reviews) {
@@ -2266,6 +2438,18 @@ async function publishGitLabLineComments(
 
     let response: Response;
     try {
+      if (publicationRuntime) {
+        await publishGitLabDiscussionDurably({
+          runtime: publicationRuntime,
+          token: gitlabToken,
+          target: collected,
+          revision: collected.diffRefs.headSha,
+          slot: `review-inline:${file.newPath}:${line}:${review.type}`,
+          body,
+          position,
+        });
+        continue;
+      }
       response = await gitLabApiRequest({
         url: `${collected.baseUrl}/api/v4/projects/${encodeURIComponent(collected.projectId)}/merge_requests/${collected.mrId}/discussions`,
         token: gitlabToken,
@@ -2276,6 +2460,7 @@ async function publishGitLabLineComments(
         },
       });
     } catch (error) {
+      if (publicationRuntime) throw error;
       failed += 1;
       logger.error(
         {
@@ -2305,6 +2490,27 @@ async function publishGitLabLineComments(
   if (failed > 0) {
     logger.error({ failed }, "GitLab line comments published with failures");
   }
+}
+
+async function publishGitLabReviewNote(params: {
+  publicationRuntime?: GitLabPublicationRuntime;
+  gitlabToken: string;
+  collected: GitLabCollectedContext;
+  body: string;
+  slot: string;
+}): Promise<void> {
+  if (params.publicationRuntime) {
+    await publishGitLabNoteDurably({
+      runtime: params.publicationRuntime,
+      token: params.gitlabToken,
+      target: params.collected,
+      revision: params.collected.diffRefs.headSha,
+      slot: params.slot,
+      body: params.body,
+    });
+    return;
+  }
+  await publishGitLabGeneralComment(params.gitlabToken, params.collected, params.body);
 }
 
 async function publishGitLabGeneralComment(
@@ -2927,11 +3133,23 @@ export async function tryAddGitLabMergeRequestLabels(params: {
   collected: GitLabCollectedContext;
   labels: string[];
   logger: LoggerLike;
+  publicationRuntime?: GitLabPublicationRuntime;
 }): Promise<void> {
   if (params.labels.length === 0) {
     return;
   }
 
+  if (params.publicationRuntime) {
+    await publishGitLabLabelsDurably({
+      runtime: params.publicationRuntime,
+      token: params.gitlabToken,
+      target: params.collected,
+      revision: params.collected.diffRefs.headSha,
+      slot: "review-labels",
+      labels: params.labels,
+    });
+    return;
+  }
   try {
     const response = await gitLabApiRequest({
       url: `${params.collected.baseUrl}/api/v4/projects/${encodeURIComponent(params.collected.projectId)}/merge_requests/${params.collected.mrId}`,

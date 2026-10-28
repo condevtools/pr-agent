@@ -18,6 +18,8 @@ import {
 } from "./github-review.js";
 import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
 import { runGitHubImplementCommand } from "./github-implement.js";
+import { resolvePublicationRuntime } from "../../harness/runtime.js";
+import { guardGitHubOctokit } from "./github-rest-client.js";
 import {
   findSimilarIssues,
   parseAddDocCommand,
@@ -116,12 +118,27 @@ export async function handleGitHubIssueCommentCommand(params: {
   issueBody?: string;
   rateLimitPlatform: "github-app" | "github-webhook";
   throwOnError?: boolean;
+  sourceKey?: string;
+  sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
+  params = {
+    ...params,
+    context: guardGitHubCommandContext(params.context),
+  };
   if (isGitHubBotCommentUser(params.commentUser)) {
     return { ok: true, message: "ignored issue_comment from bot" };
   }
 
   const body = params.body.trim();
+  const durableRuntime = await resolvePublicationRuntime({
+    platform: "github",
+    origin: readOptionalStringEnv("GITHUB_API_URL") ?? "https://api.github.com",
+    repository: `${params.owner}/${params.repo}`,
+  });
+  const durableReviewCommand = parseReviewCommand(body).matched || parseImproveCommand(body).matched || parseAddDocCommand(body).matched || parseImproveComponentCommand(body).matched;
+  if (durableRuntime && !durableReviewCommand) {
+    throw new DurableUnadaptedWriterBlockedError("github", body.split(/\s+/u, 1)[0] ?? "unknown");
+  }
   const locale = resolveUiLocale();
   const commentUserLogin = params.commentUser?.login;
   const throwOnError = Boolean(params.throwOnError);
@@ -558,6 +575,8 @@ export async function handleGitHubIssueCommentCommand(params: {
           secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
           enableAutoLabel: false,
           throwOnError,
+          sourceKey: params.sourceKey,
+          sourceHash: params.sourceHash,
         });
         return { ok: true, message: "improve command triggered" };
       },
@@ -599,6 +618,8 @@ export async function handleGitHubIssueCommentCommand(params: {
           enableSecretScan: false,
           enableAutoLabel: false,
           throwOnError,
+          sourceKey: params.sourceKey,
+          sourceHash: params.sourceHash,
         });
         return { ok: true, message: "add_doc command triggered" };
       },
@@ -914,6 +935,8 @@ export async function handleGitHubIssueCommentCommand(params: {
           secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
           enableAutoLabel: false,
           throwOnError,
+          sourceKey: params.sourceKey,
+          sourceHash: params.sourceHash,
         });
         return { ok: true, message: "improve_component command triggered" };
       },
@@ -1091,6 +1114,8 @@ export async function handleGitHubIssueCommentCommand(params: {
           secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
           enableAutoLabel: reviewBehavior.autoLabelEnabled,
           throwOnError,
+          sourceKey: params.sourceKey,
+          sourceHash: params.sourceHash,
         });
 
         return { ok: true, message: "issue_comment review triggered" };
@@ -1111,6 +1136,18 @@ export async function handleGitHubIssueCommentCommand(params: {
     ok: true,
     message: "ignored issue_comment content",
   });
+}
+
+/** Guards callers that invoke the exported command handler without the webhook dispatcher. */
+export function guardGitHubCommandContext(context: GitHubReviewContext): GitHubReviewContext {
+  return { ...context, octokit: guardGitHubOctokit(context.octokit) };
+}
+
+export class DurableUnadaptedWriterBlockedError extends Error {
+  constructor(readonly platform: "github" | "gitlab", readonly command: string) {
+    super(`durable publication blocks unadapted ${platform} writer: ${command}`);
+    this.name = "DurableUnadaptedWriterBlockedError";
+  }
 }
 
 function buildGitHubReflectQuestion(

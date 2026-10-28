@@ -1,4 +1,6 @@
 import type { ApplicationFunction } from "probot";
+import { requireOnlinePublicationAuthority } from "./harness/runtime.js";
+import { createHash } from "node:crypto";
 import { assertRuntimeStateBackendReady } from "#core";
 import {
   handleGitHubWebhookEvent,
@@ -17,6 +19,7 @@ const PULL_REQUEST_REVIEW_THREAD_EVENTS = [
 ] as const;
 
 export const app: ApplicationFunction = (probot): void => {
+  requireOnlinePublicationAuthority();
   assertRuntimeStateBackendReady();
   probot.log.info("AI reviewer app loaded (GitHub + GitLab compatible)");
 
@@ -26,6 +29,7 @@ export const app: ApplicationFunction = (probot): void => {
       payload: unknown;
       octokit: unknown;
       log: unknown;
+      id?: string;
     };
   }): Promise<void> => {
     await handleGitHubWebhookEvent({
@@ -34,6 +38,8 @@ export const app: ApplicationFunction = (probot): void => {
       octokit: params.context.octokit as never,
       logger: params.context.log as never,
       runtimeMode: "github-app",
+      deliveryId: params.context.id,
+      sourceHash: createHash("sha256").update(JSON.stringify(params.context.payload)).digest("hex"),
     });
   };
 

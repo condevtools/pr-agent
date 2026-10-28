@@ -23,13 +23,14 @@ import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
 import {
   handleGitHubIssueCommentCommand,
 } from "./github-issue-comment-command.js";
+import { resolvePublicationRuntime } from "../../harness/runtime.js";
 export { createRestBackedOctokit } from "./github-rest-client.js";
 export {
   handleGitHubIssueCommentCommand,
   isGitHubBotCommentUser,
   isGitHubCommandRateLimited,
 } from "./github-issue-comment-command.js";
-import { createRestBackedOctokit } from "./github-rest-client.js";
+import { createRestBackedOctokit, guardGitHubOctokit } from "./github-rest-client.js";
 const DEFAULT_GITHUB_API_URL = "https://api.github.com";
 const DEFAULT_GITHUB_WEBHOOK_MAX_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -91,6 +92,7 @@ const issueCommentWebhookPayloadSchema = z.object({
     pull_request: z.unknown().optional(),
   }),
   comment: z.object({
+    id: z.number().int().positive().optional(),
     body: z.string().optional(),
     user: z
       .object({
@@ -155,6 +157,8 @@ export async function handlePlainGitHubWebhook(params: {
     octokit,
     logger: params.logger,
     runtimeMode: "github-webhook",
+    deliveryId: params.headers["x-github-delivery"],
+    sourceHash: createHash("sha256").update(params.rawBody).digest("hex"),
   });
 }
 
@@ -163,6 +167,8 @@ type PlainGitHubWebhookEventHandlerParams = {
   octokit: MinimalGitHubOctokit;
   logger: LoggerLike;
   runtimeMode: GitHubWebhookRuntimeMode;
+  deliveryId?: string;
+  sourceHash?: string;
 };
 
 export type GitHubWebhookRuntimeMode = "github-app" | "github-webhook";
@@ -183,6 +189,8 @@ export async function handleGitHubWebhookEvent(params: {
   octokit: MinimalGitHubOctokit;
   logger: LoggerLike;
   runtimeMode: GitHubWebhookRuntimeMode;
+  deliveryId?: string;
+  sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
   const handler = plainGitHubWebhookEventHandlers[params.eventName];
   if (!handler) {
@@ -191,9 +199,11 @@ export async function handleGitHubWebhookEvent(params: {
 
   return handler({
     payload: params.payload,
-    octokit: params.octokit,
+    octokit: guardGitHubOctokit(params.octokit),
     logger: params.logger,
     runtimeMode: params.runtimeMode,
+    deliveryId: params.deliveryId,
+    sourceHash: params.sourceHash ?? createHash("sha256").update(JSON.stringify(params.payload)).digest("hex"),
   });
 }
 
@@ -213,6 +223,33 @@ async function handlePullRequestEvent(
 
   const context = createReviewContext(owner, repo, params.octokit, params.logger);
   const action = payload.action?.toLowerCase();
+  const durableRuntime = await resolvePublicationRuntime({
+    platform: "github",
+    origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL,
+    repository: `${owner}/${repo}`,
+  });
+  if (durableRuntime && (action === "opened" || action === "edited" || action === "synchronize" || (action === "closed" && payload.pull_request?.merged))) {
+    const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
+      context,
+      baseRef: payload.pull_request.base?.ref ?? payload.repository.default_branch,
+    });
+    await runGitHubReview({
+      context,
+      pullNumber: payload.pull_request.number,
+      mode: "report",
+      trigger: action === "opened" ? "pr-opened" : action === "edited" ? "pr-edited" : action === "synchronize" ? "pr-synchronize" : "merged",
+      publicationRuntime: durableRuntime as never,
+      sourceKey: params.deliveryId ? `github:delivery:${params.deliveryId}` : undefined,
+      sourceHash: params.sourceHash,
+      customRules: reviewBehavior.customRules,
+      includeCiChecks: reviewBehavior.includeCiChecks,
+      enableSecretScan: reviewBehavior.secretScanEnabled,
+      secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
+      enableAutoLabel: reviewBehavior.autoLabelEnabled,
+      throwOnError: true,
+    });
+    return { ok: true, message: "durable pull_request review triggered" };
+  }
   if (action === "closed" && payload.pull_request?.merged) {
     const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
       context,
@@ -277,6 +314,9 @@ async function handleIssuesEvent(
   }
 
   const context = createReviewContext(owner, repo, params.octokit, params.logger);
+  if (await resolvePublicationRuntime({ platform: "github", origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL, repository: `${owner}/${repo}` })) {
+    throw new Error("durable publication blocks the unadapted GitHub issue-policy writer");
+  }
   await runGitHubIssuePolicyWorkflow({
     context,
     issueNumber: payload.issue.number,
@@ -305,6 +345,9 @@ async function handlePullRequestReviewThreadEvent(
   const action = payload.action?.toLowerCase();
   if (action !== "resolved" && action !== "unresolved") {
     return { ok: true, message: "ignored pull_request_review_thread action" };
+  }
+  if (await resolvePublicationRuntime({ platform: "github", origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL, repository: `${owner}/${repo}` })) {
+    throw new Error("durable publication blocks the unadapted GitHub review-thread writer");
   }
 
   const pullNumber = payload.pull_request?.number;
@@ -353,6 +396,12 @@ async function handleIssueCommentEvent(
     issueBody: payload.issue.body ?? "",
     rateLimitPlatform: params.runtimeMode,
     throwOnError: params.runtimeMode === "github-webhook",
+    sourceKey: params.deliveryId
+      ? `github:delivery:${params.deliveryId}`
+      : payload.comment?.id
+        ? `github:comment:${payload.comment.id}`
+        : undefined,
+    sourceHash: params.sourceHash,
   });
 }
 
