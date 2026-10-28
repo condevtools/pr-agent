@@ -1,4 +1,5 @@
 import type { DiffFileContext, PullRequestReviewInput, ReviewMode, ReviewTrigger } from "#review";
+import type { GitHubPublicationRuntime } from "./github-publication.js";
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -14,6 +15,8 @@ export interface LoggerLike {
 // ---------------------------------------------------------------------------
 
 export interface GitHubPullSummary {
+  id: number;
+  number: number;
   title: string;
   body: string | null;
   user: { login: string } | null;
@@ -29,6 +32,7 @@ export interface GitHubPullSummary {
 export interface GitHubIssueCommentSummary {
   id: number;
   body?: string | null;
+  user?: { id?: number } | null;
 }
 
 export interface GitHubIssueSummary {
@@ -117,11 +121,16 @@ export interface GitHubReviewCommentSummary {
   line?: number | null;
   start_line?: number | null;
   commit_id?: string | null;
-  user?: { login?: string; type?: string } | null;
+  user?: { id?: number; login?: string; type?: string } | null;
 }
 
 export interface MinimalGitHubOctokit {
+  users?: {
+    getAuthenticated(): Promise<{ data: { id: number; login?: string; type?: string } }>;
+    getByUsername(params: { username: string }): Promise<{ data: { id: number; login?: string; type?: string } }>;
+  };
   repos: {
+    get?(params: { owner: string; repo: string }): Promise<{ data: { id: number; full_name?: string } }>;
     getContent(params: {
       owner: string;
       repo: string;
@@ -166,6 +175,7 @@ export interface MinimalGitHubOctokit {
       path: string;
       line: number;
       side: "LEFT" | "RIGHT";
+      request?: { retries: number };
     }): Promise<unknown>;
     update(params: {
       owner: string;
@@ -189,6 +199,8 @@ export interface MinimalGitHubOctokit {
     }): Promise<unknown>;
   };
   issues: {
+    getComment?(params: { owner: string; repo: string; comment_id: number }): Promise<{ data: GitHubIssueCommentSummary }>;
+    get?(params: { owner: string; repo: string; issue_number: number }): Promise<{ data: { labels?: Array<string | { name?: string }> } }>;
     listForRepo?(params: {
       [key: string]: unknown;
       owner: string;
@@ -211,12 +223,14 @@ export interface MinimalGitHubOctokit {
       repo: string;
       issue_number: number;
       body: string;
+      request?: { retries: number };
     }): Promise<{ data: { id: number } }>;
     updateComment(params: {
       owner: string;
       repo: string;
       comment_id: number;
       body: string;
+      request?: { retries: number };
     }): Promise<unknown>;
     addLabels?(params: {
       [key: string]: unknown;
@@ -224,6 +238,7 @@ export interface MinimalGitHubOctokit {
       repo: string;
       issue_number: number;
       labels: string[];
+      request?: { retries: number };
     }): Promise<unknown>;
   };
   checks?: {
@@ -268,6 +283,9 @@ export interface GitHubReviewRunParams {
   secretScanCustomPatterns?: string[];
   enableAutoLabel?: boolean;
   throwOnError?: boolean;
+  publicationRuntime?: GitHubPublicationRuntime;
+  sourceKey?: string;
+  sourceHash?: string;
 }
 
 export interface GitHubDescribeRunParams {

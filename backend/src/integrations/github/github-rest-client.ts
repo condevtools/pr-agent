@@ -2,6 +2,7 @@ import { encodePath, fetchWithRetry } from "#core";
 import {
   type GitHubCheckRunSummary,
   type GitHubIssueSummary,
+  type GitHubIssueCommentSummary,
   type GitHubPullFile,
   type GitHubPullFilesListParams,
   type GitHubPullsListFilesMethod,
@@ -11,6 +12,7 @@ import {
   type MinimalGitHubOctokit,
 } from "./github-review.js";
 import { buildGitHubHttpRetryOptions } from "../shared/http-retry-options.js";
+import { assertPublicationWriteAllowed } from "../../harness/write-boundary.js";
 
 const MAX_LIST_FILES_TRUNCATED_RECORDS = 500;
 
@@ -23,6 +25,18 @@ interface RestGitHubRequestParams {
   method: "GET" | "POST" | "PATCH" | "PUT";
   path: string;
   body?: unknown;
+  retry?: boolean;
+}
+
+export class GitHubRestApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly method: string,
+    readonly path: string,
+  ) {
+    super(`GitHub API ${method} ${path} failed (${status})`);
+    this.name = "GitHubRestApiError";
+  }
 }
 
 export function createRestBackedOctokit(
@@ -55,7 +69,21 @@ export function createRestBackedOctokit(
   };
 
   return {
+    users: {
+      getAuthenticated: async () => ({
+        data: await requestJsonRequired<{ id: number; login?: string; type?: string }>(config, { method: "GET", path: "/user" }),
+      }),
+      getByUsername: async (params) => ({
+        data: await requestJsonRequired<{ id: number; login?: string; type?: string }>(config, { method: "GET", path: `/users/${encodeURIComponent(params.username)}` }),
+      }),
+    },
     repos: {
+      get: async (params) => ({
+        data: await requestJsonRequired<{ id: number; full_name?: string }>(config, {
+          method: "GET",
+          path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}`,
+        }),
+      }),
       getContent: async (params) => {
         const encodedPath = encodePath(params.path);
         const query = params.ref ? `?ref=${encodeURIComponent(params.ref)}` : "";
@@ -98,7 +126,7 @@ export function createRestBackedOctokit(
         return { data };
       },
       createReviewComment: async (params) => {
-        await requestJsonOptional(config, {
+        const request = {
           method: "POST",
           path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/pulls/${params.pull_number}/comments`,
           body: {
@@ -108,7 +136,13 @@ export function createRestBackedOctokit(
             line: params.line,
             side: params.side,
           },
-        });
+          retry: params.request?.retries !== 0,
+        } satisfies RestGitHubRequestParams;
+        if (params.request?.retries === 0) {
+          const data = await requestJsonRequired<{ id: number }>(config, request);
+          return { data };
+        }
+        await requestJsonOptional<{ id: number }>(config, request);
         return {};
       },
       update: async (params) => {
@@ -144,6 +178,18 @@ export function createRestBackedOctokit(
       },
     },
     issues: {
+      getComment: async (params) => ({
+        data: await requestJsonRequired<GitHubIssueCommentSummary>(config, {
+          method: "GET",
+          path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/issues/comments/${params.comment_id}`,
+        }),
+      }),
+      get: async (params) => ({
+        data: await requestJsonRequired<{ labels?: Array<string | { name?: string }> }>(config, {
+          method: "GET",
+          path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/issues/${params.issue_number}`,
+        }),
+      }),
       listForRepo: async (params) => {
         const state = params.state ?? "all";
         const sort = params.sort ?? "updated";
@@ -175,7 +221,7 @@ export function createRestBackedOctokit(
         };
       },
       listComments: async (params) => {
-        const data = await requestJsonRequired<Array<{ id: number; body?: string | null }>>(
+        const data = await requestJsonRequired<Array<{ id: number; body?: string | null; user?: { id?: number } | null }>>(
           config,
           {
             method: "GET",
@@ -187,6 +233,7 @@ export function createRestBackedOctokit(
             ? data.map((item) => ({
                 id: Number(item.id),
                 body: typeof item.body === "string" ? item.body : undefined,
+                user: item.user ?? null,
               }))
             : [],
         };
@@ -198,6 +245,7 @@ export function createRestBackedOctokit(
           body: {
             body: params.body,
           },
+          retry: params.request?.retries !== 0,
         });
         return { data };
       },
@@ -208,6 +256,7 @@ export function createRestBackedOctokit(
           body: {
             body: params.body,
           },
+          retry: params.request?.retries !== 0,
         });
         return {};
       },
@@ -218,6 +267,7 @@ export function createRestBackedOctokit(
           body: {
             labels: params.labels,
           },
+          retry: params.request?.retries !== 0,
         });
         return {};
       },
@@ -353,6 +403,7 @@ async function requestResponse(
   config: RestGitHubClientConfig,
   params: RestGitHubRequestParams,
 ): Promise<Response> {
+  if (params.method !== "GET") assertPublicationWriteAllowed("github");
   const response = await fetchWithRetry(
     `${config.baseUrl}${params.path}`,
     {
@@ -366,15 +417,43 @@ async function requestResponse(
       },
       body: params.body ? JSON.stringify(params.body) : undefined,
     },
-    buildGitHubHttpRetryOptions(),
+    params.retry === false
+      ? { ...buildGitHubHttpRetryOptions(), retries: 0 }
+      : buildGitHubHttpRetryOptions(),
   );
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `GitHub API ${params.method} ${params.path} failed (${response.status}): ${body.slice(0, 300)}`,
-    );
+    await response.text();
+    throw new GitHubRestApiError(response.status, params.method, params.path);
   }
 
   return response;
+}
+
+const READ_METHOD_PATTERN = /^(get|list|compare|paginate|auth)/;
+
+/** Makes native Probot/Octokit contexts read-only unless a claimed dispatch owns the async scope. */
+export function guardGitHubOctokit<T extends object>(octokit: T): T {
+  const proxies = new WeakMap<object, object>();
+  const wrap = (value: object): object => {
+    const cached = proxies.get(value);
+    if (cached) return cached;
+    const proxy = new Proxy(value, {
+      get(target, property, receiver) {
+        const member = Reflect.get(target, property, receiver) as unknown;
+        if (typeof member === "function") {
+          return (...args: unknown[]) => {
+            if (!READ_METHOD_PATTERN.test(String(property))) {
+              assertPublicationWriteAllowed("github");
+            }
+            return Reflect.apply(member, target, args);
+          };
+        }
+        return member && typeof member === "object" ? wrap(member) : member;
+      },
+    });
+    proxies.set(value, proxy);
+    return proxy;
+  };
+  return wrap(octokit) as T;
 }

@@ -1,5 +1,6 @@
 import { fetchWithRetry } from "#core";
 import { buildGitLabHttpRetryOptions } from "../shared/http-retry-options.js";
+import { assertPublicationWriteAllowed } from "../../harness/write-boundary.js";
 
 export async function gitLabApiRequest(params: {
   url: string;
@@ -7,7 +8,10 @@ export async function gitLabApiRequest(params: {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   headers?: Record<string, string | undefined>;
+  retry?: boolean;
 }): Promise<Response> {
+  const method = params.method ?? "GET";
+  if (method !== "GET") assertPublicationWriteAllowed("gitlab");
   const headers: Record<string, string> = {
     "PRIVATE-TOKEN": params.token,
   };
@@ -31,10 +35,12 @@ export async function gitLabApiRequest(params: {
   return fetchWithRetry(
     params.url,
     {
-      method: params.method ?? "GET",
+      method,
       headers,
       body,
     },
-    buildGitLabHttpRetryOptions(),
+    params.retry === false
+      ? { ...buildGitLabHttpRetryOptions(), retries: 0 }
+      : buildGitLabHttpRetryOptions(),
   );
 }
