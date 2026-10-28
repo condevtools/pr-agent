@@ -11,6 +11,7 @@ RUN pnpm install --filter backend --frozen-lockfile
 
 COPY backend/tsconfig.json ./backend/
 COPY backend/src ./backend/src
+COPY backend/scripts/copy-harness-assets.mjs ./backend/scripts/copy-harness-assets.mjs
 
 RUN pnpm --filter backend build
 

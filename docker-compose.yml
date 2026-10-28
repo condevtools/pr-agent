@@ -8,8 +8,56 @@ services:
     environment:
       PRIVATE_KEY_PATH: /run/secrets/github-app-private-key.pem
       RUNTIME_STATE_SQLITE_FILE: /data/pr-agent/runtime-state.sqlite3
+      HARNESS_PUBLICATION_MODE: postgres
+      HARNESS_DATABASE_URL: ""
+      HARNESS_PG_HOST: postgres
+      HARNESS_PG_PORT: "5432"
+      HARNESS_PG_DATABASE: pr_agent
+      HARNESS_PG_USER: pr_agent_app
+      HARNESS_PG_PASSWORD: ${HARNESS_APP_PASSWORD:-pr_agent_local_app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      harness-migrate:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/data
       - ./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pr_agent
+      POSTGRES_USER: pr_agent_migrator
+      POSTGRES_PASSWORD: ${HARNESS_MIGRATION_PASSWORD:-pr_agent_local_migrator}
+      HARNESS_APP_PASSWORD: ${HARNESS_APP_PASSWORD:-pr_agent_local_app}
+    volumes:
+      - harness-postgres:/var/lib/postgresql/data
+      - ./docker/postgres/10-runtime-role.sql:/docker-entrypoint-initdb.d/10-runtime-role.sql:ro
+    # No host port: the backend connects through the Compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U pr_agent_migrator -d pr_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  harness-migrate:
+    build: .
+    restart: "no"
+    command: ["node", "dist/harness/cli.js", "migrate"]
+    environment:
+      HARNESS_PG_HOST: postgres
+      HARNESS_PG_PORT: "5432"
+      HARNESS_PG_DATABASE: pr_agent
+      HARNESS_PG_USER: pr_agent_migrator
+      HARNESS_PG_PASSWORD: ${HARNESS_MIGRATION_PASSWORD:-pr_agent_local_migrator}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  harness-postgres:
