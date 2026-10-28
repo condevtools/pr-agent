@@ -357,6 +357,8 @@ function sanitizeHeaders(
     "x-github-delivery",
     "x-gitlab-event",
     "x-gitlab-delivery",
+    "x-gitlab-event-uuid",
+    "x-gitlab-webhook-uuid",
     "x-gitlab-instance",
     "content-type",
     "user-agent",

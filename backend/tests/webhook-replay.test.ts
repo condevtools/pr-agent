@@ -89,6 +89,27 @@ test("webhook replay authorization validates replay token", () => {
   }
 });
 
+test("GitLab replay preserves the original durable event identity without credentials", async () => {
+  const previousEnabled = process.env.WEBHOOK_EVENT_STORE_ENABLED;
+  const previousFile = process.env.WEBHOOK_EVENT_STORE_FILE;
+  process.env.WEBHOOK_EVENT_STORE_ENABLED = "true";
+  process.env.WEBHOOK_EVENT_STORE_FILE = storeFile;
+  try {
+    const id = recordWebhookEvent({ platform: "gitlab", eventName: "merge_request", payload: { object_kind: "merge_request" },
+      headers: { "x-gitlab-event-uuid": "event-identity", "x-gitlab-webhook-uuid": "delivery-identity", "x-gitlab-api-token": "not-for-storage" } });
+    await flushWebhookStoreWrites();
+    const stored = await getStoredWebhookEventById({ id: id!, platform: "gitlab" });
+    assert.equal(stored?.headers["x-gitlab-event-uuid"], "event-identity");
+    assert.equal(stored?.headers["x-gitlab-webhook-uuid"], "delivery-identity");
+    assert.equal(stored?.headers["x-gitlab-api-token"], undefined);
+  } finally {
+    if (previousEnabled === undefined) delete process.env.WEBHOOK_EVENT_STORE_ENABLED;
+    else process.env.WEBHOOK_EVENT_STORE_ENABLED = previousEnabled;
+    if (previousFile === undefined) delete process.env.WEBHOOK_EVENT_STORE_FILE;
+    else process.env.WEBHOOK_EVENT_STORE_FILE = previousFile;
+  }
+});
+
 test.after(() => {
   rmSync(storeFile, { force: true });
 });
