@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fingerprint } from "./versions.js";
 
 import type { PublicationBinding } from "./authority.js";
 import { RunControlError } from "./run-control-contracts.js";
@@ -8,18 +9,25 @@ import { createRestBackedOctokit } from "../integrations/github/github-rest-clie
 import { gitLabApiRequest } from "../integrations/gitlab/gitlab-http.js";
 
 export const createReviewRequestSchema = z.object({
+  workflow: z.enum(["review.single.v1", "review.deep.v1"]).default("review.single.v1"),
   number: z.number().int().positive(), mode: z.enum(["report", "comment"]).default("report"),
   options: reviewRunInputSchema.shape.options.default({ customRules: [], includeCiChecks: true,
     enableSecretScan: true, secretScanCustomPatterns: [], enableAutoLabel: true }),
 }).strict();
 export type CreateReviewRequest = z.infer<typeof createReviewRequestSchema>;
 
+/** Preserve the original single-review idempotency bytes after adding a default field. */
+export function reviewApiSourceHash(request: CreateReviewRequest): string {
+  const { workflow, ...legacy } = request;
+  return fingerprint(workflow === "review.single.v1" ? legacy : request);
+}
+
 /** Only the trusted integration controls provider/repository/credentials. */
 export async function resolveApiReviewInput(binding: PublicationBinding, request: CreateReviewRequest,
   source: ReviewRunInput["source"]): Promise<ReviewRunInput> {
   const runtime = await publicationRuntimeForBinding(binding);
   const credential = await runtime.resolveCredential();
-  const base = { schemaVersion: 1 as const, workflow: "review.single.v1" as const, platform: binding.platform,
+  const base = { schemaVersion: 1 as const, workflow: request.workflow, platform: binding.platform,
     target: { origin: binding.origin, repository: binding.repository, number: request.number,
       providerRepositoryId: binding.providerRepositoryId }, source, mode: request.mode,
     trigger: "comment-command" as const, options: request.options };

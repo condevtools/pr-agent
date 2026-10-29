@@ -1,3 +1,4 @@
+import { ProviderHttpError } from "../core/provider-http-error.js";
 import {
   fetchWithRetry,
   readNumberEnv,
@@ -34,6 +35,8 @@ export async function callAnthropicJson(params: {
   systemPrompt: string;
   responseSchema?: Record<string, unknown>;
   timeoutMs?: number;
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
 }): Promise<unknown> {
   const apiKey = readOptionalStringEnv("ANTHROPIC_API_KEY");
@@ -62,6 +65,7 @@ export async function callAnthropicJson(params: {
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
       responseSchema: useTools ? params.responseSchema : undefined,
+      maxOutputTokens: params.maxOutputTokens,
     });
     return executeModelRequest(
       {
@@ -78,7 +82,7 @@ export async function callAnthropicJson(params: {
           "https://api.anthropic.com/v1/messages",
           {
             method: "POST",
-            signal: currentModelAbortSignal(),
+            signal: combineSignals(currentModelAbortSignal(), params.signal),
             headers: {
               "content-type": "application/json",
               "x-api-key": apiKey,
@@ -117,16 +121,12 @@ export async function callAnthropicJson(params: {
       response = result.response;
       body = result.body;
     } else {
-      throw new Error(
-        `Anthropic API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
-      );
+      throw new ProviderHttpError("Anthropic", response.status);
     }
   }
 
   if (!response.ok) {
-    throw new Error(
-      `Anthropic API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
-    );
+    throw new ProviderHttpError("Anthropic", response.status);
   }
 
   const payload = parseJsonObject(body);
@@ -164,11 +164,16 @@ function buildAnthropicRequestBody(params: {
   systemPrompt: string;
   prompt: string;
   responseSchema?: Record<string, unknown>;
+  maxOutputTokens?: number;
 }): Record<string, unknown> {
+  const configuredMaximum = Math.max(1, readNumberEnv("ANTHROPIC_MAX_TOKENS", 8_192));
+  const requestedMaximum = params.maxOutputTokens === undefined
+    ? configuredMaximum
+    : positiveInteger(params.maxOutputTokens, "Anthropic output limit");
   const body: Record<string, unknown> = {
     model: params.model,
     max_tokens: currentModelOutputLimit(
-      Math.max(1, readNumberEnv("ANTHROPIC_MAX_TOKENS", 8_192)),
+      Math.min(configuredMaximum, requestedMaximum),
     ),
     temperature: 0.2,
     system: params.systemPrompt,
@@ -187,6 +192,17 @@ function buildAnthropicRequestBody(params: {
   ];
   body.tool_choice = { type: "tool", name: "emit_json" };
   return body;
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
+  return value;
+}
+
+function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (present.length === 0) return undefined;
+  return present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
 export function shouldRetryAnthropicWithoutTools(

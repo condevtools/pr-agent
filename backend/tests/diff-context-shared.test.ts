@@ -34,6 +34,8 @@ test("shared diff context filters files and applies patch limits", () => {
   assert.equal(result.totalAdditions, 3);
   assert.equal(result.totalDeletions, 1);
   assert.equal(result.totalPatchChars > 0, true);
+  assert.deepEqual(result.coverage, { status: "partial", reasonCodes: ["file_filtered"],
+    sourceFiles: 2, includedFiles: 1, excludedFiles: 1 });
 });
 
 test("shared diff context supports custom patch stats resolver", () => {
@@ -55,4 +57,27 @@ test("shared diff context supports custom patch stats resolver", () => {
 
   assert.equal(result.totalAdditions, 8);
   assert.equal(result.totalDeletions, 5);
+  assert.equal(result.coverage.status, "complete");
+});
+
+test("shared diff context accounts for provider and local truncation", () => {
+  const result = buildDiffFileContexts({ candidates: [
+    { newPath: "a.ts", status: "modified", patch: "x" },
+    { newPath: "b.ts", status: "modified", patch: "y" },
+  ], maxFiles: 1, maxPatchCharsPerFile: 100, maxTotalPatchChars: 100,
+  shouldIncludeFile: () => true, sourceTruncated: true, sourceFileCount: 5 });
+  assert.deepEqual(result.coverage, { status: "partial",
+    reasonCodes: ["file_limit", "provider_file_list_truncated"],
+    sourceFiles: 5, includedFiles: 1, excludedFiles: 4 });
+});
+
+test("shared diff context reports per-file hunk truncation but not an intentional empty patch", () => {
+  const result = buildDiffFileContexts({ candidates: [
+    { newPath: "large.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new\n".repeat(20) },
+    { newPath: "renamed.ts", status: "renamed", patch: "" },
+  ], maxFiles: 10, maxPatchCharsPerFile: 40, maxTotalPatchChars: 1_000,
+  shouldIncludeFile: () => true });
+  assert.equal(result.coverage.status, "partial");
+  assert.deepEqual(result.coverage.reasonCodes, ["file_patch_truncated"]);
+  assert.equal(result.coverage.includedFiles, 2);
 });

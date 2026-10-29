@@ -1,3 +1,4 @@
+import { ProviderHttpError } from "../core/provider-http-error.js";
 import { fetchWithRetry, readNumberEnv, readOptionalStringEnv } from "#core";
 import { parseJsonFromModelText } from "./ai-provider-json.js";
 import {
@@ -18,6 +19,8 @@ export async function callGeminiJson(params: {
   systemPrompt: string;
   responseSchema?: Record<string, unknown>;
   timeoutMs?: number;
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
 }): Promise<unknown> {
   const apiKey = readOptionalStringEnv("GEMINI_API_KEY");
@@ -47,6 +50,7 @@ export async function callGeminiJson(params: {
     physicalAttempt += 1;
     const generationConfig = buildGeminiGenerationConfig(
       includeSchema ? params.responseSchema : undefined,
+      params.maxOutputTokens,
     );
     const requestBody = {
       systemInstruction: { parts: [{ text: params.systemPrompt }] },
@@ -68,7 +72,7 @@ export async function callGeminiJson(params: {
           endpoint,
           {
             method: "POST",
-            signal: currentModelAbortSignal(),
+            signal: combineSignals(currentModelAbortSignal(), params.signal),
             headers: {
               "content-type": "application/json",
               "x-goog-api-key": apiKey,
@@ -106,16 +110,12 @@ export async function callGeminiJson(params: {
       response = result.response;
       body = result.body;
     } else {
-      throw new Error(
-        `Gemini API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
-      );
+      throw new ProviderHttpError("Gemini", response.status);
     }
   }
 
   if (!response.ok) {
-    throw new Error(
-      `Gemini API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
-    );
+    throw new ProviderHttpError("Gemini", response.status);
   }
 
   const payload = parseGeminiPayload(body);
@@ -136,19 +136,23 @@ export async function callGeminiJson(params: {
 
 export function buildGeminiGenerationConfig(
   responseSchema?: Record<string, unknown>,
+  maxOutputTokens?: number,
 ): {
   temperature: number;
   responseMimeType: string;
   maxOutputTokens: number;
   responseSchema?: Record<string, unknown>;
 } {
+  const configuredMaximum = Math.max(1, readNumberEnv("GEMINI_MAX_OUTPUT_TOKENS", 8_192));
+  const requestedMaximum = maxOutputTokens === undefined
+    ? configuredMaximum
+    : positiveInteger(maxOutputTokens, "Gemini output limit");
+  const boundedMaximum = currentModelOutputLimit(Math.min(configuredMaximum, requestedMaximum));
   if (responseSchema) {
     return {
       temperature: 0.2,
       responseMimeType: "application/json",
-      maxOutputTokens: currentModelOutputLimit(
-        Math.max(1, readNumberEnv("GEMINI_MAX_OUTPUT_TOKENS", 8_192)),
-      ),
+      maxOutputTokens: boundedMaximum,
       responseSchema,
     };
   }
@@ -156,10 +160,19 @@ export function buildGeminiGenerationConfig(
   return {
     temperature: 0.2,
     responseMimeType: "application/json",
-    maxOutputTokens: currentModelOutputLimit(
-      Math.max(1, readNumberEnv("GEMINI_MAX_OUTPUT_TOKENS", 8_192)),
-    ),
+    maxOutputTokens: boundedMaximum,
   };
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
+  return value;
+}
+
+function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (present.length === 0) return undefined;
+  return present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
 interface GeminiPayload {

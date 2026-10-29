@@ -1,13 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DiffFileContext } from "../review/review-types.js";
-import type { RunLease } from "./run-contracts.js";
+import type { RunLease, RunStepKind } from "./run-contracts.js";
 import { fingerprint } from "./versions.js";
 
 export interface ReviewRunExecutionContext {
   lease: RunLease;
+  signal?: AbortSignal;
   assertActive(): Promise<void>;
-  step<T>(key: string, kind: "tool" | "model", inputHash: string, action: () => Promise<T>): Promise<T>;
+  step<T>(key: string, kind: RunStepKind, inputHash: string, action: () => Promise<T>): Promise<T>;
 }
 
 const contexts = new AsyncLocalStorage<ReviewRunExecutionContext>();
@@ -40,6 +41,10 @@ export class ReviewRunRevisionChangedError extends Error {
     super("Review revision changed after durable intake");
     this.name = "ReviewRunRevisionChangedError";
   }
+}
+
+export class DeepReviewAnalysisFailedError extends Error {
+  constructor() { super("Deep review roles failed; inspect the incomplete artifact"); this.name = "DeepReviewAnalysisFailedError"; }
 }
 
 export function reviewInputHash(input: unknown): string {

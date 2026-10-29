@@ -433,7 +433,7 @@ async function concurrent(count: number, concurrency: number, fn: (index: number
 
 async function grantRuntimeRole(pool: Pool, roleName: string): Promise<void> {
   await pool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName};
-    GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName};
+    GRANT SELECT ON pr_agent_harness.integration_bindings,pr_agent_harness.review_artifacts TO ${roleName};
     GRANT SELECT,INSERT,UPDATE ON pr_agent_harness.agent_runs,pr_agent_harness.job_queue,
       pr_agent_harness.repository_operations,pr_agent_harness.publication_slots,pr_agent_harness.publication_batches TO ${roleName};
     GRANT SELECT,INSERT ON pr_agent_harness.publication_batch_operations,pr_agent_harness.run_events,

@@ -2,8 +2,9 @@ import { Injectable, type BeforeApplicationShutdown } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { DeepReviewStore } from "../../harness/deep-review-store.js";
 import { RunApiAuthenticator } from "../../harness/run-api-auth.js";
-import { createReviewRequestSchema, resolveApiReviewInput } from "../../harness/run-api-input.js";
+import { createReviewRequestSchema, resolveApiReviewInput, reviewApiSourceHash } from "../../harness/run-api-input.js";
 import { requireRunPermission, runCommandSchema, runConflict, runNotFound, RunControlError, type RunPrincipal } from "../../harness/run-control-contracts.js";
 import { RunControlStore } from "../../harness/run-control-store.js";
 import { RunQueryStore } from "../../harness/run-query-store.js";
@@ -33,7 +34,7 @@ export class RunsService implements BeforeApplicationShutdown {
     const request = createReviewRequestSchema.parse(body);
     const services = await getHarnessServices();
     const binding = await this.binding(principal);
-    const source = { key: `api:${binding.id}:${commandKey}`, hash: fingerprint(request) };
+    const source = { key: `api:${binding.id}:${commandKey}`, hash: reviewApiSourceHash(request) };
     const requestHash = reviewCreationRequestHash({ source, platform: binding.platform,
       target: { origin: binding.origin, repository: binding.repository, number: request.number,
         providerRepositoryId: binding.providerRepositoryId }, mode: request.mode, trigger: "comment-command" });
@@ -69,6 +70,12 @@ export class RunsService implements BeforeApplicationShutdown {
   async trace(principal: RunPrincipal, runId: string, after?: string) {
     requireRunPermission(principal, "runs:trace");
     return (await this.queries()).trace(principal, validRunId(runId), z.string().max(1024).optional().parse(after));
+  }
+
+  async artifact(principal: RunPrincipal, runId: string, raw?: string) {
+    requireRunPermission(principal, "runs:read");
+    const includeRaw = z.enum(["true", "false"]).optional().parse(raw) === "true";
+    return new DeepReviewStore((await getHarnessServices()).db).readArtifact(principal, validRunId(runId), { raw: includeRaw });
   }
 
   async command(principal: RunPrincipal, runId: string, kind: string, body: unknown) {

@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { fingerprint } from "./versions.js";
 
 import { HarnessDatabase } from "./postgres/database.js";
 import { appendRunFact } from "./run-events.js";
@@ -550,6 +551,34 @@ export class RunExecutionStore {
         stepId: input.stepId, attemptId: input.attemptId, checkpointSequence: sequence,
       });
       return mapCheckpoint(checkpoint.rows[0]!);
+    });
+  }
+
+  /** Settle a caught role/tool failure without leaving an in-flight attempt behind. */
+  async failStep(lease: RunLease, input: { stepId: string; attemptId: string; errorCode: string }): Promise<void> {
+    requiredText(input.errorCode, "step error code");
+    await this.withLease(lease, async (client) => {
+      const attempt = await client.query(
+        `UPDATE pr_agent_harness.step_attempts SET status='failed',error_code=$7,completed_at=now()
+         WHERE tenant_id=$1 AND run_id=$2 AND step_id=$3 AND id=$4
+           AND lease_owner=$5 AND lease_epoch=$6 AND status='running' RETURNING id`,
+        [lease.tenantId, lease.runId, input.stepId, input.attemptId, lease.owner, lease.epoch, input.errorCode],
+      );
+      if (attempt.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      const output = { errorCode: input.errorCode };
+      await client.query(
+        `UPDATE pr_agent_harness.agent_steps
+         SET status='failed',output_json=$4::jsonb,output_hash=$5,completed_at=now(),updated_at=now()
+         WHERE tenant_id=$1 AND run_id=$2 AND id=$3 AND status='running'`,
+        [lease.tenantId, lease.runId, input.stepId, JSON.stringify(output), fingerprint(output)],
+      );
+      await client.query(
+        `UPDATE pr_agent_harness.tool_calls SET status='failed_definite',error_code=$4,completed_at=now()
+         WHERE tenant_id=$1 AND run_id=$2 AND step_attempt_id=$3 AND status='in_flight'`,
+        [lease.tenantId, lease.runId, input.attemptId, input.errorCode],
+      );
+      await appendRunEvent(client, lease.tenantId, lease.runId, "step.failed", lease.owner,
+        { stepId: input.stepId, attemptId: input.attemptId, reasonCode: input.errorCode });
     });
   }
 

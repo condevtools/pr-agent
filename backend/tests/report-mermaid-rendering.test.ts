@@ -78,3 +78,12 @@ test("report markdown skips mermaid diagram when changed files are empty", () =>
   assert.doesNotMatch(markdown, /```mermaid/);
   assert.doesNotMatch(markdown, /Change Structure Diagram/);
 });
+
+
+test("partial coverage with no findings cannot render a clean-review claim", () => {
+  const markdown = buildReportCommentMarkdown({ ...emptyResult,
+    coverage: { status: "partial", reasonCodes: ["file_patch_truncated"] } }, [],
+    { platform: "github", owner: "acme", repo: "demo", baseSha: "base", headSha: "head" }, { locale: "en" });
+  assert.match(markdown, /coverage is incomplete/);
+  assert.doesNotMatch(markdown, /No concrete issues found/);
+});

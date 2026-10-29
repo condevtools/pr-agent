@@ -4,9 +4,9 @@ import type { PublicationBinding } from "./authority.js";
 import { createBudgetedModelExecutionContext, ModelBudgetExceededError, type ModelBudgetStore, type ModelExecutionPolicy } from "./model-budget-store.js";
 import { withModelExecutionContext } from "./model-execution-context.js";
 import { PendingPublicationError, PublicationDefiniteFailureError, StalePublicationError } from "./publication.js";
-import { RunCheckpointCompatibilityError, RunLeaseLostError, type RunLease } from "./run-contracts.js";
+import { RunCheckpointCompatibilityError, RunLeaseLostError, type RunLease, type RunStepKind } from "./run-contracts.js";
 import type { RunExecutionStore } from "./run-execution-store.js";
-import { ReviewRunRevisionChangedError, withReviewRunContext, type ReviewRunExecutionContext } from "./review-run-context.js";
+import { DeepReviewAnalysisFailedError, ReviewRunRevisionChangedError, withReviewRunContext, type ReviewRunExecutionContext } from "./review-run-context.js";
 import { fingerprint, REVIEW_RUNTIME_CONFIG } from "./versions.js";
 import type { PublicationOutcomeHandler } from "./publication-outcome.js";
 
@@ -141,14 +141,23 @@ export class ReviewRunWorker {
 
     const assertActive = async () => {
       if (!active || controller.signal.aborted) throw new RunLeaseLostError(lease.runId);
-      await store.withLease(lease, async () => undefined);
+      await store.withLease(lease, async (client) => {
+        if (lease.input.workflow === "review.deep.v1") {
+          const authority = await client.query<{ allowed: boolean }>(
+            "SELECT pr_agent_harness.lock_resumable_review_execution_authority($1,$2,$3,$4) AS allowed",
+            [lease.tenantId, lease.integrationId, lease.authorityGeneration, lease.executionModeGeneration],
+          );
+          if (!authority.rows[0]?.allowed) throw new RunLeaseLostError(lease.runId);
+        }
+      });
     };
     const context: ReviewRunExecutionContext = {
       lease,
+      signal: controller.signal,
       assertActive,
       step: async <T>(
         key: string,
-        kind: "tool" | "model",
+        kind: RunStepKind,
         inputHash: string,
         action: () => Promise<T>,
       ): Promise<T> => {
@@ -158,7 +167,7 @@ export class ReviewRunWorker {
           kind,
           inputHash,
           ...(kind === "tool"
-            ? { tool: { name: key, kind: "provider_read" as const, requestHash: inputHash } }
+            ? { tool: { name: deepToolName(key) ?? key, kind: deepToolName(key) ? "repository_read" as const : "provider_read" as const, requestHash: inputHash } }
             : {}),
         });
         if (step.reused) {
@@ -167,6 +176,7 @@ export class ReviewRunWorker {
           }
           return step.output.value as T;
         }
+        try {
         const policy = lease.runtimeConfig.modelPolicy as ModelExecutionPolicy;
         const result = kind === "model"
           ? await withModelExecutionContext(
@@ -197,6 +207,13 @@ export class ReviewRunWorker {
           checkpoint: { schemaVersion: 1, state, stateHash: fingerprint(state) },
         });
         return result;
+        } catch (error) {
+          if (!(error instanceof RunLeaseLostError) && !controller.signal.aborted) {
+            await store.failStep(lease, { stepId: step.id, attemptId: step.attemptId,
+              errorCode: error instanceof Error ? error.name.slice(0, 128) : "StepFailed" });
+          }
+          throw error;
+        }
       },
     };
     try {
@@ -211,7 +228,8 @@ export class ReviewRunWorker {
       await withReviewRunContext(context, () => this.dependencies.execute(lease, binding));
       await assertActive();
       await this.dependencies.budget.closeRunBudget(lease);
-      await store.transition(lease, { to: "succeeded", outcomeCode: "review_completed" });
+      await store.transition(lease, { to: "succeeded", outcomeCode: lease.input.workflow === "review.deep.v1"
+        ? "deep_review_artifact_completed" : "review_completed" });
     } catch (error) {
       if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
       if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
@@ -229,6 +247,7 @@ export class ReviewRunWorker {
         error instanceof PublicationDefiniteFailureError ||
         error instanceof StalePublicationError ||
         error instanceof ReviewRunRevisionChangedError ||
+        error instanceof DeepReviewAnalysisFailedError ||
         error instanceof ModelBudgetExceededError ||
         error instanceof RunCheckpointCompatibilityError ||
         lease.jobAttempt >= REVIEW_RUNTIME_CONFIG.maxJobAttempts
@@ -264,4 +283,8 @@ function claimBinding(binding: PublicationBinding) {
     authorityGeneration: binding.generation,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
   };
+}
+
+function deepToolName(key: string): string | undefined {
+  return /^deep\.role\.(?:security|correctness)\.tool\.(read_file_range|search_changed_files|find_symbol_references|read_manifest|read_ci_status)\.\d+$/.exec(key)?.[1];
 }

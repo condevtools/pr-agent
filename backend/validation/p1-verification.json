@@ -1,0 +1,47 @@
+{
+  "stage": "P1",
+  "scope": "Explicit manual read-only multi-agent deep review; forced shadow",
+  "baselineCommit": "2f9118b7476ea02963c32a813f3d0d616a495b2c",
+  "verificationDate": "2026-10-29",
+  "checks": {
+    "unit": {
+      "passed": 290,
+      "skippedDockerSuites": 19,
+      "failed": 0
+    },
+    "dockerPostgreSQL": {
+      "passed": 130,
+      "suites": 19,
+      "failed": 0
+    },
+    "typecheck": "passed",
+    "build": "passed",
+    "dockerCompose": "passed",
+    "imageId": "sha256:822801dc29d4609b4e8445d1dcf2d019e485147eb640bff5cab18f1e4cda1882"
+  },
+  "coverage": [
+    "GH and GL actual production dispatch against local HTTP fixtures",
+    "HTTP 500 once then retry without repeating completed peer model step",
+    "JSONB checkpoint replay preserves canonical prompt bytes",
+    "partial artifact commit crash reuses final report with no extra model calls",
+    "integration generation revoked between steps prevents next action",
+    "same-tenant cross-integration ledger write and artifact read denied",
+    "role deadline aborts underlying provider fetch and removes queued model request",
+    "sensitive paths, percent encoding, symlink, binary, response limits",
+    "immutable artifact and retention",
+    "old default-single request identity preserved",
+    "strict OpenAI schema shape and nullable normalization without live provider calls"
+  ],
+  "limitations": [
+    "No real independent review benchmark supplied; precision, recall, production cost and latency gates remain NOT_VERIFIED",
+    "No default or automatic deep publication; shadow enforced in workflow and database",
+    "Fixture model responses are not quality evidence",
+    "No live provider writes or production activation"
+  ],
+  "reproduce": [
+    "npm --prefix backend run check",
+    "npm --prefix backend run build",
+    "npm --prefix backend test",
+    "npm --prefix backend run test:harness:pg"
+  ]
+}

@@ -50,6 +50,12 @@ try {
         GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.run_command_receipts,
           pr_agent_harness.run_waits TO pr_agent_app;
         GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO pr_agent_app;
+        GRANT SELECT, INSERT ON pr_agent_harness.evidence_records,
+          pr_agent_harness.finding_candidates, pr_agent_harness.finding_decisions,
+          pr_agent_harness.review_artifacts TO pr_agent_app;
+        REVOKE UPDATE, DELETE ON pr_agent_harness.evidence_records,
+          pr_agent_harness.finding_candidates, pr_agent_harness.finding_decisions,
+          pr_agent_harness.review_artifacts FROM pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
           pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO pr_agent_app;
     `);

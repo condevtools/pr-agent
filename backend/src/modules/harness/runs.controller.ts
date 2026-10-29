@@ -37,6 +37,11 @@ export class RunsController {
     return this.service.trace(this.service.authenticate(request), id, after);
   }
 
+  @Get(":id/artifact")
+  artifact(@Req() request: Request, @Param("id") id: string, @Query("raw") raw?: string) {
+    return this.service.artifact(this.service.authenticate(request), id, raw);
+  }
+
   @Post(":id/commands/:kind")
   @HttpCode(202)
   command(@Req() request: Request, @Param("id") id: string, @Param("kind") kind: string, @Body() body: unknown) {

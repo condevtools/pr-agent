@@ -94,6 +94,8 @@ if (!databaseUrl) {
       GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.run_command_receipts,
         pr_agent_harness.run_waits TO ${role};
       GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO ${role};
+      GRANT SELECT, INSERT ON pr_agent_harness.evidence_records,pr_agent_harness.finding_candidates,
+        pr_agent_harness.finding_decisions,pr_agent_harness.review_artifacts TO ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
         pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role};
     `);
@@ -167,6 +169,26 @@ if (!databaseUrl) {
       idempotencyKey: "offline-replay", body: { number: 43, mode: "report" } });
     assert.equal(response.status, 409);
     assert.equal(errorCode(response.value), "RUN_CONFLICT");
+  });
+
+  test("deep intake is explicit and cannot reuse the single workflow creation key", async () => {
+    const conflict = await request("/runs", { method: "POST", token: fullToken, idempotencyKey: "offline-replay",
+      body: { number: 42, workflow: "review.deep.v1" } });
+    assert.equal(conflict.status, 409);
+    const deep = await request("/runs", { method: "POST", token: fullToken, idempotencyKey: "deep-review",
+      body: { number: 42, workflow: "review.deep.v1" } });
+    assert.equal(deep.status, 202);
+    const saved = await adminPool.query("SELECT run_type,input_json,runtime_config_json FROM pr_agent_harness.agent_runs WHERE id=$1", [deep.value.id]);
+    assert.equal(saved.rows[0].run_type, "review.deep.v1");
+    assert.equal(saved.rows[0].runtime_config_json.deepBudget.version, 1);
+    const lookupCount = providerLookups;
+    providerOnline = false;
+    const replay = await request("/runs", { method: "POST", token: fullToken, idempotencyKey: "deep-review",
+      body: { number: 42, workflow: "review.deep.v1" } });
+    providerOnline = true;
+    assert.equal(replay.value.id, deep.value.id); assert.equal(providerLookups, lookupCount);
+    const rawDenied = await request(`/runs/${deep.value.id}/artifact?raw=true`, { token: readOnlyToken });
+    assert.equal(rawDenied.status, 403);
   });
 
   test("POST /runs rejects unknown request fields before provider lookup", async () => {

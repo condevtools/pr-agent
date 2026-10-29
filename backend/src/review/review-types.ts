@@ -27,6 +27,7 @@ export interface ReviewIssue {
 }
 
 export interface PullRequestReviewResult {
+  coverage?: { status: "complete" | "partial"; reasonCodes: readonly string[] };
   summary: string;
   riskLevel: RiskLevel;
   reviews: ReviewIssue[];

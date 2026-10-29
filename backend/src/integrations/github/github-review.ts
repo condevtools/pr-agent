@@ -487,7 +487,7 @@ export async function runGitHubReview(
       return;
     }
 
-    const reviewResult = await durableReviewAnalysis(collected.input, () => analyzePullRequest(collected.input));
+    const reviewResult = { ...await durableReviewAnalysis(collected.input, () => analyzePullRequest(collected.input)), coverage: collected.coverage };
 
     if (mode === "comment") {
       const posted = await publishGitHubLineComments(
@@ -964,7 +964,7 @@ export function readGitHubFeedbackSignals(
   return loadGitHubFeedbackSignals(owner, repo, pullNumber);
 }
 
-async function collectGitHubPullRequestContext(params: {
+export async function collectGitHubPullRequestContext(params: {
   octokit: MinimalGitHubOctokit;
   owner: string;
   repo: string;
@@ -1048,7 +1048,7 @@ async function collectGitHubPullRequestContext(params: {
   }
 
   const limits = resolveGitHubPatchCharLimits();
-  const { files: changedFiles } = buildDiffFileContexts({
+  const { files: changedFiles, coverage } = buildDiffFileContexts({
     candidates: files.map((file) => ({
       newPath: file.filename,
       oldPath: file.previous_filename ?? file.filename,
@@ -1122,6 +1122,7 @@ async function collectGitHubPullRequestContext(params: {
   return {
     input,
     files: changedFiles,
+    coverage: filesTruncated ? { status: "partial", reasonCodes: [...coverage.reasonCodes, "provider_file_limit"] } : coverage,
     filesTruncated,
     owner,
     repo,

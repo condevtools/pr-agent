@@ -521,6 +521,10 @@ function renderIssuesTable(
   locale: UiLocale,
 ): string {
   if (result.reviews.length === 0) {
+    if (result.coverage?.status === "partial") {
+      return localizeText({ zh: "### 问题清单\n- 审查覆盖不完整；当前结果不足以认定没有问题。",
+        en: "### Findings\n- Review coverage is incomplete; this result cannot establish that there are no issues." }, locale);
+    }
     return localizeText(
       {
         zh: "### 问题清单\n- 未发现明确问题。",

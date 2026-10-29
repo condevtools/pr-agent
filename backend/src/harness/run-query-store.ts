@@ -21,6 +21,10 @@ export interface RunSnapshot {
   cancelRequested: boolean;
   publicationStatus: string | null;
   contentPurgedAt: string | null;
+  artifactAvailable: boolean;
+  analysisStatus: string | null;
+  coverageStatus: string | null;
+  publicationMode: string | null;
   wait?: Record<string, unknown>;
 }
 export interface RunEventPage {
@@ -117,6 +121,7 @@ interface SnapshotRow {
   cancel_requested_at: Date | null; next_event_seq: string; event_retention_floor: string;
   publication_status: string | null; wait: Record<string, unknown> | null;
   content_purged_at: Date | null;
+  artifact_available: boolean; analysis_status: string | null; coverage_status: string | null; publication_mode: string | null;
 }
 
 async function selectScopedRun(client: PoolClient, principal: RunPrincipal, runId: string, lock = false): Promise<SnapshotRow> {
@@ -124,12 +129,17 @@ async function selectScopedRun(client: PoolClient, principal: RunPrincipal, runI
     `SELECT r.id,r.status,r.version,r.run_type,r.base_sha,r.head_sha,r.created_at,r.updated_at,r.finished_at,
             r.deadline_at,r.outcome_code,r.error_code,r.parent_run_id,r.cancel_requested_at,r.next_event_seq,r.event_retention_floor,r.content_purged_at,
             pb.status AS publication_status,
+            (ra.run_id IS NOT NULL AND ra.content_purged_at IS NULL) AS artifact_available,
+            ra.artifact_json->>'analysisStatus' AS analysis_status,
+            ra.artifact_json->'sourceCoverage'->>'status' AS coverage_status,
+            ra.artifact_json->>'publicationMode' AS publication_mode,
             (SELECT jsonb_build_object('id',w.id,'version',w.version,'batchId',w.batch_id,
               'operationId',w.business_operation_id,'operationVersion',w.operation_version,
               'intentHash',w.intent_hash,'allowedDecisions',w.allowed_decisions)
              FROM pr_agent_harness.run_waits w WHERE w.tenant_id=r.tenant_id AND w.run_id=r.id AND w.status='open') AS wait
      FROM pr_agent_harness.agent_runs r
      JOIN pr_agent_harness.integration_bindings ib ON ib.tenant_id=r.tenant_id AND ib.id=r.integration_id AND ib.active
+     LEFT JOIN pr_agent_harness.review_artifacts ra ON ra.tenant_id=r.tenant_id AND ra.run_id=r.id
      LEFT JOIN LATERAL (
        SELECT CASE WHEN count(*)=1 THEN max(b.status) END AS status
        FROM pr_agent_harness.run_publication_batches link
@@ -145,7 +155,9 @@ async function selectScopedRun(client: PoolClient, principal: RunPrincipal, runI
 }
 
 function mapSnapshot(row: SnapshotRow): RunSnapshot {
-  return { id: row.id, status: row.status, version: Number(row.version), runType: row.run_type,
+  return { artifactAvailable: row.artifact_available, analysisStatus: row.analysis_status,
+    coverageStatus: row.coverage_status, publicationMode: row.publication_mode,
+    id: row.id, status: row.status, version: Number(row.version), runType: row.run_type,
     baseSha: row.base_sha, headSha: row.head_sha, createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(), finishedAt: row.finished_at?.toISOString() ?? null,
     deadlineAt: row.deadline_at.toISOString(), outcomeCode: row.outcome_code, errorCode: row.error_code,

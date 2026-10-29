@@ -1,3 +1,4 @@
+import { ProviderHttpError } from "../src/core/provider-http-error.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -85,7 +86,7 @@ test("durable Gemini path disables fetch retries", async () => {
         systemPrompt: "system",
         prompt: "prompt",
       })),
-      /Gemini API error \(500\)/,
+      (error: unknown) => error instanceof ProviderHttpError && error.status === 500,
     );
     assert.equal(fetchCount, 1);
   } finally {

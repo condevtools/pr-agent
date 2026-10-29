@@ -12,6 +12,7 @@ import {
 } from "./model-execution-context.js";
 import { assertRunLease } from "./run-execution-store.js";
 import type { RunLease } from "./run-contracts.js";
+import { deepBudgetSchema, deepRolePrefix } from "./deep-budget.js";
 
 export interface ModelPriceRates {
   inputMicrosPerMillion: number;
@@ -152,6 +153,30 @@ export class ModelBudgetStore {
         throw new ModelBudgetExceededError("run");
       }
       const reservedCost = estimateMaximumCost(input.intent, input.policy.rates);
+      if (input.lease.input.workflow === "review.deep.v1") {
+        const partitions = deepBudgetSchema.parse(input.lease.runtimeConfig.deepBudget);
+        const step = await client.query<{ step_key: string }>(
+          `SELECT step_key FROM pr_agent_harness.agent_steps WHERE tenant_id=$1 AND run_id=$2 AND id=$3`,
+          [input.lease.tenantId, input.lease.runId, input.stepId],
+        );
+        const role = deepRolePrefix(step.rows[0]?.step_key ?? "");
+        const prefix = role === "critic" ? "deep.critic" : `deep.role.${role}.`;
+        const used = await client.query<{ input: string; output: string; cost: string }>(
+          `SELECT coalesce(sum(br.reserved_input_tokens),0)::text AS input,
+                  coalesce(sum(br.reserved_output_tokens),0)::text AS output,
+                  coalesce(sum(br.reserved_cost_micros),0)::text AS cost
+           FROM pr_agent_harness.model_budget_reservations br
+           JOIN pr_agent_harness.model_calls mc ON mc.tenant_id=br.tenant_id AND mc.id=br.model_call_id
+           JOIN pr_agent_harness.agent_steps s ON s.tenant_id=mc.tenant_id AND s.id=mc.step_id AND s.run_id=mc.run_id
+           WHERE br.tenant_id=$1 AND br.run_id=$2 AND br.status<>'released' AND starts_with(s.step_key,$3)`,
+          [input.lease.tenantId, input.lease.runId, prefix],
+        );
+        const consumed = used.rows[0]!;
+        const cap = partitions[role];
+        if (Number(consumed.input) + input.intent.inputTokenUpperBound > cap.inputTokens ||
+            Number(consumed.output) + input.intent.maxOutputTokens > cap.outputTokens ||
+            Number(consumed.cost) + reservedCost > cap.costMicros) throw new ModelBudgetExceededError("run");
+      }
       if (
         Number(budget.allocated_input_tokens) + input.intent.inputTokenUpperBound > Number(budget.input_token_limit) ||
         Number(budget.allocated_output_tokens) + input.intent.maxOutputTokens > Number(budget.output_token_limit) ||

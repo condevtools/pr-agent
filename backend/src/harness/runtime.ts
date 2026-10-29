@@ -15,7 +15,7 @@ import { verifyGitHubCredentialIdentity } from "./github-credential-identity.js"
 import { RunExecutionStore } from "./run-execution-store.js";
 import { getModelExecutionPolicy, ModelBudgetStore } from "./model-budget-store.js";
 import { ReviewRunWorker } from "./review-run-worker.js";
-import { executeSingleReviewRun } from "./review-workflow.js";
+import { executeReviewRun } from "./review-workflow.js";
 import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
 import { reviewVersionManifest } from "./versions.js";
 import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "./publication-outcome.js";
@@ -216,7 +216,7 @@ export async function startReviewRunWorker(): Promise<void> {
       const { provider, model } = resolveReviewModelConfiguration();
       return (await reviewVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash;
     },
-    execute: executeSingleReviewRun,
+    execute: executeReviewRun,
     onError: (error, runId) => process.emitWarning(JSON.stringify({ component: "review-run-worker", runId,
       errorType: error instanceof Error ? error.name : "unknown" })),
   });

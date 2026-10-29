@@ -242,6 +242,30 @@ async function scrubRunContent(
      WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
     [tenantId, runId],
   );
+  await client.query(
+    `UPDATE pr_agent_harness.evidence_records
+     SET summary='',result_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
+    [tenantId, runId],
+  );
+  await client.query(
+    `UPDATE pr_agent_harness.finding_candidates
+     SET record_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
+    [tenantId, runId],
+  );
+  await client.query(
+    `UPDATE pr_agent_harness.finding_decisions
+     SET record_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
+    [tenantId, runId],
+  );
+  await client.query(
+    `UPDATE pr_agent_harness.review_artifacts
+     SET artifact_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
+    [tenantId, runId],
+  );
 }
 
 async function administrativeIdentity(client: PoolClient): Promise<string> {

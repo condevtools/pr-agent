@@ -392,6 +392,7 @@ interface GitLabChange {
 }
 
 interface GitLabChangesResponse {
+  overflow?: boolean;
   changes: GitLabChange[];
   diff_refs: {
     base_sha: string;
@@ -411,6 +412,7 @@ interface GitLabCommentTarget {
 }
 
 interface GitLabCollectedContext extends GitLabCommentTarget {
+  coverage?: { status: "complete" | "partial"; reasonCodes: readonly string[] };
   input: PullRequestReviewInput;
   files: DiffFileContext[];
   webUrl: string;
@@ -1049,7 +1051,7 @@ export async function runGitLabReview(
       return { ok: true, message: "no textual diff to review" };
     }
 
-    const result = await durableReviewAnalysis(collected.input, () => analyzePullRequest(collected.input));
+    const result = { ...await durableReviewAnalysis(collected.input, () => analyzePullRequest(collected.input)), coverage: collected.coverage };
     if (mode === "comment") {
       await publishGitLabLineComments(
         gitlabToken,
@@ -2307,7 +2309,7 @@ async function runGitLabChangelog(params: GitLabChangelogRunParams): Promise<voi
   return gitLabCommandWorkflows.runChangelog(params);
 }
 
-async function collectGitLabMergeRequestContext(params: {
+export async function collectGitLabMergeRequestContext(params: {
   payload: GitLabMrWebhookBody;
   gitlabToken: string;
   baseUrl?: string;
@@ -2375,6 +2377,7 @@ async function collectGitLabMergeRequestContext(params: {
     files,
     totalAdditions,
     totalDeletions,
+    coverage,
   } = buildDiffFileContexts({
     candidates: sourceChanges.map((change) => ({
       newPath: change.new_path,
@@ -2436,6 +2439,7 @@ async function collectGitLabMergeRequestContext(params: {
   return {
     input,
     files,
+    coverage: changesResponse.overflow ? { status: "partial", reasonCodes: [...coverage.reasonCodes, "provider_diff_overflow"] } : coverage,
     baseUrl,
     projectId,
     mrId,

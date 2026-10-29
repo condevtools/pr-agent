@@ -1,13 +1,17 @@
-import { runGitHubReview } from "../integrations/github/github-review.js";
+import { collectGitHubPullRequestContext, runGitHubReview } from "../integrations/github/github-review.js";
 import { createRestBackedOctokit } from "../integrations/github/github-rest-client.js";
-import { runGitLabReview } from "../integrations/gitlab/gitlab-review.js";
+import { collectGitLabMergeRequestContext, runGitLabReview } from "../integrations/gitlab/gitlab-review.js";
+import { GitHubRepositoryReadAdapter } from "../integrations/github/github-repository-read-tools.js";
+import { GitLabRepositoryReadAdapter } from "../integrations/gitlab/gitlab-repository-read-tools.js";
+import { currentReviewRunContext, durableReviewCollection } from "./review-run-context.js";
+import { executeDeepReviewRun } from "./deep-review-run.js";
 import type { PublicationBinding } from "./authority.js";
 import type { RunLease } from "./run-contracts.js";
 import { reviewRunInputSchema } from "./review-run-input.js";
 import { publicationRuntimeForBinding } from "./runtime.js";
 
 /** The production worker reuses the same collectors, analyzer, renderers and publisher. */
-export async function executeSingleReviewRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
+export async function executeReviewRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
   const input = reviewRunInputSchema.parse(lease.input);
   if (lease.tenantId !== binding.tenantId || lease.integrationId !== binding.id
       || input.platform !== binding.platform
@@ -26,7 +30,18 @@ export async function executeSingleReviewRun(lease: RunLease, binding: Publicati
   if (input.platform === "github") {
     const [owner, repo, extra] = input.target.repository.split("/");
     if (!owner || !repo || extra) throw new Error("GitHub repository must have an owner and name");
-    const octokit = createRestBackedOctokit({ token: await runtime.resolveCredential(), baseUrl: binding.origin });
+    const token = await runtime.resolveCredential();
+    const octokit = createRestBackedOctokit({ token, baseUrl: binding.origin });
+    if (input.workflow === "review.deep.v1") {
+      const collected = await durableReviewCollection("github.collect_context.v1", () => collectGitHubPullRequestContext({
+        octokit, owner, repo, pullNumber: input.target.number, customRules: input.options.customRules,
+        includeCiChecks: input.options.includeCiChecks,
+      }));
+      await executeDeepReviewRun(collected, new GitHubRepositoryReadAdapter({
+        apiBaseUrl: binding.origin, token, owner, repo, headSha: lease.headSha, signal: currentReviewRunContext()?.signal,
+      }));
+      return;
+    }
     await runGitHubReview({
       context: { repo: () => ({ owner, repo }), octokit, log: logger },
       pullNumber: input.target.number, mode: input.mode, trigger: input.trigger,
@@ -35,9 +50,8 @@ export async function executeSingleReviewRun(lease: RunLease, binding: Publicati
     });
     return;
   }
-  const result = await runGitLabReview({
-    payload: {
-      object_kind: "merge_request", user: { username: input.presentation.author },
+  const payload = {
+      object_kind: "merge_request" as const, user: { username: input.presentation.author },
       project: { id: binding.providerRepositoryId, name: binding.repository, path_with_namespace: binding.repository,
         web_url: binding.origin },
       object_attributes: { iid: input.target.number, action: "update", state: "opened",
@@ -45,7 +59,19 @@ export async function executeSingleReviewRun(lease: RunLease, binding: Publicati
         url: input.presentation.webUrl, source_branch: input.presentation.headBranch,
         target_branch: input.presentation.baseBranch, draft: input.presentation.draft,
         last_commit: { id: lease.headSha } },
-    },
+    };
+  if (input.workflow === "review.deep.v1") {
+    const token = await runtime.resolveCredential();
+    const collected = await durableReviewCollection("gitlab.collect_context.v1", () => collectGitLabMergeRequestContext({
+      payload, gitlabToken: token, baseUrl: binding.origin, customRules: input.options.customRules,
+      includeCiChecks: input.options.includeCiChecks,
+    }));
+    await executeDeepReviewRun(collected, new GitLabRepositoryReadAdapter({
+      baseUrl: binding.origin, token, projectId: binding.providerRepositoryId, headSha: lease.headSha, signal: currentReviewRunContext()?.signal,
+    }));
+    return;
+  }
+  const result = await runGitLabReview({ payload,
     headers: {}, logger, mode: input.mode, trigger: input.trigger,
     ...input.options, sourceKey: input.source.key, sourceHash: input.source.hash,
     publicationRuntime: { ...runtime, binding: { ...binding, platform: "gitlab" } }, throwOnError: true,

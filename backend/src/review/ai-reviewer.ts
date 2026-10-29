@@ -104,6 +104,11 @@ export function createAiReviewerRuntime(
 
 const defaultAiReviewerRuntime = createAiReviewerRuntime();
 
+/** Shared transport resources keep single and deep workflows under one shutdown/concurrency boundary. */
+export function getSharedAiReviewerRuntime(): Readonly<AiReviewerRuntime> {
+  return defaultAiReviewerRuntime;
+}
+
 export function beginAiShutdown(
   runtime: AiReviewerRuntime = defaultAiReviewerRuntime,
 ): void {

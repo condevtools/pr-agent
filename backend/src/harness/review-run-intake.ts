@@ -1,3 +1,4 @@
+import { freezeDeepBudget } from "./deep-budget.js";
 import type { PublicationBinding } from "./authority.js";
 import { HarnessRunStore, type CreateRunInput } from "./postgres/run-store.js";
 import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "./model-budget-store.js";
@@ -50,7 +51,8 @@ export async function buildReviewRunCreationInput(
     runType: parsed.workflow, baseSha: parsed.revision.baseSha, headSha: parsed.revision.headSha,
     ...manifest, input: parsed, authorityGeneration: binding.generation,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
-    runtimeConfig: { ...REVIEW_RUNTIME_CONFIG, modelPolicy: policy },
+    runtimeConfig: { ...REVIEW_RUNTIME_CONFIG, modelPolicy: policy,
+      ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits) } : {}) },
     limits: { maxRunMs: REVIEW_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: REVIEW_RUNTIME_CONFIG.maxJobAttempts,
       maxStepAttempts: REVIEW_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
     admission: (client, runId) => reserveRunBudgetInTransaction(client, { tenantId: binding.tenantId, runId, policy }),

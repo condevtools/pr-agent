@@ -45,6 +45,7 @@ export async function appendRunFact(client: PoolClient, input: RunFactInput): Pr
 const PUBLIC_FIELDS = new Set(["runType", "baseSha", "headSha", "status", "version", "epoch",
   "jobAttempt", "stepId", "attemptId", "batchId", "operationSetHash", "checkpointSequence",
   "reasonCode", "outcomeCode", "commandKind", "receiptId", "waitId", "waitVersion", "newRunId",
+  "analysisStatus", "coverageStatus", "publicationMode", "artifactHash",
   "publicationStatus", "outcomeGeneration", "businessOperationId", "operationVersion"]);
 
 /** Public events contain lifecycle facts, never raw prompts, output, or error bodies. */

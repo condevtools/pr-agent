@@ -5,7 +5,7 @@ const text = z.string().max(100_000);
 const sha = z.string().min(1).max(128);
 
 export const reviewRunInputSchema = z.object({
-  schemaVersion: z.literal(1), workflow: z.literal("review.single.v1"),
+  schemaVersion: z.literal(1), workflow: z.enum(["review.single.v1", "review.deep.v1"]),
   platform: z.enum(["github", "gitlab"]),
   target: z.object({
     origin: z.string().url(), repository: z.string().min(1).max(512),

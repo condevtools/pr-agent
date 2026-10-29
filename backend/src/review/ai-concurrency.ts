@@ -51,9 +51,10 @@ export class AiConcurrencyLimiter {
     }
   }
 
-  async withLimit<T>(task: () => Promise<T>): Promise<T> {
-    await this.acquire();
+  async withLimit<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal);
     try {
+      signal?.throwIfAborted();
       return await task();
     } finally {
       this.release();
@@ -74,7 +75,8 @@ export class AiConcurrencyLimiter {
     return this.activeRequests === 0;
   }
 
-  private async acquire(): Promise<void> {
+  private async acquire(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (this.shutdownRequested) {
       throw new Error("AI reviewer is shutting down");
     }
@@ -86,9 +88,24 @@ export class AiConcurrencyLimiter {
           `AI reviewer queue is full (AI_MAX_QUEUE_SIZE=${this.resolveMaxQueueSize()})`,
         );
       }
-      await new Promise<void>((resolve) => {
-        this.waitQueue.push(resolve);
+      await new Promise<void>((resolve, reject) => {
+        const wake = () => {
+          signal?.removeEventListener("abort", abort);
+          resolve();
+        };
+        const abort = () => {
+          const position = this.waitQueue.indexOf(wake);
+          if (position >= 0) this.waitQueue.splice(position, 1);
+          reject(signal?.reason ?? new Error("AI request aborted"));
+        };
+        this.waitQueue.push(wake);
+        signal?.addEventListener("abort", abort, { once: true });
       });
+      if (signal?.aborted) {
+        // A released slot may have woken this request immediately before cancellation.
+        this.waitQueue.shift()?.();
+        signal.throwIfAborted();
+      }
       if (this.shutdownRequested) {
         throw new Error("AI reviewer is shutting down");
       }

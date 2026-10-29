@@ -332,6 +332,7 @@ export interface GitHubChangelogRunParams {
 }
 
 export interface GitHubCollectedContext {
+  coverage?: { status: "complete" | "partial"; reasonCodes: readonly string[] };
   input: PullRequestReviewInput;
   files: DiffFileContext[];
   filesTruncated: boolean;

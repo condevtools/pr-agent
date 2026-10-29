@@ -199,6 +199,23 @@ if (!databaseUrl) {
     );
   });
 
+  test("caught role failures settle physical attempts and allow a bounded new attempt", async () => {
+    const fixture = await createFixture("role-failure");
+    const lease = (await storeA.claim(fixture.binding, "role-worker", fixture.runtimeHash))!;
+    const step = await storeA.beginStep(lease, { stepKey: "deep.role.security.tool.read_file_range.1", kind: "tool",
+      inputHash: hash("tool-input"), tool: { name: "read_file_range", kind: "repository_read", requestHash: hash("request") } });
+    await storeA.failStep(lease, { stepId: step.id, attemptId: step.attemptId, errorCode: "ToolTimeout" });
+    const settled = await adminPool.query(`SELECT s.status AS step,a.status AS attempt,t.status AS tool
+      FROM pr_agent_harness.agent_steps s JOIN pr_agent_harness.step_attempts a ON a.step_id=s.id
+      JOIN pr_agent_harness.tool_calls t ON t.step_attempt_id=a.id WHERE s.id=$1`, [step.id]);
+    assert.deepEqual(settled.rows[0], { step: "failed", attempt: "failed", tool: "failed_definite" });
+    const retry = await storeA.beginStep(lease, { stepKey: step.stepKey, kind: "tool", inputHash: hash("tool-input"),
+      tool: { name: "read_file_range", kind: "repository_read", requestHash: hash("request") } });
+    assert.equal(retry.id, step.id); assert.equal(retry.attemptNumber, 2);
+    await assert.rejects(storeA.failStep({ ...lease, epoch: lease.epoch + 1 },
+      { stepId: retry.id, attemptId: retry.attemptId, errorCode: "late" }), RunLeaseLostError);
+  });
+
   test("deadline and attempt bounds dead-letter without reviving terminal Runs", async () => {
     const fixture = await createFixture("attempt-dlq");
     await adminPool.query(

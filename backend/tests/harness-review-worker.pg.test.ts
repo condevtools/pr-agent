@@ -19,7 +19,7 @@ import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
 import type { RunLease } from "../src/harness/run-contracts.js";
 import { RunExecutionStore } from "../src/harness/run-execution-store.js";
 import { closeHarnessRuntime, publicationRuntimeForBinding } from "../src/harness/runtime.js";
-import { executeSingleReviewRun } from "../src/harness/review-workflow.js";
+import { executeReviewRun } from "../src/harness/review-workflow.js";
 import { runGitHubReview } from "../src/integrations/github/github-review.js";
 import { createRestBackedOctokit } from "../src/integrations/github/github-rest-client.js";
 
@@ -369,7 +369,7 @@ if (!databaseUrl) {
     assert.doesNotMatch(persisted.rows[0]?.payload ?? "", /ghp_worker_secret_must_not_persist|Authorization:\s*Bearer/i);
   });
 
-  test("production enqueue and executeSingleReviewRun use local GitHub and OpenAI HTTP through a sealed batch", async () => {
+  test("production enqueue and executeReviewRun use local GitHub and OpenAI HTTP through a sealed batch", async () => {
     const beforeCalls = httpCalls.length;
     const queued = await enqueueReviewRun(binding, {
       schemaVersion: 1, workflow: "review.single.v1", platform: "github",
@@ -390,7 +390,7 @@ if (!databaseUrl) {
     const worker = new ReviewRunWorker({
       store: executionStore, budget: budgetStore, bindings: async () => [binding],
       runtimeHash: async () => pinned.rows[0]!.runtime_version_hash,
-      execute: executeSingleReviewRun, onError: (error) => { errors.push(error); },
+      execute: executeReviewRun, onError: (error) => { errors.push(error); },
     }, 1);
     await worker.tick();
     await worker.drain();
@@ -466,7 +466,7 @@ if (!databaseUrl) {
       const worker = new ReviewRunWorker({
         store: executionStore, budget: budgetStore, bindings: async () => [binding],
         runtimeHash: async () => pinned.rows[0]!.runtime_version_hash,
-        execute: executeSingleReviewRun, onError: () => undefined,
+        execute: executeReviewRun, onError: () => undefined,
       }, 1);
       await worker.tick();
       await worker.drain();

@@ -141,3 +141,5 @@ PG 测试命令自行创建隔离 Docker 容器、随机本地端口和密码，
 `docker compose run --rm harness-migrate` 可以重复验证/应用迁移。已应用 SQL 有校验和保护；未来变更必须新增迁移，不能修改历史文件。升级前备份并验证恢复，回滚服务也必须保留同一发布账和权限协议，不能回到裸写旧版本。
 
 P0c 后续补齐 Run 控制 API、SSE 和发布结果回流；P0d 验证排空切换。P1 加入证据驱动的多 Agent 评审；FixRun 保持独立权限域和验证/审批流程；EvolutionRun 作为离线评测与候选改进控制面。当前不引入 Redis/Kafka：PG 已承担持久事实和恢复协调，暂没有证明需要额外队列的容量数据。不能据本阶段宣称 Harness 49 项全部达标或自动修复、自我演化已上线。
+
+多 Agent 深审的创建、证据门和 shadow 报告见 [HARNESS_DEEP_REVIEW.md](HARNESS_DEEP_REVIEW.md)。
