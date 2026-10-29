@@ -29,4 +29,4 @@ Evidence 由成功工具 Step 的精确输出登记，服务端校验 request ha
 
 自动化测试覆盖真实 Docker PostgreSQL 的角色并发、Step 复用、预算拒绝、证据伪造、跨 Run/revision 拒绝、不可变报告、内容保留，以及只读工具的路径、响应和符号链接限制。模型测试使用确定性 fixture；它们不构成真实精确度/召回率、修复成功率或 Evolution 改善证据。单审与深审的真实质量、成本和时延比较尚未提供，自动发布继续关闭。
 
-本阶段最终验证：290 项单元测试、130 项 Docker PostgreSQL 测试（19 suites）、typecheck/build 和编译镜像的 Compose smoke 通过。可复现命令和证据边界见 [验证记录](validation/p1-verification.json)。
+本阶段最终验证：290 项单元测试、130 项 Docker PostgreSQL 测试（19 suites）、typecheck/build 和编译镜像的 Compose smoke 通过。可复现命令和证据边界见 [验证记录](../validation/engineering/p1-verification.json)。

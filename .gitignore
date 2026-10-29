@@ -5,6 +5,8 @@ dist
 .DS_Store
 .worktrees/
 docs/
+!backend/docs/
+!backend/docs/**
 .pr-agent-runtime-state.json
 .pr-agent-runtime-state.sqlite3
 .pr-agent-runtime-state.sqlite3-shm

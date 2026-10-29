@@ -357,6 +357,8 @@ flowchart LR
 
 ## 项目结构
 
+后端启动、测试与功能文档见 [后端开发指南](backend/README.md)。
+
 ```
 pr-agent/
 ├── backend/
@@ -376,8 +378,12 @@ pr-agent/
 │   │   ├── integrations/            # GitHub / GitLab / notifications 适配层
 │   │   ├── core/                    # 通用配置、HTTP、状态、安全与基础工具
 │   │   └── types/                   # 共享类型声明
-│   ├── tests/                      # 后端测试套件
-│   │   └── support/                # 测试辅助 API，不进入生产构建
+│   ├── tests/                      # 按功能模块组织的测试
+│   │   ├── support/                # 公共测试辅助 API
+│   │   └── fixtures/               # 测试输入与子进程夹具
+│   ├── docs/                       # 运行时、API、运维及业务功能文档
+│   ├── validation/                 # 工程、容量与模型评测历史证据
+│   ├── README.md                   # 后端开发与验证入口
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
@@ -386,7 +392,7 @@ pr-agent/
 │   ├── public/                     # 静态资源
 │   ├── package.json
 │   └── next.config.ts
-├── docs/                           # 产品文档、路线图、流程资产
+├── docs/                           # 本地规划资料（不纳入版本管理）
 ├── data/                           # 本地/运行时持久化数据挂载点
 ├── secrets/                        # 本地私钥挂载目录（不提交）
 ├── Dockerfile                      # 后端容器镜像

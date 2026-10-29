@@ -112,6 +112,6 @@ Intake 使用真实 Nest HTTP、受限 PG 角色和本地 provider fixture；wor
 
 性能阈值与实际结果应一起审阅；首次测量或某个 `passed` 字段不能代替对阈值的核对。真实业务基线尚未提供，多 Agent 质量和 Evolution promotion 需要后续独立数据。
 
-2026-10-29 隔离资格测试的[完整结果](validation/p0d-capacity-qualified.json)：15,000 次入队请求零失败，P95 226.7ms（阈值 <250ms）；10,000 个 noop Run 在 106.174 秒内完成，claim P95 26.28ms，重复领取为零。100 个并发预算申请严格得到 50 个准入、50 个拒绝。SSE 连接与游标重连检查通过。
+2026-10-29 隔离资格测试的[完整结果](../validation/capacity/p0d-capacity-qualified.json)：15,000 次入队请求零失败，P95 226.7ms（阈值 <250ms）；10,000 个 noop Run 在 106.174 秒内完成，claim P95 26.28ms，重复领取为零。100 个并发预算申请严格得到 50 个准入、50 个拒绝。SSE 连接与游标重连检查通过。
 
-[首轮反例](validation/p0d-capacity-first-counterexample.json)保留原始数据：入队 P95 278.62ms，未达到门限。该历史文件的 `passed: true` 来自当时遗漏延迟判定的验证器，已被作废；不能作为通过证明。修正判定后重新完整运行，得到上述资格测试结果。此结果仅适用于报告描述的隔离环境，不代表生产 SLO。
+[首轮反例](../validation/capacity/p0d-capacity-first-counterexample.json)保留原始数据：入队 P95 278.62ms，未达到门限。该历史文件的 `passed: true` 来自当时遗漏延迟判定的验证器，已被作废；不能作为通过证明。修正判定后重新完整运行，得到上述资格测试结果。此结果仅适用于报告描述的隔离环境，不代表生产 SLO。

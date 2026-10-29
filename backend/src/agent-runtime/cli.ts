@@ -288,7 +288,7 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | snapshot-retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/HARNESS.md)");
+    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | snapshot-retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
   }
 } catch (error) {
   // Do not dump the Pool/driver error object, which can contain connection credentials.

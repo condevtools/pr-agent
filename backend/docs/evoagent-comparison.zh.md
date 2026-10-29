@@ -29,7 +29,7 @@
 
 ## 与 PR-Agent 的联系和主要区别
 
-PR-Agent 原有核心是平台集成驱动的单次结构化审查：[standard/reviewer.ts](./src/review/standard/reviewer.ts) 负责标准审查与结果 schema，共享 provider、配置和并发控制已归入 [model/](./src/model/)；GitHub/GitLab collector、policy、CI、secret scan、报告与评论发布已有完整调用链。EvoAgent 的重点更多落在审查角色协作、工具探索和离线演化实验。二者都围绕代码 review，但可迁移的主要是执行模式和证据方法，不是直接复制 Python 服务。
+PR-Agent 原有核心是平台集成驱动的单次结构化审查：[standard/reviewer.ts](../src/review/standard/reviewer.ts) 负责标准审查与结果 schema，共享 provider、配置和并发控制已归入 [model/](../src/model)；GitHub/GitLab collector、policy、CI、secret scan、报告与评论发布已有完整调用链。EvoAgent 的重点更多落在审查角色协作、工具探索和离线演化实验。二者都围绕代码 review，但可迁移的主要是执行模式和证据方法，不是直接复制 Python 服务。
 
 | 方面 | EvoAgent 源码表现 | PR-Agent 的选择 |
 | --- | --- | --- |
@@ -42,7 +42,7 @@ PR-Agent 原有核心是平台集成驱动的单次结构化审查：[standard/r
 | Fix | 显式生成 patch 并进行可配置检查 | 独立 FixRun；code/test patch 分离、Docker 差分验证、精确意图审批，默认 suggestion |
 | Evolution | 根因生成器可提出 prompt/delegation/tool/budget 配置 | 离线 EvolutionRun；V1 只允许 prompt/tool description 文本，禁止修改权限、预算和拓扑 |
 
-当前生产底座的源码位置包括 [Run worker](./src/agent-runtime/execution/run-worker.ts)、[执行存储](./src/agent-runtime/execution/store.ts)、[模型预算](./src/agent-runtime/budget/model-budget-store.ts)、[发布账](./src/agent-runtime/publication/publication.ts)、[Run API](./src/http/runs/runs.service.ts)。阶段实现与实际验证分别报告；P1 的 deep 已实现为显式触发、强制 shadow 的只读工作流，见 [实现与验证边界](HARNESS_DEEP_REVIEW.md)；Fix 已实现为独立建议/隔离验证/人工审批子 Run，GitHub 受控 Draft PR、GitLab suggestion-only，见 [Fix 实现边界](HARNESS_FIX.md)；Evolution 的反馈、独立标注、冻结数据集、受限候选与生产路径离线回放，以及按仓库双人审批、最多 5% 灰度和回滚均已实现，见 [Evolution 实现边界](HARNESS_EVOLUTION.md)。发布激活默认关闭，功能实现不等于独立质量验收。
+当前生产底座的源码位置包括 [Run worker](../src/agent-runtime/execution/run-worker.ts)、[执行存储](../src/agent-runtime/execution/store.ts)、[模型预算](../src/agent-runtime/budget/model-budget-store.ts)、[发布账](../src/agent-runtime/publication/publication.ts)、[Run API](../src/http/runs/runs.service.ts)。阶段实现与实际验证分别报告；P1 的 deep 已实现为显式触发、强制 shadow 的只读工作流，见 [实现与验证边界](deep-review.md)；Fix 已实现为独立建议/隔离验证/人工审批子 Run，GitHub 受控 Draft PR、GitLab suggestion-only，见 [Fix 实现边界](fix.md)；Evolution 的反馈、独立标注、冻结数据集、受限候选与生产路径离线回放，以及按仓库双人审批、最多 5% 灰度和回滚均已实现，见 [Evolution 实现边界](evolution.md)。发布激活默认关闭，功能实现不等于独立质量验收。
 
 ## 优势、短板与补强顺序
 

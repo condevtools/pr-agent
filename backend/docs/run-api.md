@@ -1,6 +1,6 @@
 # Durable Run API
 
-The API runs in the existing Nest application. PostgreSQL in the root Docker Compose file stores Runs, jobs, events, command receipts and publication outcomes. No Redis or Kafka is required. See [HARNESS.md](HARNESS.md) for database provisioning and publication authority.
+The API runs in the existing Nest application. PostgreSQL in the root Docker Compose file stores Runs, jobs, events, command receipts and publication outcomes. No Redis or Kafka is required. See [agent-runtime.md](agent-runtime.md) for database provisioning and publication authority.
 
 ## Authentication
 
@@ -98,8 +98,8 @@ Trace exposes step/call/receipt metadata and hashes. It does not return raw prom
 
 Run `npm test`, `npm run check`, `npm run build`, and `npm run test:harness:pg` from `backend`. The PostgreSQL runner creates a disposable PostgreSQL 17 Docker container and fresh database per suite, then removes only its own container. API tests use a real Nest HTTP server, a restricted database role and a local provider fixture. No live provider writes are needed.
 
-多 Agent 深审可显式指定 `workflow: "review.deep.v1"`，并通过 `/runs/:id/artifact` 查询 shadow 报告。默认 single 的幂等行为不变。角色、证据门、预算和验证边界见 [深审说明](HARNESS_DEEP_REVIEW.md)。
+多 Agent 深审可显式指定 `workflow: "review.deep.v1"`，并通过 `/runs/:id/artifact` 查询 shadow 报告。默认 single 的幂等行为不变。角色、证据门、预算和验证边界见 [深审说明](deep-review.md)。
 
 ## P2 FixRun
 
-Fix 创建、人工 relevance、精确审批与撤销接口见 [HARNESS_FIX.md](HARNESS_FIX.md)。artifact 使用统一 `/runs/:id/artifact`，发布是独立 `fix.publish.v1` child Run；普通 review 不会自动触发修复。
+Fix 创建、人工 relevance、精确审批与撤销接口见 [fix.md](fix.md)。artifact 使用统一 `/runs/:id/artifact`，发布是独立 `fix.publish.v1` child Run；普通 review 不会自动触发修复。

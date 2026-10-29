@@ -357,6 +357,8 @@ flowchart LR
 
 ## Project Structure
 
+See the [backend guide](backend/README.md) for setup, tests and feature documentation.
+
 ```
 pr-agent/
 ├── backend/
@@ -376,8 +378,12 @@ pr-agent/
 │   │   ├── integrations/            # GitHub / GitLab / notifications adapters
 │   │   ├── core/                    # Shared config, HTTP, state, security and utilities
 │   │   └── types/                   # Shared ambient type declarations
-│   ├── tests/                      # Backend test suite
-│   │   └── support/                # Test helpers, excluded from production builds
+│   ├── tests/                      # Tests grouped by capability
+│   │   ├── support/                # Shared test helpers
+│   │   └── fixtures/               # Test inputs and child-process fixtures
+│   ├── docs/                       # Runtime, API, operations and feature manuals
+│   ├── validation/                 # Historical engineering, capacity and model evidence
+│   ├── README.md                   # Backend setup and verification guide
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
@@ -386,7 +392,7 @@ pr-agent/
 │   ├── public/                     # Static assets
 │   ├── package.json
 │   └── next.config.ts
-├── docs/                           # Product docs, roadmaps, process assets
+├── docs/                           # Local planning material (not versioned)
 ├── data/                           # Local/runtime persisted state mount
 ├── secrets/                        # Local private key mount (not committed)
 ├── Dockerfile                      # Backend container image

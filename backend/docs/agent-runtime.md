@@ -1,6 +1,6 @@
-# PostgreSQL publication harness
+# Agent Runtime：PostgreSQL 持久执行与发布
 
-PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖发布持久化、Run worker、checkpoint、模型预算，以及 Run API、命令回执、SSE 和发布结局恢复。仓库默认仍是同步分析；异步运行沿用现有 GitHub/GitLab 收集器、分析器和发布器。API 鉴权、路由和人工恢复契约见 [HARNESS_API.md](HARNESS_API.md)。
+PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖发布持久化、Run worker、checkpoint、模型预算，以及 Run API、命令回执、SSE 和发布结局恢复。仓库默认仍是同步分析；异步运行沿用现有 GitHub/GitLab 收集器、分析器和发布器。API 鉴权、路由和人工恢复契约见 [run-api.md](run-api.md)。
 
 ## 启动与账户
 
@@ -107,7 +107,7 @@ docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" harness-migr
 
 ## 异步 Run 与模型预算
 
-`integration_bindings.review_execution_mode` 默认为 `legacy_sync`。异步切换使用独立的 execution drain/switch 协议；不要直接修改表来绕过排空和 generation 检查。操作步骤、保留策略、备份演练及故障证据见 [HARNESS_OPERATIONS.md](HARNESS_OPERATIONS.md)。
+`integration_bindings.review_execution_mode` 默认为 `legacy_sync`。异步切换使用独立的 execution drain/switch 协议；不要直接修改表来绕过排空和 generation 检查。操作步骤、保留策略、备份演练及故障证据见 [operations.md](operations.md)。
 
 异步入口在确认签名、服务端仓库绑定和不可变 base/head SHA 后，同一事务保存 Run、初始 Event、Job、审计和预算 envelope，再返回 Run ID。输入只保存评审所需字段，凭证由 Worker 从服务端绑定重新解析。重复来源复用 Run，跨实例并发领取由 PostgreSQL Run lease 和单调 epoch 仲裁；Job 不另持有第二套租约。
 
@@ -142,4 +142,4 @@ PG 测试命令自行创建隔离 Docker 容器、随机本地端口和密码，
 
 P0c 后续补齐 Run 控制 API、SSE 和发布结果回流；P0d 验证排空切换。P1 加入证据驱动的多 Agent 评审；FixRun 保持独立权限域和验证/审批流程；EvolutionRun 作为离线评测与候选改进控制面。当前不引入 Redis/Kafka：PG 已承担持久事实和恢复协调，暂没有证明需要额外队列的容量数据。不能据本阶段宣称 Harness 49 项全部达标或自动修复、自我演化已上线。
 
-多 Agent 深审的创建、证据门和 shadow 报告见 [HARNESS_DEEP_REVIEW.md](HARNESS_DEEP_REVIEW.md)。
+多 Agent 深审的创建、证据门和 shadow 报告见 [deep-review.md](deep-review.md)。
