@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { HarnessDatabase } from "./postgres/database.js";
+import { appendRunFact } from "./run-events.js";
 import type { RunStatus } from "./postgres/run-store.js";
 import {
   RunCheckpointCompatibilityError,
@@ -14,6 +15,7 @@ import {
   type RunExecutionSnapshot,
   type RunLease,
   type RunLeaseIdentity,
+  type RunJobKind,
   type RunStep,
   type RunStepKind,
   type SweepResult,
@@ -31,6 +33,8 @@ interface RunExecutionStoreOptions {
 interface ClaimRow {
   job_id: string;
   job_attempt: number;
+  job_kind: RunJobKind;
+  job_payload_json: JsonObject;
   id: string;
   integration_id: string;
   lease_epoch: string;
@@ -108,8 +112,10 @@ export class RunExecutionStore {
       );
       if (!authority.rows[0]?.allowed) return undefined;
 
-      const candidate = await client.query<{ job_id: string; run_id: string }>(
-        `SELECT j.id AS job_id, r.id AS run_id
+      const candidate = await client.query<{
+        job_id: string; run_id: string; job_kind: RunJobKind; job_payload_json: JsonObject;
+      }>(
+        `SELECT j.id AS job_id, r.id AS run_id,j.job_kind,j.job_payload_json
          FROM pr_agent_harness.job_queue j
          JOIN pr_agent_harness.agent_runs r
            ON r.tenant_id=j.tenant_id AND r.id=j.run_id
@@ -131,7 +137,7 @@ export class RunExecutionStore {
         return undefined;
       }
 
-      const run = await client.query<Omit<ClaimRow, "job_id" | "job_attempt">>(
+      const run = await client.query<Omit<ClaimRow, "job_id" | "job_attempt" | "job_kind" | "job_payload_json">>(
         `UPDATE pr_agent_harness.agent_runs
          SET status='running',lease_owner=$3,
              lease_expires_at=now()+($4::double precision*interval '1 millisecond'),
@@ -163,6 +169,152 @@ export class RunExecutionStore {
         ...run.rows[0]!,
         job_id: selected.job_id,
         job_attempt: job.rows[0]!.attempt_count,
+        job_kind: selected.job_kind,
+        job_payload_json: selected.job_payload_json,
+      }, binding.tenantId, owner);
+    });
+  }
+
+  async claimPublicationOutcome(
+    binding: ClaimableBinding,
+    owner: string,
+    runtimeVersionHash: string,
+  ): Promise<RunLease | undefined> {
+    return this.claimSpecialJob(binding, owner, runtimeVersionHash, "publication_outcome");
+  }
+
+  async claimManualResume(
+    binding: ClaimableBinding,
+    owner: string,
+    runtimeVersionHash: string,
+  ): Promise<RunLease | undefined> {
+    return this.claimSpecialJob(binding, owner, runtimeVersionHash, "manual_resume");
+  }
+
+  private async claimSpecialJob(
+    binding: ClaimableBinding,
+    owner: string,
+    runtimeVersionHash: string,
+    kind: "publication_outcome" | "manual_resume",
+  ): Promise<RunLease | undefined> {
+    requiredText(owner, "lease owner");
+    requiredHash(runtimeVersionHash, "runtime version hash");
+    const expectedStatus = kind === "publication_outcome"
+      ? "waiting_for_reconciliation"
+      : "waiting_for_user";
+    return this.db.transaction(binding.tenantId, async (client) => {
+      const authority = await client.query<{ allowed: boolean }>(
+        `SELECT pr_agent_harness.lock_resumable_review_execution_authority(
+           $1::uuid,$2::uuid,$3::bigint,$4::bigint
+         ) AS allowed`,
+        [binding.tenantId, binding.integrationId, binding.authorityGeneration,
+          binding.executionModeGeneration],
+      );
+      if (!authority.rows[0]?.allowed) return undefined;
+
+      await client.query(
+        `UPDATE pr_agent_harness.job_queue j
+         SET max_attempts=LEAST(j.max_attempts,
+               COALESCE((r.runtime_config_json->>'maxJobAttempts')::integer,3)),
+             updated_at=now()
+         FROM pr_agent_harness.agent_runs r
+         WHERE j.tenant_id=$1 AND j.job_kind=$2 AND j.status IN ('ready','retry_wait')
+           AND r.tenant_id=j.tenant_id AND r.id=j.run_id`,
+        [binding.tenantId, kind],
+      );
+      await terminalizeExhaustedSpecialJobs(client, binding, kind);
+
+      await client.query(
+        `UPDATE pr_agent_harness.job_queue j
+         SET status='completed',last_error_code='stale_special_job',completed_at=now(),updated_at=now()
+         FROM pr_agent_harness.agent_runs r
+         WHERE j.tenant_id=$1 AND j.job_kind=$2 AND j.status IN ('ready','retry_wait')
+           AND r.tenant_id=j.tenant_id AND r.id=j.run_id
+           AND (r.status IN ('succeeded','failed','cancelled')
+             OR j.expected_run_version<>r.version
+             OR j.expected_batch_id IS DISTINCT FROM r.waiting_batch_id
+             OR j.expected_operation_set_hash IS DISTINCT FROM r.waiting_operation_set_hash)`,
+        [binding.tenantId, kind],
+      );
+
+      const predicate = kind === "publication_outcome"
+        ? `j.outcome_generation=r.publication_outcome_generation
+           AND j.expected_batch_id=r.waiting_batch_id
+           AND j.expected_operation_set_hash=r.waiting_operation_set_hash
+           AND EXISTS (
+             SELECT 1 FROM pr_agent_harness.publication_batches b
+             WHERE b.tenant_id=r.tenant_id AND b.id=j.expected_batch_id
+               AND b.seal_state='sealed' AND b.operation_set_hash=j.expected_operation_set_hash
+           )`
+        : `j.command_receipt_id IS NOT NULL AND j.wait_id IS NOT NULL AND j.wait_version IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+             FROM pr_agent_harness.run_waits w
+             JOIN pr_agent_harness.run_wait_decisions d
+               ON d.tenant_id=w.tenant_id AND d.run_id=w.run_id AND d.wait_id=w.id
+             JOIN pr_agent_harness.run_command_receipts c
+               ON c.tenant_id=d.tenant_id AND c.run_id=d.run_id AND c.id=d.command_receipt_id
+             WHERE w.tenant_id=j.tenant_id AND w.run_id=j.run_id AND w.id=j.wait_id
+               AND w.status='consumed' AND w.version=j.wait_version+1
+               AND d.command_receipt_id=j.command_receipt_id
+               AND c.status='accepted' AND c.id=j.command_receipt_id
+           )`;
+      const candidate = await client.query<{
+        job_id: string; run_id: string; job_kind: RunJobKind; job_payload_json: JsonObject;
+      }>(
+        `SELECT j.id AS job_id,r.id AS run_id,j.job_kind,
+                j.job_payload_json || jsonb_strip_nulls(jsonb_build_object(
+                  'batchId',j.expected_batch_id,'operationSetHash',j.expected_operation_set_hash,
+                  'outcomeGeneration',j.outcome_generation,'waitId',j.wait_id,
+                  'waitVersion',j.wait_version,'commandReceiptId',j.command_receipt_id
+                )) AS job_payload_json
+         FROM pr_agent_harness.job_queue j
+         JOIN pr_agent_harness.agent_runs r ON r.tenant_id=j.tenant_id AND r.id=j.run_id
+         WHERE j.tenant_id=$1 AND r.integration_id=$2
+           AND r.authority_generation=$3 AND r.execution_mode_generation=$4
+           AND r.runtime_version_hash=$5 AND r.status=$6
+           AND r.cancel_requested_at IS NULL AND r.deadline_at>now()
+           AND j.job_kind=$7 AND j.status IN ('ready','retry_wait') AND j.available_at<=now()
+           AND j.attempt_count<j.max_attempts
+           AND j.expected_run_version=r.version AND ${predicate}
+         ORDER BY j.priority DESC,j.available_at,j.id
+         FOR UPDATE OF j,r SKIP LOCKED LIMIT 1`,
+        [binding.tenantId, binding.integrationId, binding.authorityGeneration,
+          binding.executionModeGeneration, runtimeVersionHash, expectedStatus, kind],
+      );
+      const selected = candidate.rows[0];
+      if (!selected) return undefined;
+      const run = await client.query<Omit<ClaimRow, "job_id" | "job_attempt" | "job_kind" | "job_payload_json">>(
+        `UPDATE pr_agent_harness.agent_runs
+         SET status='running',lease_owner=$3,
+             lease_expires_at=now()+($4::double precision*interval '1 millisecond'),
+             lease_epoch=lease_epoch+1,execution_attempt_count=execution_attempt_count+1,
+             version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status=$5
+         RETURNING id,integration_id,lease_epoch,authority_generation,
+           execution_mode_generation,deadline_at,base_sha,head_sha,
+           workflow_version_hash,prompt_version_hash,model_version_hash,tool_version_hash,
+           policy_version_hash,runtime_version_hash,input_json,limits_json,runtime_config_json,
+           lease_expires_at`,
+        [binding.tenantId, selected.run_id, owner, this.leaseTtlMs, expectedStatus],
+      );
+      if (!run.rows[0]) return undefined;
+      const job = await client.query<{ attempt_count: number }>(
+        `UPDATE pr_agent_harness.job_queue
+         SET status='running',attempt_count=attempt_count+1,
+             claimed_run_epoch=$3,last_error_code=NULL,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status IN ('ready','retry_wait')
+         RETURNING attempt_count`,
+        [binding.tenantId, selected.job_id, Number(run.rows[0].lease_epoch)],
+      );
+      if (!job.rows[0]) throw new RunLeaseLostError(selected.run_id);
+      await appendRunEvent(client, binding.tenantId, selected.run_id, "run.claimed", owner, {
+        epoch: Number(run.rows[0].lease_epoch), jobId: selected.job_id,
+        jobAttempt: job.rows[0].attempt_count, jobKind: kind,
+      });
+      return mapLease({
+        ...run.rows[0], job_id: selected.job_id, job_attempt: job.rows[0].attempt_count,
+        job_kind: selected.job_kind, job_payload_json: selected.job_payload_json,
       }, binding.tenantId, owner);
     });
   }
@@ -440,6 +592,23 @@ export class RunExecutionStore {
       if (input.retryDelayMs !== undefined) {
         positiveInteger(input.retryDelayMs, "retry delay");
       }
+      let waitingBatch: { batch_id: string; operation_set_hash: string } | undefined;
+      if (input.to === "waiting_for_reconciliation") {
+        const linked = await client.query<{ batch_id: string; operation_set_hash: string }>(
+          `SELECT l.batch_id,l.operation_set_hash
+           FROM pr_agent_harness.run_publication_batches l
+           JOIN pr_agent_harness.publication_batches b
+             ON b.tenant_id=l.tenant_id AND b.id=l.batch_id
+           WHERE l.tenant_id=$1 AND l.run_id=$2 AND b.seal_state='sealed'
+             AND b.operation_set_hash=l.operation_set_hash
+           ORDER BY l.batch_id LIMIT 2`,
+          [lease.tenantId, lease.runId],
+        );
+        if (linked.rowCount !== 1) {
+          throw new Error("waiting-for-reconciliation Run requires exactly one frozen publication batch");
+        }
+        waitingBatch = linked.rows[0];
+      }
       await abandonActiveStepAttempts(
         client,
         lease.tenantId,
@@ -455,13 +624,16 @@ export class RunExecutionStore {
         `UPDATE pr_agent_harness.agent_runs
          SET status=$3,lease_owner=NULL,lease_expires_at=NULL,
              outcome_code=$4,error_code=$5,
+             waiting_batch_id=CASE WHEN $7::uuid IS NOT NULL THEN $7 ELSE waiting_batch_id END,
+             waiting_operation_set_hash=CASE WHEN $8::text IS NOT NULL THEN $8 ELSE waiting_operation_set_hash END,
              finished_at=CASE WHEN $6 THEN now() ELSE NULL END,
              version=version+1,updated_at=now()
          WHERE tenant_id=$1 AND id=$2
          RETURNING id,tenant_id,integration_id,status,version,lease_owner,lease_epoch,
            lease_expires_at,deadline_at,cancel_requested_at,outcome_code,error_code`,
         [lease.tenantId, lease.runId, input.to, input.outcomeCode ?? null,
-          input.reasonCode ?? null, terminal],
+          input.reasonCode ?? null, terminal, waitingBatch?.batch_id ?? null,
+          waitingBatch?.operation_set_hash ?? null],
       );
       const jobStatus = input.to === "retry_wait" ? "retry_wait"
         : terminal && input.to === "failed" ? "dead_letter"
@@ -483,6 +655,21 @@ export class RunExecutionStore {
           input.reasonCode ?? null],
       );
       if (job.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      if (lease.jobKind === "manual_resume") {
+        const receiptId = typeof lease.jobPayload?.commandReceiptId === "string"
+          ? lease.jobPayload.commandReceiptId
+          : undefined;
+        if (!receiptId) throw new Error("manual-resume job is missing its command receipt");
+        const receipt = await client.query(
+          `UPDATE pr_agent_harness.run_command_receipts
+           SET status='completed',result_json=$4::jsonb,resulting_version=$5,updated_at=now()
+           WHERE tenant_id=$1 AND run_id=$2 AND id=$3 AND status IN ('accepted','completed')`,
+          [lease.tenantId, lease.runId, receiptId,
+            JSON.stringify({ status: input.to, outcomeCode: input.outcomeCode ?? null,
+              reasonCode: input.reasonCode ?? null }), Number(result.rows[0]!.version)],
+        );
+        if (receipt.rowCount !== 1) throw new Error("manual-resume receipt is unavailable");
+      }
       if (input.to === "failed") {
         await insertDeadLetter(client, lease.tenantId, {
           id: lease.runId,
@@ -505,15 +692,259 @@ export class RunExecutionStore {
     });
   }
 
+  async waitForPublicationDecision(
+    lease: RunLease,
+    input: {
+      batchId: string;
+      operationSetHash: string;
+      businessOperationId: string;
+      operationVersion: number;
+      allowedDecisions: readonly ("confirm_occurred" | "confirm_not_occurred" |
+        "authorize_retry" | "abandon_publication")[];
+    },
+  ): Promise<{ waitId: string; waitVersion: number }> {
+    requiredHash(input.operationSetHash, "publication operation-set hash");
+    if (!Number.isSafeInteger(input.operationVersion) || input.operationVersion < 0) {
+      throw new Error("publication operation version must be non-negative");
+    }
+    if (!input.allowedDecisions.length) throw new Error("publication wait decisions are required");
+    return this.withLease(lease, async (client) => {
+      const operation = await client.query<{
+        request_hash: string; version: string; status: string;
+      }>(
+        `SELECT ro.business_operation_id AS request_hash,ro.version,ro.status
+         FROM pr_agent_harness.run_publication_batches rpb
+         JOIN pr_agent_harness.publication_batch_operations pbo
+           ON pbo.tenant_id=rpb.tenant_id AND pbo.batch_id=rpb.batch_id
+         JOIN pr_agent_harness.repository_operations ro
+           ON ro.tenant_id=pbo.tenant_id AND ro.business_operation_id=pbo.business_operation_id
+         WHERE rpb.tenant_id=$1 AND rpb.run_id=$2 AND rpb.batch_id=$3
+           AND rpb.operation_set_hash=$4 AND pbo.business_operation_id=$5
+         FOR UPDATE OF ro`,
+        [lease.tenantId, lease.runId, input.batchId, input.operationSetHash,
+          input.businessOperationId],
+      );
+      const row = operation.rows[0];
+      if (!row || Number(row.version) !== input.operationVersion || row.status !== "manual_review") {
+        throw new Error("publication wait no longer matches the exact operation version");
+      }
+      const inserted = await client.query<{ id: string; version: string }>(
+        `INSERT INTO pr_agent_harness.run_waits
+           (tenant_id,run_id,batch_id,operation_set_hash,business_operation_id,
+            operation_version,intent_hash,allowed_decisions)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+         ON CONFLICT (tenant_id,run_id,business_operation_id,operation_version) DO NOTHING
+         RETURNING id,version`,
+        [lease.tenantId, lease.runId, input.batchId, input.operationSetHash,
+          input.businessOperationId, input.operationVersion, row.request_hash,
+          JSON.stringify([...input.allowedDecisions])],
+      );
+      let wait = inserted.rows[0];
+      if (!wait) {
+        const existing = await client.query<{ id: string; version: string; allowed_decisions: unknown }>(
+          `SELECT id,version,allowed_decisions FROM pr_agent_harness.run_waits
+           WHERE tenant_id=$1 AND run_id=$2 AND business_operation_id=$3
+             AND operation_version=$4 AND status='open'`,
+          [lease.tenantId, lease.runId, input.businessOperationId, input.operationVersion],
+        );
+        wait = existing.rows[0];
+        if (!wait || JSON.stringify(existing.rows[0]!.allowed_decisions) !== JSON.stringify([...input.allowedDecisions])) {
+          throw new Error("publication wait identity conflict");
+        }
+      }
+      await abandonActiveStepAttempts(client, lease.tenantId, lease.runId, "publication_manual_review");
+      const run = await client.query<{ version: string }>(
+        `UPDATE pr_agent_harness.agent_runs
+         SET status='waiting_for_user',lease_owner=NULL,lease_expires_at=NULL,
+             error_code='publication_manual_review',version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='running' RETURNING version`,
+        [lease.tenantId, lease.runId],
+      );
+      if (run.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      const job = await client.query(
+        `UPDATE pr_agent_harness.job_queue
+         SET status='completed',completed_at=now(),updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND run_id=$3 AND claimed_run_epoch=$4 AND status='running'`,
+        [lease.tenantId, lease.jobId, lease.runId, lease.epoch],
+      );
+      if (job.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      if (lease.jobKind === "manual_resume") {
+        const receiptId = typeof lease.jobPayload?.commandReceiptId === "string"
+          ? lease.jobPayload.commandReceiptId
+          : undefined;
+        if (!receiptId) throw new Error("manual-resume job is missing its command receipt");
+        const receipt = await client.query(
+          `UPDATE pr_agent_harness.run_command_receipts
+           SET status='completed',result_json=$4::jsonb,resulting_version=$5,updated_at=now()
+           WHERE tenant_id=$1 AND run_id=$2 AND id=$3 AND status IN ('accepted','completed')`,
+          [lease.tenantId, lease.runId, receiptId,
+            JSON.stringify({ status: "waiting_for_user", waitId: wait.id,
+              waitVersion: Number(wait.version) }), Number(run.rows[0]!.version)],
+        );
+        if (receipt.rowCount !== 1) throw new Error("manual-resume receipt is unavailable");
+      }
+      await appendRunFact(client, {
+        tenantId: lease.tenantId,
+        runId: lease.runId,
+        eventType: "run.waiting_for_user",
+        actorType: "worker",
+        actorId: lease.owner,
+        payload: { reasonCode: "publication_manual_review", waitId: wait.id,
+          waitVersion: Number(wait.version), businessOperationId: input.businessOperationId,
+          operationVersion: input.operationVersion },
+      });
+      return { waitId: wait.id, waitVersion: Number(wait.version) };
+    });
+  }
+
+  async retrySpecialJob(lease: RunLease, retryDelayMs: number, errorCode: string): Promise<void> {
+    positiveInteger(retryDelayMs, "retry delay");
+    if (lease.jobKind !== "publication_outcome" && lease.jobKind !== "manual_resume") {
+      throw new Error("retrySpecialJob requires a special Run job");
+    }
+    await this.withLease(lease, async (client) => {
+      const jobState = await client.query<{ max_attempts: number; attempt_count: number }>(
+        `SELECT max_attempts,attempt_count FROM pr_agent_harness.job_queue
+         WHERE tenant_id=$1 AND id=$2 AND run_id=$3 AND claimed_run_epoch=$4
+           AND status='running' FOR UPDATE`,
+        [lease.tenantId, lease.jobId, lease.runId, lease.epoch],
+      );
+      const jobRow = jobState.rows[0];
+      if (!jobRow) throw new RunLeaseLostError(lease.runId);
+      if (jobRow.attempt_count >= jobRow.max_attempts) {
+        const reason = requiredText(errorCode, "error code");
+        const run = await client.query<{ version: string; lease_epoch: string }>(
+          `UPDATE pr_agent_harness.agent_runs
+           SET status='failed',lease_owner=NULL,lease_expires_at=NULL,error_code=$3,
+               finished_at=now(),version=version+1,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND status='running'
+           RETURNING version,lease_epoch`,
+          [lease.tenantId, lease.runId, reason],
+        );
+        if (!run.rows[0]) throw new RunLeaseLostError(lease.runId);
+        const job = await client.query(
+          `UPDATE pr_agent_harness.job_queue
+           SET status='dead_letter',last_error_code=$5,completed_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND id=$2 AND run_id=$3 AND claimed_run_epoch=$4
+             AND status='running'`,
+          [lease.tenantId, lease.jobId, lease.runId, lease.epoch, reason],
+        );
+        if (job.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+        if (lease.jobKind === "manual_resume") {
+          const receiptId = typeof lease.jobPayload?.commandReceiptId === "string"
+            ? lease.jobPayload.commandReceiptId
+            : undefined;
+          if (!receiptId) throw new Error("manual-resume job is missing its command receipt");
+          const receipt = await client.query(
+            `UPDATE pr_agent_harness.run_command_receipts
+             SET status='completed',result_json=$4::jsonb,resulting_version=$5,updated_at=now()
+             WHERE tenant_id=$1 AND run_id=$2 AND id=$3 AND status IN ('accepted','completed')`,
+            [lease.tenantId, lease.runId, receiptId,
+              JSON.stringify({ status: "failed", reasonCode: reason }),
+              Number(run.rows[0].version)],
+          );
+          if (receipt.rowCount !== 1) throw new Error("manual-resume receipt is unavailable");
+        }
+        await insertDeadLetter(client, lease.tenantId, {
+          id: lease.runId,
+          job_id: lease.jobId,
+          lease_epoch: run.rows[0].lease_epoch,
+          attempt_count: jobRow.attempt_count,
+        }, reason);
+        await appendRunFact(client, {
+          tenantId: lease.tenantId,
+          runId: lease.runId,
+          eventType: "run.failed",
+          actorType: "worker",
+          actorId: lease.owner,
+          payload: { reasonCode: reason, jobKind: lease.jobKind,
+            attempts: jobRow.attempt_count, maxAttempts: jobRow.max_attempts },
+        });
+        return;
+      }
+      const waitingStatus = lease.jobKind === "publication_outcome"
+        ? "waiting_for_reconciliation"
+        : "waiting_for_user";
+      const run = await client.query<{ version: string }>(
+        `UPDATE pr_agent_harness.agent_runs
+         SET status=$3,lease_owner=NULL,lease_expires_at=NULL,error_code=$4,
+             version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND status='running'
+         RETURNING version`,
+        [lease.tenantId, lease.runId, waitingStatus, requiredText(errorCode, "error code")],
+      );
+      if (!run.rows[0]) throw new RunLeaseLostError(lease.runId);
+      const job = await client.query(
+        `UPDATE pr_agent_harness.job_queue
+         SET status='retry_wait',available_at=now()+($5::double precision*interval '1 millisecond'),
+             expected_run_version=$6,last_error_code=$7,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND run_id=$3 AND claimed_run_epoch=$4 AND status='running'`,
+        [lease.tenantId, lease.jobId, lease.runId, lease.epoch, retryDelayMs,
+          Number(run.rows[0].version), errorCode],
+      );
+      if (job.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      await appendRunFact(client, {
+        tenantId: lease.tenantId,
+        runId: lease.runId,
+        eventType: "run.retry_wait",
+        actorType: "worker",
+        actorId: lease.owner,
+        payload: { reasonCode: errorCode },
+      });
+    });
+  }
+
   async sweep(binding: ClaimableBinding, limit = 100): Promise<SweepResult> {
     const bounded = Math.max(1, Math.min(Math.floor(limit), 1_000));
     return this.db.transaction(binding.tenantId, async (client) => {
+      const result: SweepResult = { retried: 0, deadLettered: 0, cancelled: 0 };
+      const waiting = await client.query<{
+        id: string; cancel_requested_at: Date | null; deadline_expired: boolean;
+      }>(
+        `SELECT r.id,r.cancel_requested_at,(r.deadline_at<=now()) AS deadline_expired
+         FROM pr_agent_harness.agent_runs r
+         WHERE r.tenant_id=$1 AND r.integration_id=$2 AND r.authority_generation=$3
+           AND r.execution_mode_generation=$4
+           AND r.status IN ('waiting_for_reconciliation','waiting_for_user')
+           AND (r.cancel_requested_at IS NOT NULL OR r.deadline_at<=now())
+         ORDER BY r.updated_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT $5`,
+        [binding.tenantId, binding.integrationId, binding.authorityGeneration,
+          binding.executionModeGeneration, bounded],
+      );
+      for (const row of waiting.rows) {
+        const status = row.cancel_requested_at ? "cancelled" : "failed";
+        const reason = row.cancel_requested_at ? "cancel_requested" : "run_deadline_exceeded";
+        await client.query(
+          `UPDATE pr_agent_harness.agent_runs
+           SET status=$3,error_code=$4,finished_at=now(),version=version+1,updated_at=now()
+           WHERE tenant_id=$1 AND id=$2`,
+          [binding.tenantId, row.id, status, reason],
+        );
+        await client.query(
+          `UPDATE pr_agent_harness.job_queue
+           SET status=CASE WHEN $3='cancelled' THEN 'cancelled' ELSE 'dead_letter' END,
+               last_error_code=$4,completed_at=now(),updated_at=now()
+           WHERE tenant_id=$1 AND run_id=$2 AND status IN ('ready','retry_wait')`,
+          [binding.tenantId, row.id, status, reason],
+        );
+        await appendRunFact(client, {
+          tenantId: binding.tenantId,
+          runId: row.id,
+          eventType: `run.${status}`,
+          actorType: "system",
+          actorId: "run-sweeper",
+          payload: { reasonCode: reason },
+        });
+        if (status === "cancelled") result.cancelled += 1;
+        else result.deadLettered += 1;
+      }
       const candidates = await client.query<{
         id: string; job_id: string; lease_epoch: string; attempt_count: number;
+        job_kind: RunJobKind;
         max_attempts: number; cancel_requested_at: Date | null; deadline_at: Date;
         deadline_expired: boolean;
       }>(
-        `SELECT r.id,j.id AS job_id,r.lease_epoch,j.attempt_count,j.max_attempts,
+        `SELECT r.id,j.id AS job_id,r.lease_epoch,j.attempt_count,j.max_attempts,j.job_kind,
                 r.cancel_requested_at,r.deadline_at,
                 (r.deadline_at<=now()) AS deadline_expired
          FROM pr_agent_harness.agent_runs r
@@ -528,7 +959,6 @@ export class RunExecutionStore {
         [binding.tenantId, binding.integrationId, binding.authorityGeneration,
           binding.executionModeGeneration, bounded],
       );
-      const result: SweepResult = { retried: 0, deadLettered: 0, cancelled: 0 };
       for (const row of candidates.rows) {
         if (row.cancel_requested_at) {
           await settleSweptRun(client, binding.tenantId, row, "cancelled", "cancel_requested");
@@ -536,11 +966,18 @@ export class RunExecutionStore {
         } else if (row.deadline_expired || row.attempt_count >= row.max_attempts) {
           const reason = row.deadline_expired ? "run_deadline_exceeded" : "run_attempts_exhausted";
           await settleSweptRun(client, binding.tenantId, row, "failed", reason);
+          if (row.job_kind === "manual_resume") {
+            await completeManualReceiptForJob(client, binding.tenantId, row.job_id, reason);
+          }
           await insertDeadLetter(client, binding.tenantId, row, reason);
           result.deadLettered += 1;
         } else {
           const delay = Math.min(this.initialRetryMs * 2 ** Math.max(0, row.attempt_count - 1), this.maxRetryMs);
-          await retrySweptRun(client, binding.tenantId, row, delay);
+          if (row.job_kind === "publication_outcome" || row.job_kind === "manual_resume") {
+            await retrySweptSpecialRun(client, binding.tenantId, row, delay, row.job_kind);
+          } else {
+            await retrySweptRun(client, binding.tenantId, row, delay);
+          }
           result.retried += 1;
         }
       }
@@ -651,19 +1088,15 @@ async function appendRunEvent(
   actorId: string,
   payload: JsonObject,
 ): Promise<void> {
-  const sequence = await client.query<{ sequence: string }>(
-    `UPDATE pr_agent_harness.agent_runs
-     SET next_event_seq=next_event_seq+1
-     WHERE tenant_id=$1 AND id=$2 RETURNING next_event_seq-1 AS sequence`,
-    [tenantId, runId],
-  );
-  if (!sequence.rows[0]) throw new Error("run disappeared while allocating an event sequence");
-  await client.query(
-    `INSERT INTO pr_agent_harness.run_events
-       (tenant_id,run_id,sequence,event_type,visibility,actor_type,actor_id,payload_json)
-     VALUES ($1,$2,$3,$4,'internal','worker',$5,$6::jsonb)`,
-    [tenantId, runId, sequence.rows[0].sequence, eventType, actorId, JSON.stringify(payload)],
-  );
+  await appendRunFact(client, {
+    tenantId,
+    runId,
+    eventType,
+    actorType: "worker",
+    actorId,
+    payload,
+    visibility: eventType.startsWith("run.") ? "public" : "internal",
+  });
 }
 
 async function nextCheckpointSequence(client: PoolClient, lease: RunLease): Promise<number> {
@@ -709,6 +1142,7 @@ async function checkpointForStep(client: PoolClient, lease: RunLease, stepId: st
 function mapLease(row: ClaimRow, tenantId: string, owner: string): RunLease {
   return {
     tenantId, runId: row.id, integrationId: row.integration_id, jobId: row.job_id,
+    jobKind: row.job_kind, jobPayload: row.job_payload_json,
     owner, epoch: Number(row.lease_epoch), jobAttempt: row.job_attempt,
     authorityGeneration: Number(row.authority_generation), deadlineAt: row.deadline_at.toISOString(),
     executionModeGeneration: Number(row.execution_mode_generation),
@@ -836,6 +1270,83 @@ async function retrySweptRun(
   await appendRunEvent(client, tenantId, row.id, "run.retry_wait", "run-sweeper", {
     reasonCode: "lease_expired", retryDelayMs: delayMs,
   });
+}
+
+async function retrySweptSpecialRun(
+  client: PoolClient,
+  tenantId: string,
+  row: { id: string; job_id: string },
+  delayMs: number,
+  jobKind: "publication_outcome" | "manual_resume",
+): Promise<void> {
+  const waitingStatus = jobKind === "publication_outcome"
+    ? "waiting_for_reconciliation"
+    : "waiting_for_user";
+  const run = await client.query<{ version: string }>(
+    `UPDATE pr_agent_harness.agent_runs
+     SET status=$3,lease_owner=NULL,lease_expires_at=NULL,
+         error_code='lease_expired',version=version+1,updated_at=now()
+     WHERE tenant_id=$1 AND id=$2 RETURNING version`,
+    [tenantId, row.id, waitingStatus],
+  );
+  await client.query(
+    `UPDATE pr_agent_harness.job_queue
+     SET status='retry_wait',available_at=now()+($3::double precision*interval '1 millisecond'),
+         expected_run_version=$4,last_error_code='lease_expired',updated_at=now()
+     WHERE tenant_id=$1 AND id=$2`,
+    [tenantId, row.job_id, delayMs, Number(run.rows[0]!.version)],
+  );
+  await appendRunEvent(client, tenantId, row.id, "run.retry_wait", "run-sweeper", {
+    reasonCode: "lease_expired", retryDelayMs: delayMs,
+  });
+}
+
+async function terminalizeExhaustedSpecialJobs(
+  client: PoolClient,
+  binding: ClaimableBinding,
+  jobKind: "publication_outcome" | "manual_resume",
+): Promise<void> {
+  const exhausted = await client.query<{
+    id: string; job_id: string; lease_epoch: string; attempt_count: number;
+  }>(
+    `SELECT r.id,j.id AS job_id,r.lease_epoch,j.attempt_count
+     FROM pr_agent_harness.agent_runs r
+     JOIN pr_agent_harness.job_queue j ON j.tenant_id=r.tenant_id AND j.run_id=r.id
+     WHERE r.tenant_id=$1 AND r.integration_id=$2
+       AND r.authority_generation=$3 AND r.execution_mode_generation=$4
+       AND r.status IN ('waiting_for_reconciliation','waiting_for_user')
+       AND j.job_kind=$5 AND j.status IN ('ready','retry_wait')
+       AND j.attempt_count>=j.max_attempts
+     ORDER BY j.updated_at,j.id FOR UPDATE OF r,j SKIP LOCKED LIMIT 100`,
+    [binding.tenantId, binding.integrationId, binding.authorityGeneration,
+      binding.executionModeGeneration, jobKind],
+  );
+  for (const row of exhausted.rows) {
+    const reason = "run_attempts_exhausted";
+    await settleSweptRun(client, binding.tenantId, row, "failed", reason);
+    if (jobKind === "manual_resume") {
+      await completeManualReceiptForJob(client, binding.tenantId, row.job_id, reason);
+    }
+    await insertDeadLetter(client, binding.tenantId, row, reason);
+  }
+}
+
+async function completeManualReceiptForJob(
+  client: PoolClient,
+  tenantId: string,
+  jobId: string,
+  reason: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE pr_agent_harness.run_command_receipts c
+     SET status='completed',result_json=$3::jsonb,resulting_version=r.version,updated_at=now()
+     FROM pr_agent_harness.job_queue j
+     JOIN pr_agent_harness.agent_runs r ON r.tenant_id=j.tenant_id AND r.id=j.run_id
+     WHERE j.tenant_id=$1 AND j.id=$2 AND j.command_receipt_id=c.id
+       AND c.tenant_id=j.tenant_id AND c.run_id=j.run_id
+       AND c.status IN ('accepted','completed')`,
+    [tenantId, jobId, JSON.stringify({ status: "failed", reasonCode: reason })],
+  );
 }
 
 async function abandonActiveStepAttempts(

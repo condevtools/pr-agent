@@ -8,6 +8,7 @@ import { RunCheckpointCompatibilityError, RunLeaseLostError, type RunLease } fro
 import type { RunExecutionStore } from "./run-execution-store.js";
 import { ReviewRunRevisionChangedError, withReviewRunContext, type ReviewRunExecutionContext } from "./review-run-context.js";
 import { fingerprint, REVIEW_RUNTIME_CONFIG } from "./versions.js";
+import type { PublicationOutcomeHandler } from "./publication-outcome.js";
 
 interface WorkerDependencies {
   store: RunExecutionStore;
@@ -15,6 +16,8 @@ interface WorkerDependencies {
   bindings(): Promise<PublicationBinding[]>;
   runtimeHash(binding: PublicationBinding): Promise<string>;
   execute(lease: RunLease, binding: PublicationBinding): Promise<void>;
+  outcomeHandler?: PublicationOutcomeHandler;
+  coordinateOutcomes?(binding: PublicationBinding): Promise<unknown>;
   onError(error: unknown, runId?: string): void;
 }
 
@@ -59,7 +62,11 @@ export class ReviewRunWorker {
         if (binding.reviewExecutionMode !== "harness_async") continue;
         const runtimeHash = await this.dependencies.runtimeHash(binding);
         while (!this.stopped && this.active.size < this.concurrency) {
-          const lease = await this.dependencies.store.claim(claimBinding(binding), this.owner, runtimeHash);
+          const lease = await this.dependencies.store.claimPublicationOutcome(
+            claimBinding(binding), this.owner, runtimeHash,
+          ) ?? await this.dependencies.store.claimManualResume(
+            claimBinding(binding), this.owner, runtimeHash,
+          ) ?? await this.dependencies.store.claim(claimBinding(binding), this.owner, runtimeHash);
           if (!lease) break;
           const controller = new AbortController();
           const task = this.execute(lease, binding, controller)
@@ -84,6 +91,7 @@ export class ReviewRunWorker {
       for (const binding of await this.dependencies.bindings()) {
         if (binding.reviewExecutionMode === "harness_async") {
           await this.dependencies.store.sweep(claimBinding(binding));
+          await this.dependencies.coordinateOutcomes?.(binding);
         }
         await this.dependencies.budget.closeTerminalBudgets(binding.tenantId);
       }
@@ -192,6 +200,13 @@ export class ReviewRunWorker {
       },
     };
     try {
+      if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
+        if (!this.dependencies.outcomeHandler) {
+          throw new Error("publication outcome handler is not configured");
+        }
+        await this.dependencies.outcomeHandler.execute(lease);
+        return;
+      }
       await store.latestCheckpoint(lease, { schemaVersion: 1, runtimeVersionHash: lease.runtimeVersionHash });
       await withReviewRunContext(context, () => this.dependencies.execute(lease, binding));
       await assertActive();
@@ -199,6 +214,15 @@ export class ReviewRunWorker {
       await store.transition(lease, { to: "succeeded", outcomeCode: "review_completed" });
     } catch (error) {
       if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
+      if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
+        await store.retrySpecialJob(
+          lease,
+          1_000,
+          error instanceof Error ? error.name : "publication_outcome_retry",
+        );
+        this.dependencies.onError(error, lease.runId);
+        return;
+      }
       if (error instanceof PendingPublicationError) {
         await store.transition(lease, { to: "waiting_for_reconciliation", reasonCode: "publication_pending" });
       } else if (

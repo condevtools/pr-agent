@@ -4,6 +4,8 @@ import type { PoolClient } from "pg";
 
 import { HarnessDatabase } from "./postgres/database.js";
 import type { PublicationOperationStatus } from "./publication.js";
+import type { RunLease } from "./run-contracts.js";
+import { assertRunLease } from "./run-execution-store.js";
 
 export type PublicationControlDecision =
   | "confirm_occurred"
@@ -45,6 +47,11 @@ export interface PublicationControlReceipt {
   createdAt: string;
 }
 
+export interface LeasedPublicationControlResult {
+  receipt: PublicationControlReceipt;
+  decision: PublicationControlDecision;
+}
+
 const MAX_DISPATCH_ATTEMPTS = 3;
 
 export class PublicationControlStore {
@@ -62,106 +69,168 @@ export class PublicationControlStore {
       tenantId: normalized.tenantId,
     }));
 
-    return this.db.transaction(normalized.tenantId, async (client) => {
-      const operation = await selectControlledOperation(
-        client,
-        normalized.tenantId,
-        normalized.businessOperationId,
-      );
-      if (!operation) throw new PublicationControlOperationNotFoundError(normalized.businessOperationId);
-      await assertAuthorizedBinding(client, operation);
-
-      const duplicate = await selectReceipt(client, normalized.tenantId, normalized.commandKey);
-      if (duplicate) {
-        if (duplicate.request_hash !== requestHash) {
-          throw new PublicationControlCommandConflictError(normalized.commandKey);
-        }
-        return mapReceipt(duplicate);
-      }
-
-      if (operation.reconcile_claim_active) {
-        throw new PublicationControlRecoveryClaimError(normalized.businessOperationId);
-      }
-
-      if (Number(operation.version) !== normalized.expectedVersion) {
-        throw new PublicationControlVersionConflictError(
-          normalized.businessOperationId,
-          normalized.expectedVersion,
-          Number(operation.version),
-        );
-      }
-      const transition = decideTransition(normalized, operation);
-      const updated = await client.query<{
-        status: PublicationOperationStatus;
-        version: string;
-      }>(
-        `
-          UPDATE pr_agent_harness.repository_operations
-          SET status = $4,
-              outcome_code = $5,
-              remote_id = $6,
-              last_error_code = $7,
-              evidence_json = $8::jsonb,
-              command_receipt_json = $9::jsonb,
-              resolved_at = CASE WHEN $10::boolean THEN now() ELSE NULL END,
-              version = version + 1,
-              updated_at = now()
-          WHERE tenant_id = $1 AND business_operation_id = $2 AND version = $3
-          RETURNING status, version
-        `,
-        [
-          normalized.tenantId,
-          normalized.businessOperationId,
-          normalized.expectedVersion,
-          transition.status,
-          transition.outcomeCode,
-          transition.remoteId,
-          transition.errorCode,
-          stableJson(normalized.evidence),
-          stableJson({ commandKey: normalized.commandKey, decision: normalized.decision }),
-          transition.resolved,
-        ],
-      );
-      const result = updated.rows[0];
-      if (!result) {
-        throw new PublicationControlVersionConflictError(
-          normalized.businessOperationId,
-          normalized.expectedVersion,
-          Number(operation.version),
-        );
-      }
-
-      const inserted = await client.query<ReceiptRow>(
-        `
-          INSERT INTO pr_agent_harness.publication_command_receipts (
-            tenant_id, business_operation_id, command_key, request_hash, decision,
-            actor_type, actor_id, evidence_json, remote_id, previous_status,
-            resulting_status, previous_version, resulting_version
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13)
-          RETURNING *
-        `,
-        [
-          normalized.tenantId,
-          normalized.businessOperationId,
-          normalized.commandKey,
-          requestHash,
-          normalized.decision,
-          normalized.actor.type,
-          normalized.actor.id,
-          stableJson(normalized.evidence),
-          normalized.remoteId ?? null,
-          operation.status,
-          result.status,
-          Number(operation.version),
-          Number(result.version),
-        ],
-      );
-      const receipt = inserted.rows[0];
-      if (!receipt) throw new Error("publication control receipt was not persisted");
-      await auditControl(client, normalized, receipt);
-      return mapReceipt(receipt);
-    });
+    return this.db.transaction(normalized.tenantId, (client) =>
+      applyControlInTransaction(client, normalized, requestHash, true));
   }
+
+  async applyLeased(
+    client: PoolClient,
+    lease: RunLease,
+    input: { waitId: string; commandReceiptId: string },
+  ): Promise<LeasedPublicationControlResult> {
+    await assertRunLease(client, lease, { lock: "update" });
+    const durable = await client.query<{
+      business_operation_id: string; operation_version: string; decision: PublicationControlDecision;
+      evidence_json: PublicationControlEvidence; remote_id: string | null;
+      actor_type: "user" | "service"; actor_id: string;
+    }>(
+      `SELECT w.business_operation_id,w.operation_version,d.decision,d.evidence_json,d.remote_id,
+              c.actor_type,c.actor_id
+       FROM pr_agent_harness.run_waits w
+       JOIN pr_agent_harness.run_wait_decisions d
+         ON d.tenant_id=w.tenant_id AND d.run_id=w.run_id AND d.wait_id=w.id
+       JOIN pr_agent_harness.run_command_receipts c
+         ON c.tenant_id=d.tenant_id AND c.run_id=d.run_id AND c.id=d.command_receipt_id
+       JOIN pr_agent_harness.run_publication_batches rpb
+         ON rpb.tenant_id=w.tenant_id AND rpb.run_id=w.run_id AND rpb.batch_id=w.batch_id
+       JOIN pr_agent_harness.publication_batch_operations pbo
+         ON pbo.tenant_id=w.tenant_id AND pbo.batch_id=w.batch_id
+        AND pbo.business_operation_id=w.business_operation_id
+       JOIN pr_agent_harness.repository_operations ro
+         ON ro.tenant_id=w.tenant_id AND ro.business_operation_id=w.business_operation_id
+       WHERE w.tenant_id=$1 AND w.run_id=$2 AND w.id=$3 AND w.status='consumed'
+         AND d.command_receipt_id=$4 AND c.status='accepted'
+         AND rpb.operation_set_hash=w.operation_set_hash
+         AND ro.business_operation_id=w.intent_hash`,
+      [lease.tenantId, lease.runId, input.waitId, input.commandReceiptId],
+    );
+    const row = durable.rows[0];
+    if (!row) throw new PublicationControlStateError("durable manual decision does not match this Run lease");
+    const normalized = normalizeInput({
+      tenantId: lease.tenantId,
+      businessOperationId: row.business_operation_id,
+      expectedVersion: Number(row.operation_version),
+      commandKey: input.commandReceiptId,
+      decision: row.decision,
+      actor: { type: row.actor_type, id: row.actor_id },
+      evidence: row.evidence_json,
+      ...(row.remote_id ? { remoteId: row.remote_id } : {}),
+    });
+    const requestHash = controlRequestHash(normalized);
+    const receipt = await applyControlInTransaction(client, normalized, requestHash);
+    return { receipt, decision: normalized.decision };
+  }
+}
+
+async function applyControlInTransaction(
+  client: PoolClient,
+  normalized: NormalizedControlInput,
+  requestHash: string,
+  assertDirectRunLink = false,
+): Promise<PublicationControlReceipt> {
+  const operation = await selectControlledOperation(
+    client,
+    normalized.tenantId,
+    normalized.businessOperationId,
+  );
+  if (!operation) throw new PublicationControlOperationNotFoundError(normalized.businessOperationId);
+  if (assertDirectRunLink) {
+    await assertDirectControlRunLink(client, normalized);
+  }
+  await assertAuthorizedBinding(client, operation);
+  const duplicate = await selectReceipt(client, normalized.tenantId, normalized.commandKey);
+  if (duplicate) {
+    if (duplicate.request_hash !== requestHash) {
+      throw new PublicationControlCommandConflictError(normalized.commandKey);
+    }
+    return mapReceipt(duplicate);
+  }
+  if (operation.reconcile_claim_active) {
+    throw new PublicationControlRecoveryClaimError(normalized.businessOperationId);
+  }
+  if (Number(operation.version) !== normalized.expectedVersion) {
+    throw new PublicationControlVersionConflictError(
+      normalized.businessOperationId,
+      normalized.expectedVersion,
+      Number(operation.version),
+    );
+  }
+  const transition = decideTransition(normalized, operation);
+  const updated = await client.query<{ status: PublicationOperationStatus; version: string }>(
+    `UPDATE pr_agent_harness.repository_operations
+     SET status=$4,outcome_code=$5,remote_id=$6,last_error_code=$7,
+         evidence_json=$8::jsonb,command_receipt_json=$9::jsonb,
+         resolved_at=CASE WHEN $10::boolean THEN now() ELSE NULL END,
+         version=version+1,updated_at=now()
+     WHERE tenant_id=$1 AND business_operation_id=$2 AND version=$3
+     RETURNING status,version`,
+    [normalized.tenantId, normalized.businessOperationId, normalized.expectedVersion,
+      transition.status, transition.outcomeCode, transition.remoteId, transition.errorCode,
+      stableJson(normalized.evidence),
+      stableJson({ commandKey: normalized.commandKey, decision: normalized.decision }),
+      transition.resolved],
+  );
+  const result = updated.rows[0];
+  if (!result) {
+    throw new PublicationControlVersionConflictError(
+      normalized.businessOperationId,
+      normalized.expectedVersion,
+      Number(operation.version),
+    );
+  }
+  const inserted = await client.query<ReceiptRow>(
+    `INSERT INTO pr_agent_harness.publication_command_receipts (
+       tenant_id,business_operation_id,command_key,request_hash,decision,
+       actor_type,actor_id,evidence_json,remote_id,previous_status,
+       resulting_status,previous_version,resulting_version
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)
+     RETURNING *`,
+    [normalized.tenantId, normalized.businessOperationId, normalized.commandKey,
+      requestHash, normalized.decision, normalized.actor.type, normalized.actor.id,
+      stableJson(normalized.evidence), normalized.remoteId ?? null, operation.status,
+      result.status, Number(operation.version), Number(result.version)],
+  );
+  const receipt = inserted.rows[0];
+  if (!receipt) throw new Error("publication control receipt was not persisted");
+  await auditControl(client, normalized, receipt);
+  return mapReceipt(receipt);
+}
+
+async function assertDirectControlRunLink(
+  client: PoolClient,
+  input: NormalizedControlInput,
+): Promise<void> {
+  const linked = await client.query<{ linked_count: string; all_terminal: boolean }>(
+    `SELECT count(DISTINCT r.id)::text AS linked_count,
+            bool_and(r.status IN ('succeeded','failed','cancelled')) AS all_terminal
+     FROM pr_agent_harness.publication_batch_operations pbo
+     JOIN pr_agent_harness.run_publication_batches rpb
+       ON rpb.tenant_id=pbo.tenant_id AND rpb.batch_id=pbo.batch_id
+     JOIN pr_agent_harness.agent_runs r
+       ON r.tenant_id=rpb.tenant_id AND r.id=rpb.run_id
+     WHERE pbo.tenant_id=$1 AND pbo.business_operation_id=$2`,
+    [input.tenantId, input.businessOperationId],
+  );
+  const linkage = linked.rows[0];
+  if (Number(linkage?.linked_count ?? 0) === 0) return;
+  if (!linkage?.all_terminal) {
+    throw new PublicationControlStateError("Run-linked publication control requires a leased manual-resume job");
+  }
+  if (input.decision === "authorize_retry") {
+    throw new PublicationControlStateError("terminal Run publications cannot be retried");
+  }
+}
+
+function controlRequestHash(normalized: NormalizedControlInput): string {
+  return sha256(stableJson({
+    actor: normalized.actor,
+    businessOperationId: normalized.businessOperationId,
+    decision: normalized.decision,
+    evidence: normalized.evidence,
+    expectedVersion: normalized.expectedVersion,
+    remoteId: normalized.remoteId ?? null,
+    tenantId: normalized.tenantId,
+  }));
 }
 
 interface ControlledOperationRow {

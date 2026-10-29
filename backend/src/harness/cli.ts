@@ -30,7 +30,7 @@ try {
         REVOKE UPDATE, DELETE ON pr_agent_harness.publication_batch_operations FROM pr_agent_app;
         GRANT SELECT, INSERT ON pr_agent_harness.run_events,
           pr_agent_harness.audit_logs TO pr_agent_app;
-        GRANT SELECT ON pr_agent_harness.publication_command_receipts TO pr_agent_app;
+        GRANT SELECT, INSERT ON pr_agent_harness.publication_command_receipts TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(
           uuid, uuid, text, text, text, bigint) TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO pr_agent_app;
@@ -43,6 +43,11 @@ try {
         GRANT SELECT, INSERT ON pr_agent_harness.checkpoints,
           pr_agent_harness.run_publication_batches, pr_agent_harness.dead_letter_jobs,
           pr_agent_harness.usage_records, pr_agent_harness.model_pricing_snapshots TO pr_agent_app;
+        GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.run_command_receipts,
+          pr_agent_harness.run_waits TO pr_agent_app;
+        GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO pr_agent_app;
+        GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
+          pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO pr_agent_app;
     `);
     console.log("Harness migrations applied and runtime grants configured");
   } else if (command === "bind") {

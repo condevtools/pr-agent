@@ -1,6 +1,6 @@
 # PostgreSQL publication harness
 
-PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖 P0a 的发布持久化以及 P0b 的 Run worker、checkpoint 和模型预算。仓库默认仍是同步分析；异步运行沿用现有 GitHub/GitLab 收集器、分析器和发布器。
+PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖发布持久化、Run worker、checkpoint、模型预算，以及 Run API、命令回执、SSE 和发布结局恢复。仓库默认仍是同步分析；异步运行沿用现有 GitHub/GitLab 收集器、分析器和发布器。API 鉴权、路由和人工恢复契约见 [HARNESS_API.md](HARNESS_API.md)。
 
 ## 启动与账户
 
@@ -102,6 +102,8 @@ docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" harness-migr
 - `abandon_publication`：终止未决发布，不删除已有远端效果。
 
 命令有持久 receipt；同 key 同参数返回原结果，同 key 异参数冲突。新命令不得覆盖仍在执行或被有效恢复租约占用的操作。取消/放弃不代表撤销已经发生的外部效果。
+
+关联非终态 Run 的操作必须经过 Run API 的 `resume`、一次消费的 wait 和 leased Worker，不能用上述独立 CLI 跳过执行权。所有关联 Run 都已终结时，CLI 只允许确认或放弃剩余未知结果，禁止 `authorize_retry`；再次执行需要新 Run。
 
 ## 异步 Run 与模型预算
 

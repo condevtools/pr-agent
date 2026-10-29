@@ -422,9 +422,15 @@ async function lockAndReviveBatchOperation(
   tenantId: string,
   businessOperationId: string,
 ): Promise<void> {
-  const result = await client.query<{ status: PublicationOperation["status"] }>(
+  const result = await client.query<{
+    status: PublicationOperation["status"];
+    outcome_code: string | null;
+    last_error_code: string | null;
+    attempt_count: number;
+    dispatched_at: Date | null;
+  }>(
     `
-      SELECT status
+      SELECT status,outcome_code,last_error_code,attempt_count,dispatched_at
       FROM pr_agent_harness.repository_operations
       WHERE tenant_id = $1 AND business_operation_id = $2
       FOR UPDATE
@@ -434,6 +440,15 @@ async function lockAndReviveBatchOperation(
   const operation = result.rows[0];
   if (!operation) throw new Error("prepared batch operation disappeared before linking");
   if (operation.status === "cancelled") {
+    const canRevivePredecessor = operation.outcome_code === "publication_abandoned"
+      && operation.last_error_code === "batch_predecessor_failed";
+    const canReviveCancelledRun = operation.outcome_code === "publication_abandoned"
+      && operation.last_error_code === "run_cancelled_before_dispatch"
+      && operation.attempt_count === 0
+      && operation.dispatched_at === null;
+    if (!canRevivePredecessor && !canReviveCancelledRun) {
+      throw new PublicationSlotConflictError(businessOperationId, operation.status);
+    }
     const revived = await client.query(
       `
         UPDATE pr_agent_harness.repository_operations
@@ -443,7 +458,11 @@ async function lockAndReviveBatchOperation(
         WHERE tenant_id = $1 AND business_operation_id = $2
           AND status = 'cancelled'
           AND outcome_code = 'publication_abandoned'
-          AND last_error_code = 'batch_predecessor_failed'
+          AND (
+            last_error_code = 'batch_predecessor_failed'
+            OR (last_error_code = 'run_cancelled_before_dispatch'
+                AND attempt_count=0 AND dispatched_at IS NULL)
+          )
       `,
       [tenantId, businessOperationId],
     );

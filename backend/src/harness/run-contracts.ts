@@ -4,11 +4,16 @@ import type { RunStatus } from "./postgres/run-store.js";
 
 export type JsonObject = Record<string, unknown>;
 
+export type RunJobKind = "start" | "resume" | "retry" | "recover" |
+  "publication_outcome" | "manual_resume";
+
 export interface RunLease {
   tenantId: string;
   runId: string;
   integrationId: string;
   jobId: string;
+  jobKind?: RunJobKind;
+  jobPayload?: JsonObject;
   owner: string;
   epoch: number;
   jobAttempt: number;

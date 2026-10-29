@@ -18,6 +18,8 @@ import { ReviewRunWorker } from "./review-run-worker.js";
 import { executeSingleReviewRun } from "./review-workflow.js";
 import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
 import { reviewVersionManifest } from "./versions.js";
+import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "./publication-outcome.js";
+import { PublicationControlStore } from "./publication-control.js";
 export { isDurablePublicationEnabled, requireOnlinePublicationAuthority } from "./publication-mode.js";
 
 export interface PublicationRuntime {
@@ -195,8 +197,19 @@ export async function stopHarnessRecovery(): Promise<void> {
 export async function startReviewRunWorker(): Promise<void> {
   if (!isDurablePublicationEnabled() || runWorker) return;
   const services = await getHarnessServices();
+  const store = new RunExecutionStore(services.db);
+  const budget = new ModelBudgetStore(services.db);
+  const outcomes = new PublicationOutcomeCoordinator({ db: services.db, batchStore: services.batchStore });
+  const outcomeHandler = new PublicationOutcomeHandler({
+    store, budget, batchStore: services.batchStore, batchCoordinator: services.batchCoordinator,
+    control: new PublicationControlStore(services.db),
+    createAdapter: async (operation) => {
+      const binding = await services.authority.get(operation.scope.tenantId, operation.scope.integrationId);
+      return (await publicationRuntimeForBinding(binding, services)).createAdapter(operation);
+    },
+  });
   runWorker = new ReviewRunWorker({
-    store: new RunExecutionStore(services.db), budget: new ModelBudgetStore(services.db),
+    store, budget, outcomeHandler, coordinateOutcomes: (binding) => outcomes.tick(binding),
     bindings: () => services.authority.listRecoverable(),
     runtimeHash: async () => {
       const { provider, model } = resolveReviewModelConfiguration();

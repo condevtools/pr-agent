@@ -107,9 +107,15 @@ export class HarnessRunStore {
   }
 
   async createRun(input: CreateRunInput): Promise<CreatedRun> {
+    return this.db.transaction(input.tenantId, (client) => createRunInTransaction(client, input));
+  }
+
+  static async createRunInTransaction(
+    client: PoolClient,
+    input: CreateRunInput,
+  ): Promise<CreatedRun> {
     validateCreateRunInput(input);
     const execution = normalizeRunExecutionConfig(input);
-    return this.db.transaction(input.tenantId, async (client) => {
       const binding = await client.query(
         `
           SELECT 1
@@ -298,7 +304,6 @@ export class HarnessRunStore {
         created,
         jobId,
       };
-    });
   }
 
   private async lookupIntegration(
@@ -318,6 +323,13 @@ export class HarnessRunStore {
     const row = result.rows[0];
     return row ? { tenantId: row.tenant_id, id: row.id } : undefined;
   }
+}
+
+export async function createRunInTransaction(
+  client: PoolClient,
+  input: CreateRunInput,
+): Promise<CreatedRun> {
+  return HarnessRunStore.createRunInTransaction(client, input);
 }
 
 export class RunCreateConflictError extends Error {

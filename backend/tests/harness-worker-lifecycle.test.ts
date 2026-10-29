@@ -18,6 +18,8 @@ test("an old attempt finishing its heartbeat cannot remove the replacement task 
   let started = 0;
   const lease = { runId: "same-run", runtimeVersionHash: "runtime", jobAttempt: 1 } as RunLease;
   const store = {
+    claimPublicationOutcome: async () => undefined,
+    claimManualResume: async () => undefined,
     claim: async () => {
       if (!ready || claimed === 2) return undefined;
       ready = false;

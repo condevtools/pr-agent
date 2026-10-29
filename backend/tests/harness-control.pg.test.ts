@@ -54,7 +54,8 @@ if (!databaseUrl) {
     await adminPool.query(`CREATE ROLE ${runtimeRoleName} LOGIN PASSWORD '${runtimePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}, ${runtimeRoleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}, ${runtimeRoleName}`);
-    await adminPool.query(`GRANT SELECT ON pr_agent_harness.publication_batch_operations, pr_agent_harness.run_publication_batches TO ${roleName}`);
+    await adminPool.query(`GRANT SELECT ON pr_agent_harness.publication_batch_operations,
+      pr_agent_harness.run_publication_batches, pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT ON pr_agent_harness.publication_command_receipts TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
