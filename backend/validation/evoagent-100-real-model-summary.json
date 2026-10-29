@@ -1,0 +1,3180 @@
+{
+  "schemaVersion": 1,
+  "kind": "evoagent-100-real-model-synthetic-benchmark",
+  "qualityQualification": "NOT_VERIFIED",
+  "interpretation": "Raw agreement with frozen sparse synthetic target labels; not semantic precision or real-PR quality",
+  "startedAt": "2026-10-29T13:15:28.653Z",
+  "finishedAt": "2026-10-29T13:43:57.235Z",
+  "codeCommit": "a55aadca38a600064be0c9671fb196e64156173e",
+  "implementation": {
+    "runnerSha256": "30e575f2985207fa76ad19cecabf7f9d941826d08bd7d318947f8ba275cfcbc0",
+    "compiledManifest": {
+      "schemaVersion": 1,
+      "sourceHash": "f3217feb3371eb17a87a78c77eaf9b46ed9685028c23bb05beb508f7fda71a8a"
+    }
+  },
+  "scorerSha256": "92fc40fc1521c9bff12c0beb37eeecb671f116e52f519b619aa9fcfd46925a61",
+  "privateArtifactSha256": {
+    "evo100-report.json": "da61a7eb03287e272c644646e699253a49af8b0ee18b67c55c064fb43cac7f44",
+    "evo100-results.ndjson": "1695aa05bdb4fd0520f3a5b2192e5bc43e87f740ff2b9161ea03281f1382a360",
+    "evo100-metrics.json": "d492d40ad09dead601f06edcb1f81594e1a8e7e8af36bc902476e0f582a00d49"
+  },
+  "configuration": {
+    "provider": "openai-compatible",
+    "model": "claude-sonnet-5.5",
+    "modelIdentity": "Gateway-reported name; underlying vendor/model identity not independently attested"
+  },
+  "dataset": {
+    "sourceSha256": "e3cf61546e0f554c045a79949202532046f7e936d8bbb1e2f5d0de2b79634d74",
+    "cases": 100,
+    "repositories": 10,
+    "splits": {
+      "validation": 80,
+      "holdout": 20
+    },
+    "positives": 40,
+    "clean": 60,
+    "sourceKind": "synthetic-controlled",
+    "language": "python"
+  },
+  "datasetIntegrity": {
+    "expectedCases": 100,
+    "suppliedResults": 100,
+    "indexedResults": 100,
+    "missingCases": 0,
+    "knownLabels": 100,
+    "duplicateIndices": [],
+    "provenance": "synthetic-controlled",
+    "manifest": {
+      "valid": true,
+      "expectedSourceSha256": "e3cf61546e0f554c045a79949202532046f7e936d8bbb1e2f5d0de2b79634d74",
+      "observedSourceSha256": "e3cf61546e0f554c045a79949202532046f7e936d8bbb1e2f5d0de2b79634d74",
+      "expectedSplits": {
+        "validation": 80,
+        "holdout": 20
+      },
+      "mismatchedIndices": []
+    },
+    "expectedComposition": {
+      "positiveCases": 40,
+      "cleanCases": 60
+    },
+    "observedComposition": {
+      "positiveCases": 40,
+      "cleanCases": 60
+    }
+  },
+  "scorer": {
+    "primaryMatch": "one-to-one same-path match where the predicted inclusive range covers truth.start_line",
+    "secondaryMatch": "one-to-one same-path match where truth.start_line is within 2 lines of the predicted range",
+    "incompletePolicy": "No true positives or clean hits; every expected finding is false-negative and every returned prediction is false-positive",
+    "expectedSeverityMapping": {
+      "critical": "high",
+      "high": "high",
+      "medium": "medium",
+      "low": "low"
+    },
+    "semanticIdentity": "unavailable: current PR-Agent finding schema has no CWE/rule_id; path/line matches are not CWE semantic accuracy",
+    "selectionPolicy": "all 100 frozen cases in original index order; no resampling, cherry-picking, or failed-case deletion"
+  },
+  "limits": {
+    "caseConcurrency": 2,
+    "modelConcurrency": 4,
+    "physicalCalls": 800,
+    "actualInputTokens": 8000000,
+    "actualOutputTokens": 500000,
+    "requestTimeoutMs": 45000,
+    "caseTimeoutMs": 180000,
+    "turnsPerRole": 3,
+    "toolsPerRole": 2,
+    "outputTokensPerTurn": 1500,
+    "retries": 0
+  },
+  "stopReason": null,
+  "scope": {
+    "durablePostgresWorkerUsed": false,
+    "inMemoryPersistence": true,
+    "sharedProductionRolesToolsCriticAndGate": true,
+    "releaseActivationAttempted": false,
+    "providerWritesAttempted": false,
+    "singlePass": true,
+    "failedCasesRetried": false
+  },
+  "overall": {
+    "cases": 100,
+    "complete": 75,
+    "correct": 23,
+    "positiveCases": 40,
+    "positiveDetected": 31,
+    "cleanCases": 60,
+    "cleanHits": 16,
+    "cleanWithFalsePositive": 28,
+    "tp": 31,
+    "fp": 69,
+    "fn": 9,
+    "expected": 40,
+    "predictions": 100,
+    "severityMatches": 18,
+    "matched": 31,
+    "precision": 0.31,
+    "recall": 0.775,
+    "f1": 0.44285714285714284,
+    "caseAccuracy": 0.23,
+    "executionCompleteRate": 0.75,
+    "positiveDetectionRate": 0.775,
+    "cleanHitRate": 0.26666666666666666,
+    "cleanFalsePositiveRate": 0.4666666666666667,
+    "severityMatchRateOnStrictMatches": 0.5806451612903226,
+    "criticalHighRecall": {
+      "expected": 19,
+      "matched": 13,
+      "recall": 0.6842105263157895
+    }
+  },
+  "bySplit": {
+    "holdout": {
+      "cases": 20,
+      "complete": 17,
+      "correct": 2,
+      "positiveCases": 8,
+      "positiveDetected": 6,
+      "cleanCases": 12,
+      "cleanHits": 1,
+      "cleanWithFalsePositive": 10,
+      "tp": 6,
+      "fp": 20,
+      "fn": 2,
+      "expected": 8,
+      "predictions": 26,
+      "severityMatches": 2,
+      "matched": 6,
+      "precision": 0.23076923076923078,
+      "recall": 0.75,
+      "f1": 0.3529411764705882,
+      "caseAccuracy": 0.1,
+      "executionCompleteRate": 0.85,
+      "positiveDetectionRate": 0.75,
+      "cleanHitRate": 0.08333333333333333,
+      "cleanFalsePositiveRate": 0.8333333333333334,
+      "severityMatchRateOnStrictMatches": 0.3333333333333333,
+      "criticalHighRecall": {
+        "expected": 3,
+        "matched": 1,
+        "recall": 0.3333333333333333
+      }
+    },
+    "validation": {
+      "cases": 80,
+      "complete": 58,
+      "correct": 21,
+      "positiveCases": 32,
+      "positiveDetected": 25,
+      "cleanCases": 48,
+      "cleanHits": 15,
+      "cleanWithFalsePositive": 18,
+      "tp": 25,
+      "fp": 49,
+      "fn": 7,
+      "expected": 32,
+      "predictions": 74,
+      "severityMatches": 16,
+      "matched": 25,
+      "precision": 0.33783783783783783,
+      "recall": 0.78125,
+      "f1": 0.4716981132075472,
+      "caseAccuracy": 0.2625,
+      "executionCompleteRate": 0.725,
+      "positiveDetectionRate": 0.78125,
+      "cleanHitRate": 0.3125,
+      "cleanFalsePositiveRate": 0.375,
+      "severityMatchRateOnStrictMatches": 0.64,
+      "criticalHighRecall": {
+        "expected": 16,
+        "matched": 12,
+        "recall": 0.75
+      }
+    }
+  },
+  "byExpectedSeverity": {
+    "critical": {
+      "expected": 4,
+      "matched": 4,
+      "recall": 1
+    },
+    "high": {
+      "expected": 15,
+      "matched": 9,
+      "recall": 0.6
+    },
+    "low": {
+      "expected": 5,
+      "matched": 5,
+      "recall": 1
+    },
+    "medium": {
+      "expected": 16,
+      "matched": 13,
+      "recall": 0.8125
+    }
+  },
+  "byExpectedRule": {
+    "REL-BLOCKING-ASYNC": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "REL-DEBUG-PRINT": {
+      "expected": 4,
+      "matched": 4,
+      "recall": 1
+    },
+    "REL-EMPTY-EXCEPT": {
+      "expected": 5,
+      "matched": 5,
+      "recall": 1
+    },
+    "REL-FLOAT-MONEY": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "REL-NAIVE-DATETIME": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "REL-NONATOMIC-WRITE": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "REL-UNBOUNDED-RETRY": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "SEC-ASSERT-AUTH": {
+      "expected": 1,
+      "matched": 0,
+      "recall": 0
+    },
+    "SEC-EVAL": {
+      "expected": 4,
+      "matched": 4,
+      "recall": 1
+    },
+    "SEC-HARDCODED-SECRET": {
+      "expected": 4,
+      "matched": 0,
+      "recall": 0
+    },
+    "SEC-INSECURE-COOKIE": {
+      "expected": 1,
+      "matched": 0,
+      "recall": 0
+    },
+    "SEC-INSECURE-TEMPFILE": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "SEC-LOG-FORGING": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "SEC-OPEN-REDIRECT": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "SEC-PATH-TRAVERSAL": {
+      "expected": 1,
+      "matched": 0,
+      "recall": 0
+    },
+    "SEC-PICKLE-LOAD": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "SEC-SQL-CONCAT": {
+      "expected": 4,
+      "matched": 4,
+      "recall": 1
+    },
+    "SEC-SUBPROCESS-SHELL": {
+      "expected": 4,
+      "matched": 3,
+      "recall": 0.75
+    },
+    "SEC-WEAK-HASH": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    },
+    "SEC-WEAK-RANDOM": {
+      "expected": 1,
+      "matched": 0,
+      "recall": 0
+    },
+    "SEC-YAML-LOAD": {
+      "expected": 1,
+      "matched": 1,
+      "recall": 1
+    }
+  },
+  "provider": {
+    "modelVersions": [
+      "claude-sonnet-5.5"
+    ],
+    "versionDrift": false,
+    "missingModelVersionCalls": 4,
+    "calls": 525,
+    "usage": {
+      "inputTokens": 4667191,
+      "outputTokens": 80836,
+      "totalTokens": 4748027,
+      "observedInputTokenCalls": 521,
+      "observedOutputTokenCalls": 521,
+      "observedTotalTokenCalls": 521,
+      "unavailableCalls": 4
+    },
+    "latencyMs": {
+      "completedCases": {
+        "observed": 75,
+        "median": 32044,
+        "p95": 43799
+      },
+      "modelCalls": {
+        "observed": 525,
+        "median": 9394,
+        "p95": 14808
+      }
+    }
+  },
+  "execution": {
+    "caseStatuses": {
+      "completed": 75,
+      "incomplete": 25
+    },
+    "callStatuses": {
+      "failed": 4,
+      "succeeded": 521
+    },
+    "roleReasonCounts": {
+      "role_execution_failed": 3,
+      "tool_call_limit_reached": 13
+    },
+    "gateDecisionCounts": {
+      "accepted": 100,
+      "critic_needs_more_evidence": 5,
+      "critic_rejected": 98,
+      "evidence_location_invalid": 21
+    },
+    "caseDurationMsAllAttempts": {
+      "observed": 100,
+      "median": 33677,
+      "p95": 43799
+    },
+    "actualToEstimatedInputRatio": {
+      "observed": 521,
+      "median": 1.2455549568965518,
+      "p95": 2.210748452447946
+    },
+    "callsExceedingInputEstimate": 521,
+    "callsWithInputUsage": 521
+  },
+  "pricing": {
+    "actualBilledCost": null,
+    "actualBilledCostStatus": "not_verified",
+    "publicPriceEstimate": {
+      "currency": "USD",
+      "inputPerMillion": 0.2,
+      "outputPerMillion": 1.0,
+      "amount": 1.014274,
+      "assumption": "Treat all reported input as uncached; exclude unreported cache-write fees and prior connectivity/diagnostic/smoke requests",
+      "sources": [
+        "https://api.airforce/models/claude-sonnet-5.5/",
+        "https://api.airforce/docs/api/models/"
+      ]
+    }
+  },
+  "annotationAudit": {
+    "expectedCleanCases": 60,
+    "missingStandardLibraryImports": {
+      "hashlib": 13,
+      "os": 11
+    },
+    "unboundNonStandardNames": {
+      "cursor": 11,
+      "response": 11
+    },
+    "unresolvedNameCases": 46,
+    "assumption": "after_files are complete modules, consistent with runner coverage; externally injected globals are not encoded",
+    "labelsModifiedDuringRun": false
+  },
+  "semanticAudit": {
+    "method": "Independent agent read review, not human-labelled rescoring",
+    "strictPairsReviewed": 31,
+    "obviousPairedSemanticMismatches": [
+      "pr-0044",
+      "pr-0054",
+      "pr-0064",
+      "pr-0074",
+      "pr-0083",
+      "pr-0094"
+    ],
+    "mismatchesWithAlternateAcceptedTargetFinding": [
+      "pr-0064",
+      "pr-0083",
+      "pr-0094"
+    ],
+    "clearCaseTargetMissesAmongLocationMatches": [
+      "pr-0044",
+      "pr-0054",
+      "pr-0074"
+    ],
+    "rawScoreUnchanged": true,
+    "auditSha256": "c716c00393e7022cab26dd81279f988e631f3476a9f533e4c1c9987a30a49945"
+  },
+  "cases": [
+    {
+      "index": 0,
+      "id": "pr-0001",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 33478,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 1,
+      "id": "pr-0002",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 30983,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 2,
+      "id": "pr-0003",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29646,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 3,
+      "id": "pr-0004",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 44365,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 4,
+      "id": "pr-0005",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 42435,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 5,
+      "id": "pr-0006",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 24527,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 6,
+      "id": "pr-0007",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 35424,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 7,
+      "id": "pr-0008",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 32258,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 8,
+      "id": "pr-0009",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 44012,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 9,
+      "id": "pr-0010",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 30982,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 10,
+      "id": "pr-0011",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29746,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 11,
+      "id": "pr-0012",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 32391,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 12,
+      "id": "pr-0013",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 25253,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 13,
+      "id": "pr-0014",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29787,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 14,
+      "id": "pr-0015",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 40096,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 15,
+      "id": "pr-0016",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 45353,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 16,
+      "id": "pr-0017",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 30040,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 17,
+      "id": "pr-0018",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29643,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 18,
+      "id": "pr-0019",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 34808,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 19,
+      "id": "pr-0020",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 38024,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 20,
+      "id": "pr-0021",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 33840,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 21,
+      "id": "pr-0022",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 30322,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 22,
+      "id": "pr-0023",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 26122,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 23,
+      "id": "pr-0024",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 39638,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 0,
+        "fp": 2,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 24,
+      "id": "pr-0025",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 22431,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 25,
+      "id": "pr-0026",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 9195,
+        "errors": [
+          {
+            "type": "Error",
+            "httpStatus": 401,
+            "code": null
+          },
+          {
+            "type": "Error",
+            "httpStatus": 401,
+            "code": null
+          },
+          {
+            "type": "Error",
+            "httpStatus": 401,
+            "code": null
+          }
+        ]
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 26,
+      "id": "pr-0027",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 39345,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 27,
+      "id": "pr-0028",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 28675,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 28,
+      "id": "pr-0029",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 42646,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 29,
+      "id": "pr-0030",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 41492,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 30,
+      "id": "pr-0031",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 32611,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 31,
+      "id": "pr-0032",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 33011,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 32,
+      "id": "pr-0033",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 28525,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 33,
+      "id": "pr-0034",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 39297,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 0,
+        "fp": 2,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 34,
+      "id": "pr-0035",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 11293,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 35,
+      "id": "pr-0036",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 36436,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 36,
+      "id": "pr-0037",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 28063,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 37,
+      "id": "pr-0038",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 31565,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 38,
+      "id": "pr-0039",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27992,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 39,
+      "id": "pr-0040",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27827,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 40,
+      "id": "pr-0041",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 41142,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 41,
+      "id": "pr-0042",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 32320,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 42,
+      "id": "pr-0043",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 32044,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 43,
+      "id": "pr-0044",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29167,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 44,
+      "id": "pr-0045",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 12069,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 45,
+      "id": "pr-0046",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 42030,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 46,
+      "id": "pr-0047",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 41631,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 47,
+      "id": "pr-0048",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 40309,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 48,
+      "id": "pr-0049",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 35839,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 49,
+      "id": "pr-0050",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27290,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 50,
+      "id": "pr-0051",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 42527,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 51,
+      "id": "pr-0052",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 31277,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 52,
+      "id": "pr-0053",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 33979,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 53,
+      "id": "pr-0054",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 33829,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 54,
+      "id": "pr-0055",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 23631,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 55,
+      "id": "pr-0056",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27390,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 56,
+      "id": "pr-0057",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27285,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 57,
+      "id": "pr-0058",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 62986,
+        "errors": [
+          {
+            "type": "Error",
+            "httpStatus": null,
+            "code": null
+          }
+        ]
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 58,
+      "id": "pr-0059",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 42997,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 59,
+      "id": "pr-0060",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29890,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 60,
+      "id": "pr-0061",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 39956,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 61,
+      "id": "pr-0062",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 40302,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 62,
+      "id": "pr-0063",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 30015,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 63,
+      "id": "pr-0064",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 37311,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 64,
+      "id": "pr-0065",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 30831,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 65,
+      "id": "pr-0066",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 30304,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 66,
+      "id": "pr-0067",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 36289,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 67,
+      "id": "pr-0068",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 34147,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 68,
+      "id": "pr-0069",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27634,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 69,
+      "id": "pr-0070",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 32825,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 70,
+      "id": "pr-0071",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 37960,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 0,
+        "fp": 2,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 71,
+      "id": "pr-0072",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 42539,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 72,
+      "id": "pr-0073",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 31276,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 73,
+      "id": "pr-0074",
+      "split": "validation",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 39188,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 2,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 74,
+      "id": "pr-0075",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 41048,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 75,
+      "id": "pr-0076",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 42677,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 76,
+      "id": "pr-0077",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 35099,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 77,
+      "id": "pr-0078",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 40937,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 78,
+      "id": "pr-0079",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 35452,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 79,
+      "id": "pr-0080",
+      "split": "validation",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 41285,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 80,
+      "id": "pr-0081",
+      "split": "holdout",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 30563,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 81,
+      "id": "pr-0082",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 40155,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 82,
+      "id": "pr-0083",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 42608,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 83,
+      "id": "pr-0084",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 43799,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 84,
+      "id": "pr-0085",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27949,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 85,
+      "id": "pr-0086",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 26062,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 86,
+      "id": "pr-0087",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27353,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 87,
+      "id": "pr-0088",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 33677,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 88,
+      "id": "pr-0089",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27362,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 89,
+      "id": "pr-0090",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 27589,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 90,
+      "id": "pr-0091",
+      "split": "holdout",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 33954,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 1,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 91,
+      "id": "pr-0092",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 28837,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 1,
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 92,
+      "id": "pr-0093",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 45717,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 1
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 93,
+      "id": "pr-0094",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 34876,
+        "errors": []
+      },
+      "counts": {
+        "expected": 1,
+        "predictions": 3,
+        "tp": 1,
+        "fp": 2,
+        "fn": 0,
+        "strictMatches": 1,
+        "tolerance2Matches": 1,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": true,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 94,
+      "id": "pr-0095",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 29685,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 95,
+      "id": "pr-0096",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 34027,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": true,
+        "positiveDetected": false,
+        "cleanHit": true
+      }
+    },
+    {
+      "index": 96,
+      "id": "pr-0097",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 40576,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 97,
+      "id": "pr-0098",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 41118,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 98,
+      "id": "pr-0099",
+      "split": "holdout",
+      "execution": {
+        "status": "incomplete",
+        "analysisStatus": "partial",
+        "complete": false,
+        "durationMs": 41183,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    },
+    {
+      "index": 99,
+      "id": "pr-0100",
+      "split": "holdout",
+      "execution": {
+        "status": "completed",
+        "analysisStatus": "complete",
+        "complete": true,
+        "durationMs": 37324,
+        "errors": []
+      },
+      "counts": {
+        "expected": 0,
+        "predictions": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "strictMatches": 0,
+        "tolerance2Matches": 0,
+        "severityMatches": 0
+      },
+      "outcome": {
+        "correct": false,
+        "positiveDetected": false,
+        "cleanHit": false
+      }
+    }
+  ],
+  "limitations": [
+    "This is a single-pass synthetic controlled benchmark, not an independently human-labelled real-PR quality evaluation.",
+    "The dataset has 100 cases and 10 repositories, below the formal 300-case/30-repository release threshold.",
+    "There is no development/train split and expected findings omit should_comment; this scorer treats every listed expected finding as comment-worthy.",
+    "Path/line matching cannot prove the predicted issue has the expected CWE or rule identity.",
+    "The EvoAgent dataset declares synthetic-controlled provenance and is not an independent real PR quality dataset.",
+    "Expected findings are held out from model prompts and used only as offline scoring inputs.",
+    "The runner shares production roles, critic, schemas, read tools and evidence gate, but uses an in-memory port instead of the durable PostgreSQL worker.",
+    "A single pass without retries or repeated sampling cannot establish production quality or release qualification.",
+    "Provider-reported cost has no trusted currency metadata in this configuration and is not treated as verified spend.",
+    "Sparse and defective expected-clean annotations penalize valid extra findings; raw false-positive counts are not audited model errors.",
+    "Location matches can refer to a different defect on the same line.",
+    "Tool evidence envelopes were not persisted; not all evidence-location rejection predicates can be reconstructed.",
+    "Actual gateway input usage exceeds local token estimates; this run does not validate durable admission accounting."
+  ]
+}
