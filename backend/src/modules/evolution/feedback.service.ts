@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import { z } from "zod";
 
-import { FeedbackStore } from "../../evolution/feedback-store.js";
+import { PgEvolutionFeedbackStore } from "../../evolution/feedback/store.js";
 import { RunApiAuthenticator } from "../../http/common/run-auth.js";
 import { requireRunPermission, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
@@ -34,7 +34,7 @@ export class EvolutionFeedbackService {
     return (await this.store()).arbitrate(principal, validRunId(runId), commandKey(key), body);
   }
 
-  private async store(): Promise<FeedbackStore> { return new FeedbackStore((await getAgentRuntimeServices()).db); }
+  private async store(): Promise<PgEvolutionFeedbackStore> { return new PgEvolutionFeedbackStore((await getAgentRuntimeServices()).db); }
 }
 
 function validRunId(value: string): string { return z.string().uuid().parse(value); }

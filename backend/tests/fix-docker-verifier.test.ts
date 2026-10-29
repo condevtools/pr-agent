@@ -7,10 +7,10 @@ import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 
 import type { FixProposal } from "../src/fix/contracts.js";
-import { DockerFixVerifier } from "../src/fix/docker-verifier.js";
-import { loadFixPolicyRegistry } from "../src/fix/fix-policy.js";
-import { expectedSandboxPolicyHash } from "../src/fix/sandbox-policy.js";
-import { writeSnapshotBundle } from "../src/fix/snapshot-bundle.js";
+import { DockerFixVerifier } from "../src/fix/verification/docker-verifier.js";
+import { loadFixPolicyRegistry } from "../src/fix/proposal/policy.js";
+import { expectedSandboxPolicyHash } from "../src/fix/verification/sandbox-policy.js";
+import { writeSnapshotBundle } from "../src/fix/persistence/snapshot-bundle.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const imageDigest = process.env.FIX_VERIFIER_SANDBOX_IMAGE_DIGEST;

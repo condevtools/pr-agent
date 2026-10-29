@@ -8,7 +8,7 @@ import { currentRunExecutionContext } from "../../agent-runtime/execution/run-co
 import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
 import { AGENT_RUNTIME_CONFIG, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../strategy/text-components.js";
-import { recordDeepReleaseSelection, resolveDeepReleaseSelection } from "../../evolution/release-selection.js";
+import { recordDeepReleaseSelection, resolveDeepReleaseSelection } from "../../evolution/releases/selection.js";
 
 export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {
   if (!binding || currentRunExecutionContext()) return false;

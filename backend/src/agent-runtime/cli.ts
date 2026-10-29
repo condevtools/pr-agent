@@ -9,8 +9,8 @@ import { PublicationAuthorityStore } from "./authority/publication-authority.js"
 import { PublicationControlStore, type PublicationControlInput } from "./publication/control.js";
 import { RuntimeMaintenanceStore } from "./maintenance.js";
 import { RuntimeMetricsStore } from "./metrics.js";
-import { collectFixSnapshots } from "../fix/snapshot-gc.js";
-import { EvolutionDatasetMaintenanceStore } from "../evolution/dataset-maintenance.js";
+import { collectFixSnapshots } from "../fix/persistence/snapshot-gc.js";
+import { PgEvolutionDatasetMaintenanceStore } from "../evolution/datasets/maintenance.js";
 
 const [command, ...args] = process.argv.slice(2);
 const pool = new Pool(agentRuntimePoolConfig());
@@ -257,11 +257,11 @@ try {
       limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined })));
   } else if (command === "dataset-retire") {
     const fields = parseFields(args, ["--tenant", "--dataset", "--version"]);
-    console.log(JSON.stringify(await new EvolutionDatasetMaintenanceStore(pool).retire({
+    console.log(JSON.stringify(await new PgEvolutionDatasetMaintenanceStore(pool).retire({
       tenantId: fields.get("--tenant")!, datasetId: fields.get("--dataset")!, expectedVersion: Number(fields.get("--version")) })));
   } else if (command === "dataset-purge") {
     const fields = parseFields(args, ["--tenant", "--dataset"]);
-    console.log(JSON.stringify(await new EvolutionDatasetMaintenanceStore(pool).purge({
+    console.log(JSON.stringify(await new PgEvolutionDatasetMaintenanceStore(pool).purge({
       tenantId: fields.get("--tenant")!, datasetId: fields.get("--dataset")! })));
   } else if (command === "metrics") {
     const fields = parseFields(args, ["--tenant", "--id"]);

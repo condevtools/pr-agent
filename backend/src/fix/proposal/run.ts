@@ -1,11 +1,11 @@
 import type { VerificationPolicy } from "../contracts.js";
-import { fixRunInputSchema } from "../fix-input.js";
-import { createFixWorkflowPolicy } from "../fix-policy.js";
-import { PgFixStore } from "../fix-store.js";
-import { executeFixProposal } from "../fix-workflow.js";
-import { assertVerifierPolicy } from "../sandbox-policy.js";
-import { readSnapshotBundle } from "../snapshot-bundle.js";
-import { enqueueVerificationJob, waitForVerification } from "../verifier-jobs.js";
+import { fixRunInputSchema } from "./input.js";
+import { createFixWorkflowPolicy } from "./policy.js";
+import { PgFixStore } from "../persistence/store.js";
+import { executeFixProposal } from "./workflow.js";
+import { assertVerifierPolicy } from "../verification/sandbox-policy.js";
+import { readSnapshotBundle } from "../persistence/snapshot-bundle.js";
+import { enqueueVerificationJob, waitForVerification } from "../verification/jobs.js";
 import { createStructuredModel } from "../../model/structured-model.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";

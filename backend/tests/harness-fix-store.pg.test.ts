@@ -9,9 +9,10 @@ import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { createRunInTransaction } from "../src/agent-runtime/postgres/run-store.js";
-import { approveFixApprovalInTransaction, consumeFixApprovalInTransaction,
-  createApprovalInTransaction, PgFixStore } from "../src/fix/fix-store.js";
-import type { FixApprovalIntent, VerificationResult } from "../src/fix/contracts.js";
+import { approveFixApprovalInTransaction, consumeFixApprovalInTransaction, createApprovalInTransaction } from "../src/fix/approval/store.js";
+import { PgFixApprovalStore } from "../src/fix/approval/store.js";
+import type { FixApprovalIntent } from "../src/fix/approval/contracts.js";
+import type { VerificationResult } from "../src/fix/contracts.js";
 import { PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -234,7 +235,7 @@ if (!databaseUrl) {
     await pool.query(
       `UPDATE pr_agent_harness.agent_runs SET status='succeeded',lease_owner=NULL,lease_expires_at=NULL,
          finished_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2`, [tenantId, fixRunId]);
-    const db = appDb; const store = new PgFixStore(db);
+    const db = appDb; const store = new PgFixApprovalStore(db);
     await assert.rejects(store.attestRelevance({ tenantId, integrationId, proposalRunId: fixRunId,
       proposalId, proposalHash: fingerprint("wrong"), testPatchHash: fingerprint("test"), findingId,
       verificationResultHash: fingerprint(verificationResult), rubricVersion: "fix-relevance.v1",

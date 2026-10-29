@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { releaseBucket } from "../src/evolution/release-selection.js";
+import { releaseBucket } from "../src/evolution/releases/selection.js";
 
 const base = { tenantId: "00000000-0000-4000-8000-000000000001",
   integrationId: "00000000-0000-4000-8000-000000000002", headSha: "head",

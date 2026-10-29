@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { applyUnifiedPatch } from "../src/fix/unified-patch.js";
-import { readSnapshotBundle, writeSnapshotBundle } from "../src/fix/snapshot-bundle.js";
+import { applyUnifiedPatch } from "../src/repository/diff/unified-patch.js";
+import { readSnapshotBundle, writeSnapshotBundle } from "../src/fix/persistence/snapshot-bundle.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
-import { evaluateVerificationResult, sandboxCommandResultSchema, type SandboxRunnerResult } from "../src/fix/sandbox-result.js";
-import { isFixDifferentialEligible } from "../src/fix/verification-gate.js";
+import { evaluateVerificationResult, sandboxCommandResultSchema, type SandboxRunnerResult } from "../src/fix/verification/sandbox-result.js";
+import { isFixDifferentialEligible } from "../src/fix/verification/gate.js";
 
 test("strict unified patch applies exact context and rejects traversal/mismatch", () => {
   const files = new Map([["src/math.js", "export const add = (a, b) => a + b;\n"]]);

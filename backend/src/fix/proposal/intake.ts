@@ -3,10 +3,10 @@ import { z } from "zod";
 
 import type { FindingCandidate } from "../../review/deep/contracts.js";
 import type { FixRunInput, FixSource, VerificationPolicy } from "../contracts.js";
-import { loadFixPolicyRegistry } from "../fix-policy.js";
-import { assertVerifierPolicy } from "../sandbox-policy.js";
-import { calculateSnapshotBundleHash, writeSnapshotBundle } from "../snapshot-bundle.js";
-import { lockFixSnapshots } from "../snapshot-gc.js";
+import { loadFixPolicyRegistry } from "./policy.js";
+import { assertVerifierPolicy } from "../verification/sandbox-policy.js";
+import { calculateSnapshotBundleHash, writeSnapshotBundle } from "../persistence/snapshot-bundle.js";
+import { lockFixSnapshots } from "../persistence/snapshot-gc.js";
 import { GitHubRepositoryReadAdapter } from "../../integrations/github/github-repository-read-tools.js";
 import { GitLabRepositoryReadAdapter } from "../../integrations/gitlab/gitlab-repository-read-tools.js";
 import { resolveModelConfiguration } from "../../model/configuration.js";

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { FixProposalFailedError } from "../../fix/proposal/run.js";
-import { EvolutionProposalFailedError } from "../../evolution/proposal-run.js";
+import { EvolutionProposalFailedError } from "../../evolution/proposals/run.js";
 
 import type { PublicationBinding } from "../authority/publication-authority.js";
 import { createBudgetedModelExecutionContext, ModelBudgetExceededError, type ModelBudgetStore, type ModelExecutionPolicy } from "../budget/model-budget-store.js";

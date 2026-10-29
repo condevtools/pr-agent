@@ -1,8 +1,8 @@
-import { executeFixPublicationRun } from "../fix/publish-workflow.js";
-import { executeEvolutionProposalRun } from "../evolution/proposal-run.js";
-import { executeReplayRun, EvaluationCoordinator } from "../evolution/replay-run.js";
-import { EvaluationStore } from "../evolution/replay-store.js";
-import { createFixPublicationAdapter } from "../fix/fix-publication-adapter.js";
+import { executeFixPublicationRun } from "../fix/publication/workflow.js";
+import { executeEvolutionProposalRun } from "../evolution/proposals/run.js";
+import { executeReplayRun, EvaluationCoordinator } from "../evolution/evaluations/run.js";
+import { PgEvolutionEvaluationStore } from "../evolution/evaluations/store.js";
+import { createFixPublicationAdapter } from "../fix/publication/provider-adapter.js";
 import { Pool, type PoolConfig } from "pg";
 import { createProbot } from "probot";
 
@@ -213,7 +213,7 @@ export async function startRunWorker(): Promise<void> {
   const store = new RunExecutionStore(services.db);
   const budget = new ModelBudgetStore(services.db);
   const outcomes = new PublicationOutcomeCoordinator({ db: services.db, batchStore: services.batchStore });
-  const evaluations = new EvaluationCoordinator(new EvaluationStore(services.db));
+  const evaluations = new EvaluationCoordinator(new PgEvolutionEvaluationStore(services.db));
   const outcomeHandler = new PublicationOutcomeHandler({
     store, budget, batchStore: services.batchStore, batchCoordinator: services.batchCoordinator,
     control: new PublicationControlStore(services.db),

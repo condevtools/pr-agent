@@ -23,7 +23,7 @@ RUN addgroup -g 65532 verifier \
     && adduser -D -H -u 65532 -G verifier verifier
 
 COPY backend/scripts/fix-sandbox-runner.mjs /opt/pr-agent-verifier/fix-sandbox-runner.mjs
-COPY --from=build /app/backend/dist/fix/unified-patch.js /opt/pr-agent-verifier/unified-patch.js
+COPY --from=build /app/backend/dist/repository/diff/unified-patch.js /opt/pr-agent-verifier/unified-patch.js
 
 FROM node:22-alpine AS runtime
 
@@ -48,7 +48,7 @@ FROM runtime AS verifier
 
 RUN apk add --no-cache docker-cli
 
-CMD ["node", "dist/fix/verifier-cli.js"]
+CMD ["node", "dist/fix/verification/cli.js"]
 
 # Preserve the historical default image as the web/runtime image.
 FROM runtime AS default

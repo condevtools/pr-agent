@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { canonicalizeLabelSet, findingMatchKey, labelSetHash } from "../src/evolution/feedback-contracts.js";
+import { canonicalizeLabelSet, findingMatchKey, labelSetHash } from "../src/evolution/feedback/contracts.js";
 
 test("label sets canonicalize order while scoring ignores presentation title", () => {
   const first = { path: "src/b.ts", startLine: 9, endLine: 9, severity: "high" as const, title: " B " };

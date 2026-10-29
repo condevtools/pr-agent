@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { DeepReviewArtifact, FindingCandidate } from "../src/review/deep/contracts.js";
-import type { DatasetFixtureV1 } from "../src/evolution/dataset-contracts.js";
-import { ReplayFixtureAdapter } from "../src/evolution/replay-fixture-adapter.js";
-import { replayRunInputSchema } from "../src/evolution/replay-contracts.js";
-import { scoreReplayArtifact } from "../src/evolution/replay-scorer.js";
+import type { DatasetFixtureV1 } from "../src/evolution/datasets/contracts.js";
+import { ReplayFixtureAdapter } from "../src/evolution/evaluations/fixture-adapter.js";
+import { replayRunInputSchema } from "../src/evolution/evaluations/contracts.js";
+import { scoreReplayArtifact } from "../src/evolution/evaluations/scorer.js";
 
 test("replay input rejects caller URLs, provider seeds and arbitrary fields", () => {
   const base = { schemaVersion: 1, workflow: "eval.replay.v1", evaluationId: id(1), resultId: id(2),

@@ -5,8 +5,8 @@ import { createHash } from "node:crypto";
 import type { PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
 import type { PublicationOperation } from "../src/agent-runtime/publication/publication.js";
 import type { FixProposal, VerificationResult } from "../src/fix/contracts.js";
-import { createFixPublicationAdapter } from "../src/fix/fix-publication-adapter.js";
-import { buildFixPublicationPlan } from "../src/fix/publication-plan.js";
+import { createFixPublicationAdapter } from "../src/fix/publication/provider-adapter.js";
+import { buildFixPublicationPlan } from "../src/fix/publication/plan.js";
 
 const hash = (char: string) => char.repeat(64);
 const headSha = "a".repeat(40);

@@ -68,7 +68,7 @@ services:
       context: .
       target: verifier
     restart: unless-stopped
-    command: ["node", "dist/fix/verifier-cli.js"]
+    command: ["node", "dist/fix/verification/cli.js"]
     environment:
       HARNESS_PG_HOST: postgres
       HARNESS_PG_PORT: "5432"

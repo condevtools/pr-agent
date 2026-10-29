@@ -6,8 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { Pool } from "pg";
 
-import { collectFixSnapshots, lockFixSnapshots } from "../src/fix/snapshot-gc.js";
-import { writeSnapshotBundle } from "../src/fix/snapshot-bundle.js";
+import { collectFixSnapshots, lockFixSnapshots } from "../src/fix/persistence/snapshot-gc.js";
+import { writeSnapshotBundle } from "../src/fix/persistence/snapshot-bundle.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import { createRunInTransaction, RunStore } from "../src/agent-runtime/postgres/run-store.js";

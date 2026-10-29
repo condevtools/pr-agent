@@ -10,12 +10,12 @@ import { NestFactory, type INestApplication } from "@nestjs/core";
 import { Pool, type PoolClient } from "pg";
 
 import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../src/review/strategy/text-components.js";
-import { evolutionReleasePolicy } from "../src/evolution/release-policy.js";
-import { evaluateOfflineReleaseGates, EvolutionReleaseGateError } from "../src/evolution/release-gates.js";
-import { PgEvolutionReleaseStore } from "../src/evolution/release-store.js";
-import { releaseBucket } from "../src/evolution/release-selection.js";
+import { evolutionReleasePolicy } from "../src/evolution/releases/policy.js";
+import { evaluateOfflineReleaseGates, EvolutionReleaseGateError } from "../src/evolution/releases/gates.js";
+import { PgEvolutionReleaseStore } from "../src/evolution/releases/store.js";
+import { releaseBucket } from "../src/evolution/releases/selection.js";
 import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH,
-  REPLAY_VERIFIER_HASH } from "../src/evolution/replay-contracts.js";
+  REPLAY_VERIFIER_HASH } from "../src/evolution/evaluations/contracts.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import { RunStore, type CreateRunInput } from "../src/agent-runtime/postgres/run-store.js";

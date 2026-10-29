@@ -18,16 +18,16 @@ import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.j
 import { RunControlError } from "../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint, runtimeVersionManifest } from "../src/agent-runtime/versions.js";
 import { resolveModelConfiguration } from "../src/model/configuration.js";
-import { DatasetStore } from "../src/evolution/dataset-store.js";
-import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../src/evolution/dataset-fixture.js";
-import { FeedbackStore } from "../src/evolution/feedback-store.js";
-import { PgEvolutionCandidateStore } from "../src/evolution/candidate-store.js";
-import { admitEvolutionProposalRun } from "../src/evolution/proposal-intake.js";
-import { admitEvaluation } from "../src/evolution/replay-intake.js";
-import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH } from "../src/evolution/replay-contracts.js";
-import { EvaluationCoordinator } from "../src/evolution/replay-run.js";
-import { EvaluationStore } from "../src/evolution/replay-store.js";
-import type { TrustedLabelSetV1 } from "../src/evolution/feedback-contracts.js";
+import { PgEvolutionDatasetStore } from "../src/evolution/datasets/store.js";
+import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../src/evolution/datasets/fixture.js";
+import { PgEvolutionFeedbackStore } from "../src/evolution/feedback/store.js";
+import { PgEvolutionCandidateStore } from "../src/evolution/proposals/candidate-store.js";
+import { admitEvolutionProposalRun } from "../src/evolution/proposals/intake.js";
+import { admitEvaluation } from "../src/evolution/evaluations/intake.js";
+import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH } from "../src/evolution/evaluations/contracts.js";
+import { EvaluationCoordinator } from "../src/evolution/evaluations/run.js";
+import { PgEvolutionEvaluationStore } from "../src/evolution/evaluations/store.js";
+import type { TrustedLabelSetV1 } from "../src/evolution/feedback/contracts.js";
 import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/review/strategy/text-components.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -220,7 +220,7 @@ if (!databaseUrl) {
     (error: unknown) => error instanceof RunControlError && error.status === 403);
 
     await executeEvaluation(receipt.id);
-    const completed = await new EvaluationStore(appDb).read(curator(), receipt.id);
+    const completed = await new PgEvolutionEvaluationStore(appDb).read(curator(), receipt.id);
     assert.equal(completed.status, "succeeded"); assert.equal(completed.completedResults, 6);
     const completeMetrics = completed.metrics as { comparable?: boolean; baseline?: { total?: number; succeeded?: number; costMicros?: number };
       candidate?: { total?: number; succeeded?: number; costMicros?: number } };
@@ -281,7 +281,7 @@ if (!databaseUrl) {
   test("current admission manifest drift terminalizes every undispatched result without creating child Runs", async () => {
     const receipt = await admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-admission-drift",
       request: { datasetId, candidateId, split: "development" } });
-    const store = new EvaluationStore(appDb);
+    const store = new PgEvolutionEvaluationStore(appDb);
     const inspectionLease = await store.claim(tenantId, developmentIntegrationId, "frozen-policy-inspection");
     assert.ok(inspectionLease);
     const pending = await store.nextPending(inspectionLease, developmentIntegrationId);
@@ -334,7 +334,7 @@ if (!databaseUrl) {
   test("deadline expiry preserves completed cost and marks running child cost as externally pending", async () => {
     const receipt = await admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-deadline",
       request: { datasetId, candidateId, split: "development" } });
-    const store = new EvaluationStore(appDb); const coordinator = new EvaluationCoordinator(store);
+    const store = new PgEvolutionEvaluationStore(appDb); const coordinator = new EvaluationCoordinator(store);
     const errors: unknown[] = []; const worker = workerFor(errors);
     assert.equal(await coordinator.tick(developmentBinding), true);
     assert.equal(await activeReplayChildren(receipt.id), EVALUATION_SCHEDULING_POLICY.maxConcurrentChildrenPerIntegration);
@@ -390,7 +390,7 @@ if (!databaseUrl) {
   test("component model drift retains the complete repetition matrix and makes metrics incomparable", async () => {
     const receipt = await admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-drift",
       request: { datasetId, candidateId, split: "development" } });
-    const coordinator = new EvaluationCoordinator(new EvaluationStore(appDb)); const errors: unknown[] = [];
+    const coordinator = new EvaluationCoordinator(new PgEvolutionEvaluationStore(appDb)); const errors: unknown[] = [];
     const worker = workerFor(errors);
     assert.equal(await coordinator.tick(developmentBinding), true);
     const attached = (await adminPool.query<{ id: string; child_run_id: string }>(
@@ -412,7 +412,7 @@ if (!databaseUrl) {
     assert.equal(drifted.length, 1);
     assert.ok((drifted[0]!.usage_json?.inputTokens ?? 0) > 0);
     assert.ok((drifted[0]!.usage_json?.costMicros ?? 0) > 0);
-    const completed = await new EvaluationStore(appDb).read(curator(), receipt.id);
+    const completed = await new PgEvolutionEvaluationStore(appDb).read(curator(), receipt.id);
     assert.equal(completed.failedResults, 1);
     assert.equal(completed.metrics?.comparable, false);
     const metrics = completed.metrics as { baseline?: { total?: number; failed?: number; costMicros?: number };
@@ -428,7 +428,7 @@ if (!databaseUrl) {
       request: { datasetId, candidateId, split: "development" } });
     const second = await admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-cap-second",
       request: { datasetId, candidateId, split: "development" } });
-    const store = new EvaluationStore(appDb); const coordinator = new EvaluationCoordinator(store);
+    const store = new PgEvolutionEvaluationStore(appDb); const coordinator = new EvaluationCoordinator(store);
     assert.equal(await coordinator.tick(developmentBinding), true);
     assert.equal(await coordinator.tick(developmentBinding), true);
     const counts = await adminPool.query<{ eval_run_id: string; active: string }>(
@@ -502,7 +502,7 @@ if (!databaseUrl) {
   }
 
   async function executeEvaluation(evaluationId: string): Promise<void> {
-    const coordinator = new EvaluationCoordinator(new EvaluationStore(appDb)); const errors: unknown[] = [];
+    const coordinator = new EvaluationCoordinator(new PgEvolutionEvaluationStore(appDb)); const errors: unknown[] = [];
     const worker = workerFor(errors);
     await runCoordinatorToTerminal(evaluationId, coordinator, worker, errors);
   }
@@ -532,7 +532,7 @@ if (!databaseUrl) {
   }
 
   async function createFrozenDataset(): Promise<string> {
-    const store = new DatasetStore(appDb);
+    const store = new PgEvolutionDatasetStore(appDb);
     let dataset = await store.create(curator(), { name: "p3b-frozen", developmentBefore: "2025-01-01T00:00:00Z",
       validationBefore: "2025-12-01T00:00:00Z" });
     for (const item of [{ runId: developmentRunId, integrationId: developmentIntegrationId, token: "development" },
@@ -549,7 +549,7 @@ if (!databaseUrl) {
   }
 
   async function createTrustedLabels(runId: string, integrationId: string): Promise<void> {
-    const feedback = new FeedbackStore(appDb); const artifactHash = fingerprint(reviewArtifact());
+    const feedback = new PgEvolutionFeedbackStore(appDb); const artifactHash = fingerprint(reviewArtifact());
     const request = { artifactHash, labelSet: labels, provenance: { method: "full_diff_review" as const } };
     await feedback.createAnnotation({ ...curator(integrationId), subjectId: `reviewer-a-${runId}` }, runId, "a", request);
     await feedback.createAnnotation({ ...curator(integrationId), subjectId: `reviewer-b-${runId}` }, runId, "b", request);

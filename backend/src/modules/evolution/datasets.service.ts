@@ -2,9 +2,9 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import { z } from "zod";
 
-import { DatasetStore } from "../../evolution/dataset-store.js";
-import { addDatasetCaseSchema, createDatasetSchema, freezeDatasetSchema } from "../../evolution/dataset-contracts.js";
-import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../../evolution/dataset-fixture.js";
+import { PgEvolutionDatasetStore } from "../../evolution/datasets/store.js";
+import { addDatasetCaseSchema, createDatasetSchema, freezeDatasetSchema } from "../../evolution/datasets/contracts.js";
+import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../../evolution/datasets/fixture.js";
 import { GitHubRepositoryReadAdapter } from "../../integrations/github/github-repository-read-tools.js";
 import { GitLabRepositoryReadAdapter } from "../../integrations/gitlab/gitlab-repository-read-tools.js";
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
@@ -60,8 +60,8 @@ export class DatasetsService {
     return (await this.store()).readFixture(principal, datasetId, caseId);
   }
 
-  private async store(): Promise<DatasetStore> {
-    return new DatasetStore((await getAgentRuntimeServices()).db);
+  private async store(): Promise<PgEvolutionDatasetStore> {
+    return new PgEvolutionDatasetStore((await getAgentRuntimeServices()).db);
   }
 }
 

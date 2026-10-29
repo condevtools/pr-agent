@@ -6,7 +6,7 @@ import {
   findingMatchKey,
   labelSetHash,
   trustedLabelSetSchema,
-} from "../src/evolution/feedback-contracts.js";
+} from "../src/evolution/feedback/contracts.js";
 
 const first = { path: "src/a.ts", startLine: 8, endLine: 8, severity: "high" as const, title: "  Unsafe input  " };
 const second = { path: "src/b.ts", startLine: 2, endLine: 4, severity: "medium" as const, title: "Missing guard" };

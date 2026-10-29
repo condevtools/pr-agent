@@ -3,8 +3,8 @@ import test from "node:test";
 
 import type { StructuredModelRequest } from "../src/model/contracts.js";
 import type { FixArtifact, FixProposal, FixSource, FixWorkflowPolicy, VerificationResult } from "../src/fix/contracts.js";
-import { executeFixProposal } from "../src/fix/fix-workflow.js";
-import { FixPatchValidationError, validateFixPatchPair } from "../src/fix/patch-validator.js";
+import { executeFixProposal } from "../src/fix/proposal/workflow.js";
+import { FixPatchValidationError, validateFixPatchPair } from "../src/fix/proposal/patch-validator.js";
 import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 

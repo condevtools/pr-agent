@@ -2,9 +2,9 @@ import { Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import { z } from "zod";
 
-import { evolutionProposalRequestSchema } from "../../evolution/candidate-contracts.js";
-import { PgEvolutionCandidateStore } from "../../evolution/candidate-store.js";
-import { admitEvolutionProposalRun } from "../../evolution/proposal-intake.js";
+import { evolutionProposalRequestSchema } from "../../evolution/proposals/candidate-contracts.js";
+import { PgEvolutionCandidateStore } from "../../evolution/proposals/candidate-store.js";
+import { admitEvolutionProposalRun } from "../../evolution/proposals/intake.js";
 import { RunApiAuthenticator } from "../../http/common/run-auth.js";
 import { requireRunPermission, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";

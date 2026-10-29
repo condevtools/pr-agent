@@ -4,8 +4,8 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { DatasetStore } from "../src/evolution/dataset-store.js";
-import { FeedbackStore } from "../src/evolution/feedback-store.js";
+import { PgEvolutionDatasetStore } from "../src/evolution/datasets/store.js";
+import { PgEvolutionFeedbackStore } from "../src/evolution/feedback/store.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
@@ -19,7 +19,7 @@ else {
   if (!databaseName.startsWith("harness_test_")) throw new Error("feedback tests require a disposable database");
   const admin = new Pool({ connectionString: databaseUrl, max: 2 });
   const role = `feedback_app_${process.pid}`; const password = "feedback-test-password";
-  let app: Pool; let store: FeedbackStore;
+  let app: Pool; let store: PgEvolutionFeedbackStore;
   const tenantId = randomUUID(); const integrationId = randomUUID(); const otherIntegrationId = randomUUID();
   const runId = randomUUID(); const stepId = randomUUID(); const artifactId = fingerprint("artifact-id");
   const artifact = { workflowId: "review.deep.v1", identity: { tenantId, integrationId, runId }, sourceCoverage: { status: "complete" } };
@@ -66,7 +66,7 @@ else {
        VALUES ($1,$2,$3,$4,'review.deep.v1','shadow',$5,$6,$7::jsonb)`,
       [artifactId, tenantId, integrationId, runId, "2".repeat(40), artifactHash, JSON.stringify(artifact)]);
     const url = new URL(databaseUrl); url.username = role; url.password = password;
-    app = new Pool({ connectionString: url.toString(), max: 3 }); store = new FeedbackStore(new RuntimeDatabase(app));
+    app = new Pool({ connectionString: url.toString(), max: 3 }); store = new PgEvolutionFeedbackStore(new RuntimeDatabase(app));
   });
 
   after(async () => { await app?.end(); await admin.query(`DROP OWNED BY ${role}`);
@@ -104,7 +104,7 @@ else {
       "SELECT version,active FROM pr_agent_harness.trusted_review_label_sets WHERE tenant_id=$1 AND source_run_id=$2 ORDER BY version",
       [tenantId, runId]);
     assert.deepEqual(labelHistory.rows, [{ version: "1", active: false }]);
-    const datasetStore = new DatasetStore(new RuntimeDatabase(app));
+    const datasetStore = new PgEvolutionDatasetStore(new RuntimeDatabase(app));
     const curator = principal("curator", integrationId, ["evaluations:create"]);
     const dataset = await datasetStore.create(curator, { name: "inactive-label-rejection",
       developmentBefore: "2025-01-01T00:00:00.000Z", validationBefore: "2026-01-01T00:00:00.000Z" });

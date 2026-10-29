@@ -1,8 +1,8 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type { Request } from "express";
-import { PgEvolutionReleaseStore } from "../../evolution/release-store.js";
+import { PgEvolutionReleaseStore } from "../../evolution/releases/store.js";
 import { decideReleaseSchema, qualifyCandidateSchema, requestReleaseSchema,
-  revokeReleaseSchema, rollbackReleaseSchema } from "../../evolution/release-contracts.js";
+  revokeReleaseSchema, rollbackReleaseSchema } from "../../evolution/releases/contracts.js";
 import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget-store.js";
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";

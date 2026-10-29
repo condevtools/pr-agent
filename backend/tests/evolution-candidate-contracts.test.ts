@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   evolutionProposalRequestSchema,
   evolutionProposalRunInputSchema,
-} from "../src/evolution/candidate-contracts.js";
+} from "../src/evolution/proposals/candidate-contracts.js";
 import { reviewStrategyTextSchema } from "../src/review/strategy/contracts.js";
 import {
   BASELINE_REVIEW_TEXT,

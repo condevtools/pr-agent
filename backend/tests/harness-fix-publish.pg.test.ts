@@ -5,7 +5,7 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { consumeFixApprovalInTransaction, revokeApprovalInTransaction } from "../src/fix/fix-store.js";
+import { consumeFixApprovalInTransaction, revokeApprovalInTransaction } from "../src/fix/approval/store.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import { PublicationBatchCoordinator, PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";

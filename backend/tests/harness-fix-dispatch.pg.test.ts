@@ -9,7 +9,7 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { expectedSandboxPolicyHash } from "../src/fix/sandbox-policy.js";
+import { expectedSandboxPolicyHash } from "../src/fix/verification/sandbox-policy.js";
 import type { FixProposal, VerificationResult } from "../src/fix/contracts.js";
 import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
 import { getModelExecutionPolicy, ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";

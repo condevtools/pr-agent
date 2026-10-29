@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeCanaryMetrics, canPromoteCanary, type CanaryObservation } from "../src/evolution/canary-metrics.js";
-import { requestReleaseSchema } from "../src/evolution/release-contracts.js";
-import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "../src/evolution/release-policy.js";
-import { releaseBucket } from "../src/evolution/release-selection.js";
+import { computeCanaryMetrics, canPromoteCanary, type CanaryObservation } from "../src/evolution/releases/canary-metrics.js";
+import { requestReleaseSchema } from "../src/evolution/releases/contracts.js";
+import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "../src/evolution/releases/policy.js";
+import { releaseBucket } from "../src/evolution/releases/selection.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const candidateId = "11111111-1111-4111-8111-111111111111";

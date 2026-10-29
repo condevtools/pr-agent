@@ -2,8 +2,8 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { Request } from "express";
 import { z } from "zod";
 
-import { admitEvaluation } from "../../evolution/replay-intake.js";
-import { EvaluationStore } from "../../evolution/replay-store.js";
+import { admitEvaluation } from "../../evolution/evaluations/intake.js";
+import { PgEvolutionEvaluationStore } from "../../evolution/evaluations/store.js";
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
 import { RunsService } from "../harness/runs.service.js";
@@ -20,7 +20,7 @@ export class EvaluationsService {
 
   async read(request: Request, id: string) {
     z.string().uuid().parse(id);
-    return new EvaluationStore((await getAgentRuntimeServices()).db).read(this.runs.authenticate(request), id);
+    return new PgEvolutionEvaluationStore((await getAgentRuntimeServices()).db).read(this.runs.authenticate(request), id);
   }
 }
 function idempotencyKey(request: Request): string {

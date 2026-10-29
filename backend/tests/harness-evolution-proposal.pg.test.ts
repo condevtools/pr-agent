@@ -5,8 +5,8 @@ import test, { after, before } from "node:test";
 import { Pool } from "pg";
 
 import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/review/strategy/text-components.js";
-import type { EvolutionProposalSource } from "../src/evolution/candidate-contracts.js";
-import { PgEvolutionCandidateStore } from "../src/evolution/candidate-store.js";
+import type { EvolutionProposalSource } from "../src/evolution/proposals/candidate-contracts.js";
+import { PgEvolutionCandidateStore } from "../src/evolution/proposals/candidate-store.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import type { RunLease } from "../src/agent-runtime/runs/contracts.js";

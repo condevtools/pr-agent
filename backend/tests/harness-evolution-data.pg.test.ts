@@ -5,12 +5,12 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { DatasetStore } from "../src/evolution/dataset-store.js";
-import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../src/evolution/dataset-fixture.js";
-import { EvolutionDatasetMaintenanceStore } from "../src/evolution/dataset-maintenance.js";
-import { FeedbackStore } from "../src/evolution/feedback-store.js";
-import type { TrustedLabelSetV1 } from "../src/evolution/feedback-contracts.js";
-import { labelSetHash } from "../src/evolution/feedback-contracts.js";
+import { PgEvolutionDatasetStore } from "../src/evolution/datasets/store.js";
+import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../src/evolution/datasets/fixture.js";
+import { PgEvolutionDatasetMaintenanceStore } from "../src/evolution/datasets/maintenance.js";
+import { PgEvolutionFeedbackStore } from "../src/evolution/feedback/store.js";
+import type { TrustedLabelSetV1 } from "../src/evolution/feedback/contracts.js";
+import { labelSetHash } from "../src/evolution/feedback/contracts.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
@@ -50,7 +50,7 @@ if (!databaseUrl) {
   const oneFinding: TrustedLabelSetV1 = { ...emptyLabels, expectedFindings: [
     { path: "src/a.ts", startLine: 1, endLine: 1, severity: "high", title: "Unsafe assignment" },
   ] };
-  let appPool: Pool; let store: FeedbackStore; let datasets: DatasetStore;
+  let appPool: Pool; let store: PgEvolutionFeedbackStore; let datasets: PgEvolutionDatasetStore;
 
   const principal = (subjectId: string, integration = integrationId): RunPrincipal => ({ subjectId, actorType: "user",
     tenantId, integrationId: integration, permissions: ["feedback:create", "annotations:create", "annotations:arbitrate"] });
@@ -71,7 +71,7 @@ if (!databaseUrl) {
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     appPool = new Pool({ connectionString: appUrl.toString(), max: 8 });
     const appDb = new RuntimeDatabase(appPool);
-    store = new FeedbackStore(appDb); datasets = new DatasetStore(appDb);
+    store = new PgEvolutionFeedbackStore(appDb); datasets = new PgEvolutionDatasetStore(appDb);
     await seedIntegration(integrationId, "acme/evolution", 88);
     await seedIntegration(otherIntegrationId, "acme/other", 89);
     await seedIntegration(crossTenantIntegrationId, "foreign/repository", 90, otherTenantId);
@@ -98,7 +98,7 @@ if (!databaseUrl) {
     for (const [runId, integration] of [[datasetRunA, datasetIntegrationA], [datasetRunB, datasetIntegrationB],
       [datasetRunC, datasetIntegrationC], [datasetRunD, datasetIntegrationD],
       [datasetRunE, datasetIntegrationE], [datasetRunF, datasetIntegrationF]] as const) {
-      const feedback = new FeedbackStore(new RuntimeDatabase(appPool));
+      const feedback = new PgEvolutionFeedbackStore(new RuntimeDatabase(appPool));
       const annotation = { artifactHash, labelSet: emptyLabels, provenance: { method: "full_diff_review" as const } };
       await feedback.createAnnotation(principal(`seed-a-${runId}`, integration), runId, "seed-a", annotation);
       await feedback.createAnnotation(principal(`seed-b-${runId}`, integration), runId, "seed-b", annotation);
@@ -328,7 +328,7 @@ if (!databaseUrl) {
     const racing = await Promise.allSettled([
       datasets.freeze(curator, dataset.id, added.version), datasets.freeze(curator, dataset.id, added.version),
     ]);
-    const fulfilled = racing.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<DatasetStore["freeze"]>>> =>
+    const fulfilled = racing.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<PgEvolutionDatasetStore["freeze"]>>> =>
       result.status === "fulfilled");
     const rejected = racing.filter((result): result is PromiseRejectedResult => result.status === "rejected");
     assert.equal(fulfilled.length, 1); assert.equal(rejected.length, 1);
@@ -385,9 +385,9 @@ if (!databaseUrl) {
     const sourceRetention = await new RuntimeMaintenanceStore(adminPool).apply({ tenantId, olderThanDays: 30, limit: 10 });
     assert.equal(sourceRetention.applied, 1);
 
-    await assert.rejects(new EvolutionDatasetMaintenanceStore(appPool).retire({ tenantId, datasetId: retiring.id,
+    await assert.rejects(new PgEvolutionDatasetMaintenanceStore(appPool).retire({ tenantId, datasetId: retiring.id,
       expectedVersion: retiringFrozen.version }), /administrative PostgreSQL role/);
-    const maintenance = new EvolutionDatasetMaintenanceStore(adminPool);
+    const maintenance = new PgEvolutionDatasetMaintenanceStore(adminPool);
     assert.deepEqual(await maintenance.retire({ tenantId, datasetId: retiring.id,
       expectedVersion: retiringFrozen.version }), { retired: true });
     assert.deepEqual(await maintenance.purge({ tenantId, datasetId: retiring.id }), { purged: true, fixtures: 0 });
@@ -437,7 +437,7 @@ if (!databaseUrl) {
     const fixture = await buildDatasetFixture(source, repositoryAdapter([]));
     const added = await datasets.addCase(curator, first.id, first.version, source, fixture);
     const frozen = await datasets.freeze(curator, first.id, added.version);
-    const maintenance = new EvolutionDatasetMaintenanceStore(adminPool);
+    const maintenance = new PgEvolutionDatasetMaintenanceStore(adminPool);
     await maintenance.retire({ tenantId, datasetId: first.id, expectedVersion: frozen.version });
     assert.deepEqual(await maintenance.purge({ tenantId, datasetId: first.id }), { purged: true, fixtures: 1 });
     const second = await datasets.create(curator, { name: "must-not-reuse-purged", developmentBefore: "2025-06-01T00:00:00Z",

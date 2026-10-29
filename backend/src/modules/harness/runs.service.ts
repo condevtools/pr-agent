@@ -1,3 +1,4 @@
+import { PgFixApprovalStore } from "../../fix/approval/store.js";
 import { Injectable, type BeforeApplicationShutdown } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { z } from "zod";
@@ -18,13 +19,14 @@ import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget
 import { resolveModelConfiguration } from "../../model/configuration.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import type { FixArtifact } from "../../fix/contracts.js";
-import { approveFixApprovalInTransaction, createApprovalInTransaction, PgFixStore, revokeApprovalInTransaction } from "../../fix/fix-store.js";
-import { fixRunInputSchema } from "../../fix/fix-input.js";
-import { buildFixPublicationPlan } from "../../fix/publication-plan.js";
-import { readSnapshotBundle } from "../../fix/snapshot-bundle.js";
+import { approveFixApprovalInTransaction, createApprovalInTransaction, revokeApprovalInTransaction } from "../../fix/approval/store.js";
+import { PgFixStore } from "../../fix/persistence/store.js";
+import { fixRunInputSchema } from "../../fix/proposal/input.js";
+import { buildFixPublicationPlan } from "../../fix/publication/plan.js";
+import { readSnapshotBundle } from "../../fix/persistence/snapshot-bundle.js";
 import { admitFixProposalRun } from "../../fix/proposal/intake.js";
 import { createRunInTransaction } from "../../agent-runtime/postgres/run-store.js";
-import { isFixDifferentialEligible } from "../../fix/verification-gate.js";
+import { isFixDifferentialEligible } from "../../fix/verification/gate.js";
 
 @Injectable()
 export class RunsService implements BeforeApplicationShutdown {
@@ -143,7 +145,7 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "fixes:approve");
     const runId = validRunId(proposalRunId);
     const request = fixRelevanceSchema.parse(body);
-    return new PgFixStore((await getAgentRuntimeServices()).db).attestRelevance({
+    return new PgFixApprovalStore((await getAgentRuntimeServices()).db).attestRelevance({
       tenantId: principal.tenantId, integrationId: principal.integrationId, proposalRunId: runId,
       ...request, actor: { type: principal.actorType, id: principal.subjectId },
     });

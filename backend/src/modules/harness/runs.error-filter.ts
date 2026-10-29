@@ -2,7 +2,7 @@ import { Catch, type ArgumentsHost, type ExceptionFilter } from "@nestjs/common"
 import type { Response } from "express";
 import { ZodError } from "zod";
 
-import { FixStoreError } from "../../fix/fix-store.js";
+import { FixStoreError } from "../../fix/errors.js";
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { RunCursorExpiredError } from "../../agent-runtime/runs/query-store.js";
 import { ModelBudgetExceededError } from "../../agent-runtime/budget/model-budget-store.js";

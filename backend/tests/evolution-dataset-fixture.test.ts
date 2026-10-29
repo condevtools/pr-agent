@@ -8,8 +8,8 @@ import {
   shingleSimilarity,
   validateDatasetFixture,
   type DatasetRepositoryAdapter,
-} from "../src/evolution/dataset-fixture.js";
-import type { DatasetCaseSource } from "../src/evolution/dataset-contracts.js";
+} from "../src/evolution/datasets/fixture.js";
+import type { DatasetCaseSource } from "../src/evolution/datasets/contracts.js";
 
 const source: DatasetCaseSource = {
   tenantId: "tenant-a", integrationId: "integration-a", sourceRunId: "00000000-0000-4000-8000-000000000001",
