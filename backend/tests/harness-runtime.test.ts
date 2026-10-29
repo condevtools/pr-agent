@@ -11,6 +11,7 @@ test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL"
   }), {
     host: "postgres", database: "pr_agent", user: "pr_agent_app", password: "local-test", port: 5432,
     max: 8, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000,
+    statement_timeout: 15000, lock_timeout: 5000, idle_in_transaction_session_timeout: 15000,
   });
   assert.throws(() => harnessPoolConfig({
     HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent",

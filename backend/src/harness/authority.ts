@@ -1,3 +1,5 @@
+import type { PoolClient } from "pg";
+
 import { HarnessDatabase } from "./postgres/database.js";
 import { normalizeIntegrationTarget, type IntegrationPlatform } from "./postgres/run-store.js";
 
@@ -15,6 +17,7 @@ export interface PublicationBinding {
   state: "blocked" | "active" | "draining";
   reviewExecutionMode?: "legacy_sync" | "harness_async";
   executionModeGeneration?: number;
+  reviewExecutionState?: "active" | "draining";
 }
 
 interface BindingRow {
@@ -23,6 +26,7 @@ interface BindingRow {
   publication_generation: string; authority_version: string; publication_state: PublicationBinding["state"];
   review_execution_mode?: "legacy_sync" | "harness_async";
   execution_mode_generation?: string;
+  review_execution_state?: "active" | "draining";
 }
 
 /** Administrative enrollment and cutover; runtime credentials have SELECT permission only. */
@@ -121,6 +125,147 @@ export class PublicationAuthorityStore {
     });
   }
 
+  async drainExecution(input: {
+    tenantId: string; integrationId: string; expectedVersion: number;
+    actor: string; actorType?: "user" | "service"; evidence: string;
+  }): Promise<PublicationBinding> {
+    requiredAdministrativeEvidence(input.actor, input.evidence);
+    return this.db.transaction(input.tenantId, async (client) => {
+      const selected = await client.query<BindingRow>(
+        `SELECT * FROM pr_agent_harness.integration_bindings
+         WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE`,
+        [input.tenantId, input.integrationId],
+      );
+      const row = selected.rows[0];
+      if (!row || Number(row.authority_version) !== input.expectedVersion) {
+        throw new Error("Review execution authority version conflict");
+      }
+      if ((row.review_execution_state ?? "active") !== "active") {
+        throw new Error("Review execution is already draining");
+      }
+      const receipt = {
+        actor: input.actor,
+        evidence: input.evidence,
+        fromMode: row.review_execution_mode ?? "legacy_sync",
+        generation: Number(row.execution_mode_generation ?? 0),
+      };
+      const updated = await client.query<BindingRow>(
+        `UPDATE pr_agent_harness.integration_bindings
+         SET review_execution_state='draining',execution_drain_receipt=$3::jsonb,
+             authority_version=authority_version+1,updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND id=$2 RETURNING *`,
+        [input.tenantId, input.integrationId, JSON.stringify(receipt)],
+      );
+      await appendExecutionAudit(client, input, "execution.drain", {
+        mode: receipt.fromMode, generation: receipt.generation,
+        priorVersion: input.expectedVersion,
+      });
+      return mapBinding(updated.rows[0]!);
+    });
+  }
+
+  async switchExecution(input: {
+    tenantId: string; integrationId: string; expectedVersion: number;
+    mode: "legacy_sync" | "harness_async";
+    actor: string; actorType?: "user" | "service"; evidence: string;
+  }): Promise<PublicationBinding> {
+    requiredAdministrativeEvidence(input.actor, input.evidence);
+    return this.db.transaction(input.tenantId, async (client) => {
+      const selected = await client.query<BindingRow>(
+        `SELECT * FROM pr_agent_harness.integration_bindings
+         WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE`,
+        [input.tenantId, input.integrationId],
+      );
+      const row = selected.rows[0];
+      if (!row || Number(row.authority_version) !== input.expectedVersion) {
+        throw new Error("Review execution authority version conflict");
+      }
+      if ((row.review_execution_state ?? "active") !== "draining") {
+        throw new Error("Drain review execution before switching mode");
+      }
+      if (row.publication_state !== "active") {
+        throw new Error("Publication authority must be active before switching review execution");
+      }
+      if ((row.review_execution_mode ?? "legacy_sync") === input.mode) {
+        throw new Error("Review execution mode is already selected");
+      }
+      const nonterminalRuns = await client.query(
+        `SELECT 1 FROM pr_agent_harness.agent_runs
+         WHERE tenant_id=$1 AND integration_id=$2
+           AND status IN ('queued','running','retry_wait','waiting_for_user','waiting_for_reconciliation')
+         LIMIT 1`,
+        [input.tenantId, input.integrationId],
+      );
+      if (nonterminalRuns.rowCount) {
+        throw new Error("Nonterminal Runs prevent review execution mode switch");
+      }
+      const unresolved = await client.query(
+        `SELECT 1 FROM pr_agent_harness.repository_operations
+         WHERE tenant_id=$1 AND integration_id=$2
+           AND status IN ('prepared','in_flight','unknown','manual_review')
+         LIMIT 1`,
+        [input.tenantId, input.integrationId],
+      );
+      if (unresolved.rowCount) {
+        throw new Error("Unresolved publication operations prevent review execution mode switch");
+      }
+      const priorMode = row.review_execution_mode ?? "legacy_sync";
+      const nextGeneration = Number(row.execution_mode_generation ?? 0) + 1;
+      const receipt = {
+        actor: input.actor, evidence: input.evidence, fromMode: priorMode,
+        toMode: input.mode, generation: nextGeneration,
+      };
+      const updated = await client.query<BindingRow>(
+        `UPDATE pr_agent_harness.integration_bindings
+         SET review_execution_mode=$3,execution_mode_generation=execution_mode_generation+1,
+             review_execution_state='active',execution_switch_receipt=$4::jsonb,
+             authority_version=authority_version+1,updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND id=$2 RETURNING *`,
+        [input.tenantId, input.integrationId, input.mode, JSON.stringify(receipt)],
+      );
+      await appendExecutionAudit(client, input, "execution.switch", {
+        fromMode: priorMode, toMode: input.mode, generation: nextGeneration,
+        priorVersion: input.expectedVersion,
+      });
+      return mapBinding(updated.rows[0]!);
+    });
+  }
+
+  async resumeExecution(input: {
+    tenantId: string; integrationId: string; expectedVersion: number;
+    actor: string; actorType?: "user" | "service"; evidence: string;
+  }): Promise<PublicationBinding> {
+    requiredAdministrativeEvidence(input.actor, input.evidence);
+    return this.db.transaction(input.tenantId, async (client) => {
+      const selected = await client.query<BindingRow>(
+        `SELECT * FROM pr_agent_harness.integration_bindings
+         WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE`,
+        [input.tenantId, input.integrationId],
+      );
+      const row = selected.rows[0];
+      if (!row || Number(row.authority_version) !== input.expectedVersion) {
+        throw new Error("Review execution authority version conflict");
+      }
+      if ((row.review_execution_state ?? "active") !== "draining") {
+        throw new Error("Only draining review execution can resume admission");
+      }
+      const mode = row.review_execution_mode ?? "legacy_sync";
+      const generation = Number(row.execution_mode_generation ?? 0);
+      const receipt = { actor: input.actor, evidence: input.evidence, mode, generation };
+      const updated = await client.query<BindingRow>(
+        `UPDATE pr_agent_harness.integration_bindings
+         SET review_execution_state='active',execution_resume_receipt=$3::jsonb,
+             authority_version=authority_version+1,updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND id=$2 RETURNING *`,
+        [input.tenantId, input.integrationId, JSON.stringify(receipt)],
+      );
+      await appendExecutionAudit(client, input, "execution.resume", {
+        mode, generation, priorVersion: input.expectedVersion,
+      });
+      return mapBinding(updated.rows[0]!);
+    });
+  }
+
   async resolve(platform: IntegrationPlatform, origin: string, repository: string): Promise<PublicationBinding> {
     const normalized = normalizeIntegrationTarget(platform, origin, repository);
     return this.db.trustedTransaction(async (client) => {
@@ -170,5 +315,26 @@ function mapBinding(row: BindingRow): PublicationBinding {
     generation: Number(row.publication_generation), version: Number(row.authority_version), state: row.publication_state,
     reviewExecutionMode: row.review_execution_mode ?? "legacy_sync",
     executionModeGeneration: Number(row.execution_mode_generation ?? 0),
+    reviewExecutionState: row.review_execution_state ?? "active",
   };
+}
+
+function requiredAdministrativeEvidence(actor: string, evidence: string): void {
+  if (!actor.trim()) throw new Error("An administrative actor is required");
+  if (!evidence.trim()) throw new Error("Review execution transition evidence is required");
+}
+
+async function appendExecutionAudit(
+  client: PoolClient,
+  input: { tenantId: string; integrationId: string; actor: string; actorType?: "user" | "service" },
+  action: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO pr_agent_harness.audit_logs
+       (tenant_id,actor_type,actor_id,action,decision,resource_type,resource_ref,details_json)
+     VALUES ($1,$2,$3,$4,'allowed','integration_binding',$5,$6::jsonb)`,
+    [input.tenantId, input.actorType ?? "user", input.actor, action, input.integrationId,
+      JSON.stringify(details)],
+  );
 }

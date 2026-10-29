@@ -12,6 +12,10 @@ export async function migrateHarness(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Migration timeouts are local to this transaction; runtime queries keep
+    // their shorter bounds, and a blocked DDL leaves no partial schema behind.
+    await client.query("SET LOCAL lock_timeout = '5s'");
+    await client.query("SET LOCAL statement_timeout = '2min'");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [MIGRATION_LOCK_KEY]);
     await client.query("CREATE SCHEMA IF NOT EXISTS pr_agent_harness");
     await client.query(`

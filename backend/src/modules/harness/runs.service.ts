@@ -9,7 +9,7 @@ import { RunControlStore } from "../../harness/run-control-store.js";
 import { RunQueryStore } from "../../harness/run-query-store.js";
 import { RunEventStreamHub } from "../../harness/run-sse.js";
 import { buildReviewRunCreationInput } from "../../harness/review-run-intake.js";
-import { reviewRunInputSchema } from "../../harness/review-run-input.js";
+import { reviewCreationRequestHash, reviewRunInputSchema } from "../../harness/review-run-input.js";
 import { getHarnessServices } from "../../harness/runtime.js";
 import { HarnessRunStore } from "../../harness/postgres/run-store.js";
 import { fingerprint } from "../../harness/versions.js";
@@ -34,15 +34,18 @@ export class RunsService implements BeforeApplicationShutdown {
     const services = await getHarnessServices();
     const binding = await this.binding(principal);
     const source = { key: `api:${binding.id}:${commandKey}`, hash: fingerprint(request) };
+    const requestHash = reviewCreationRequestHash({ source, platform: binding.platform,
+      target: { origin: binding.origin, repository: binding.repository, number: request.number,
+        providerRepositoryId: binding.providerRepositoryId }, mode: request.mode, trigger: "comment-command" });
     const previous = await services.db.transaction(principal.tenantId, (client) => client.query<{
-      id: string; status: string; version: string; source_hash: string;
+      id: string; status: string; version: string; request_hash: string;
     }>(
-      `SELECT id,status,version,input_json->'source'->>'hash' AS source_hash
+      `SELECT id,status,version,request_hash
        FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND integration_id=$2 AND create_scope=$3 AND create_key=$4`,
       [principal.tenantId, principal.integrationId, `review.single.v1:${binding.id}`, source.key],
     ));
     if (previous.rows[0]) {
-      if (previous.rows[0].source_hash !== source.hash) throw runConflict("Idempotency key was used for a different review request");
+      if (previous.rows[0].request_hash !== requestHash) throw runConflict("Idempotency key was used for a different review request");
       return { id: previous.rows[0].id, status: previous.rows[0].status, version: Number(previous.rows[0].version), created: false };
     }
     if (binding.reviewExecutionMode !== "harness_async" || binding.state !== "active") {

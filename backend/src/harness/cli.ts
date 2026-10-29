@@ -7,6 +7,8 @@ import { HarnessRunStore } from "./postgres/run-store.js";
 import { harnessPoolConfig } from "./runtime.js";
 import { PublicationAuthorityStore } from "./authority.js";
 import { PublicationControlStore, type PublicationControlInput } from "./publication-control.js";
+import { HarnessMaintenanceStore } from "./maintenance.js";
+import { HarnessMetricsStore } from "./metrics.js";
 
 const [command, ...args] = process.argv.slice(2);
 const pool = new Pool(harnessPoolConfig());
@@ -35,7 +37,9 @@ try {
           uuid, uuid, text, text, text, bigint) TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
-          pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO pr_agent_app;
+          pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
+          pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
+          pr_agent_harness.lock_resumable_legacy_review_execution_authority(uuid,uuid,bigint,bigint) TO pr_agent_app;
         GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.agent_steps,
           pr_agent_harness.step_attempts, pr_agent_harness.tool_calls,
           pr_agent_harness.model_calls, pr_agent_harness.tenant_budget_accounts,
@@ -72,6 +76,42 @@ try {
     console.log(JSON.stringify(await authority.transition({ tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
       action, expectedVersion: Number(fields.get("--version")), actor: await administrativeActor(), actorType: "service",
       quiescenceEvidence: fields.get("--evidence") })));
+  } else if (command === "execution-drain") {
+    const fields = parseFields(args, ["--tenant", "--id", "--version", "--evidence"]);
+    console.log(JSON.stringify(await authority.drainExecution({
+      tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
+      expectedVersion: Number(fields.get("--version")), evidence: fields.get("--evidence")!,
+      actor: await administrativeActor(), actorType: "service",
+    })));
+  } else if (command === "execution-resume") {
+    const fields = parseFields(args, ["--tenant", "--id", "--version", "--evidence"]);
+    console.log(JSON.stringify(await authority.resumeExecution({
+      tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
+      expectedVersion: Number(fields.get("--version")), evidence: fields.get("--evidence")!,
+      actor: await administrativeActor(), actorType: "service",
+    })));
+  } else if (command === "execution-switch") {
+    const fields = parseFields(args, ["--tenant", "--id", "--version", "--mode", "--evidence"]);
+    const mode = fields.get("--mode");
+    if (mode !== "legacy_sync" && mode !== "harness_async") {
+      throw new Error("Execution mode must be legacy_sync or harness_async");
+    }
+    console.log(JSON.stringify(await authority.switchExecution({
+      tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
+      expectedVersion: Number(fields.get("--version")), mode, evidence: fields.get("--evidence")!,
+      actor: await administrativeActor(), actorType: "service",
+    })));
+  } else if (command === "retention") {
+    const fields = parseFields(args, ["--tenant", "--action"], ["--days", "--limit"]);
+    const action = fields.get("--action");
+    if (action !== "preview" && action !== "apply") throw new Error("Retention action must be preview or apply");
+    const request = { tenantId: fields.get("--tenant")!,
+      olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
+      limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined };
+    console.log(JSON.stringify(await new HarnessMaintenanceStore(pool)[action](request)));
+  } else if (command === "metrics") {
+    const fields = parseFields(args, ["--tenant", "--id"]);
+    console.log(JSON.stringify(await new HarnessMetricsStore(db).snapshot(fields.get("--tenant")!, fields.get("--id")!)));
   } else if (command === "inspect") {
     const fields = parseFields(args, ["--tenant", "--id"]);
     console.log(JSON.stringify(await authority.get(fields.get("--tenant")!, fields.get("--id")!)));
@@ -94,7 +134,7 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness migrate | bind | configure | authority | inspect | control (see backend/HARNESS.md)");
+    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | metrics | inspect | control (see backend/HARNESS.md)");
   }
 } catch (error) {
   // Do not dump the Pool/driver error object, which can contain connection credentials.

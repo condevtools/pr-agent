@@ -23,6 +23,8 @@
     "test": "node --import ./scripts/test-environment.mjs --import tsx --test --test-force-exit tests/*.test.ts",
     "test:coverage": "node --import ./scripts/test-environment.mjs --import tsx --test --experimental-test-coverage --test-force-exit tests/*.test.ts",
     "test:harness:pg": "node scripts/test-harness-postgres.mjs",
+    "test:harness:backup": "node scripts/harness-backup-drill.mjs",
+    "test:harness:capacity": "node scripts/test-harness-capacity.mjs",
     "harness:migrate": "node --import tsx src/harness/cli.ts migrate",
     "harness:bind": "node --import tsx src/harness/cli.ts bind"
   },

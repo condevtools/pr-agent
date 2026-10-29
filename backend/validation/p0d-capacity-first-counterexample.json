@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "profile": "qualification",
+  "qualificationTarget": true,
+  "passed": true,
+  "startedAt": "2026-10-29T01:17:42.651Z",
+  "finishedAt": "2026-10-29T01:30:21.580Z",
+  "environment": {
+    "node": "v26.13.0",
+    "postgres": "17-alpine",
+    "database": "isolated-docker",
+    "provider": "local-http-fixture",
+    "runtimeRole": {
+      "superuser": false,
+      "bypassRls": false
+    }
+  },
+  "phases": {
+    "workers": {
+      "passed": true,
+      "durationMs": 126312,
+      "metrics": {
+        "target": 10000,
+        "processed": 10000,
+        "workers": 4,
+        "uniqueLeases": 10000,
+        "duplicateClaims": 0,
+        "duplicateAttempts": 0
+      }
+    },
+    "budget": {
+      "passed": true,
+      "durationMs": 465,
+      "metrics": {
+        "contenders": 100,
+        "accepted": 50,
+        "rejected": 50,
+        "reservedInputTokens": 50000,
+        "tenantInputLimit": 50000
+      }
+    },
+    "sse": {
+      "passed": true,
+      "durationMs": 1775,
+      "metrics": {
+        "connections": 1000,
+        "principals": 16,
+        "reconnects": 100,
+        "historyDelivered": 1000,
+        "backpressureClosed": true
+      }
+    },
+    "intake": {
+      "passed": true,
+      "durationMs": 630005,
+      "metrics": {
+        "requests": 15000,
+        "created": 13500,
+        "replayed": 1500,
+        "failures": 0,
+        "providerCalls": 13500,
+        "steady": {
+          "targetRps": 20,
+          "achievedRps": 20,
+          "durationMs": 600000
+        },
+        "burst": {
+          "targetRps": 100,
+          "achievedRps": 99.99666677777407,
+          "durationMs": 30001,
+          "duplicateRatio": 0.5
+        },
+        "latencyMs": {
+          "count": 15000,
+          "p50": 103.05,
+          "p95": 278.62,
+          "p99": 651.66,
+          "max": 2219.01
+        }
+      }
+    }
+  }
+}

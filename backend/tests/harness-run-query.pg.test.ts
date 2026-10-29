@@ -141,6 +141,13 @@ if (!databaseUrl) {
       permissions: ["runs:rerun"] }, runId), notFound);
   });
 
+  test("retained identity stays readable but removed content cannot be used for rerun", async () => {
+    await adminPool.query("UPDATE pr_agent_harness.agent_runs SET content_purged_at=clock_timestamp(),input_json='{}' WHERE id=$1", [runId]);
+    assert.ok((await queries.snapshot(reader, runId)).contentPurgedAt);
+    await assert.rejects(queries.originalInput({ ...reader, permissions: ["runs:rerun"] }, runId),
+      (error: unknown) => error instanceof RunControlError && error.status === 410 && error.code === "RUN_CONTENT_EXPIRED");
+  });
+
   async function register(currentTenant: string, currentIntegration: string, suffix: string): Promise<string> {
     await adminRuns.registerIntegration({ tenantId: currentTenant, id: currentIntegration, platform: "github",
       origin: `https://${suffix}.example.test`, repository: `acme/${suffix}` });

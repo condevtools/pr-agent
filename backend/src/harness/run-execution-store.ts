@@ -1056,6 +1056,26 @@ export async function linkBatchAndCheckpoint(
     }
     return mapCheckpoint(row);
   }
+  const link = await client.query<{ run_id: string; operation_set_hash: string }>(
+    `INSERT INTO pr_agent_harness.run_publication_batches
+       (tenant_id,run_id,batch_id,step_id,lease_epoch,operation_set_hash)
+     VALUES ($1,$2,$3,NULL,$4,$5)
+     ON CONFLICT DO NOTHING
+     RETURNING run_id,operation_set_hash`,
+    [lease.tenantId, lease.runId, input.batchId, lease.epoch, input.operationSetHash],
+  );
+  if (!link.rows[0]) {
+    const owner = await client.query<{ run_id: string; operation_set_hash: string }>(
+      `SELECT run_id,operation_set_hash
+       FROM pr_agent_harness.run_publication_batches
+       WHERE tenant_id=$1 AND batch_id=$2`,
+      [lease.tenantId, input.batchId],
+    );
+    if (owner.rows[0]?.run_id !== lease.runId
+        || owner.rows[0]?.operation_set_hash !== input.operationSetHash) {
+      throw new Error("publication batch is already owned by another Run");
+    }
+  }
   const sequence = await nextCheckpointSequence(client, lease);
   const checkpoint = await client.query<CheckpointRow>(
     `INSERT INTO pr_agent_harness.checkpoints
@@ -1065,13 +1085,6 @@ export async function linkBatchAndCheckpoint(
      RETURNING *`,
     [lease.tenantId, lease.runId, sequence, input.batchId, input.schemaVersion,
       lease.runtimeVersionHash, input.stateHash, JSON.stringify(input.state), lease.epoch],
-  );
-  await client.query(
-    `INSERT INTO pr_agent_harness.run_publication_batches
-       (tenant_id,run_id,batch_id,step_id,lease_epoch,operation_set_hash)
-     VALUES ($1,$2,$3,NULL,$4,$5)
-     ON CONFLICT (tenant_id,run_id,batch_id) DO NOTHING`,
-    [lease.tenantId, lease.runId, input.batchId, lease.epoch, input.operationSetHash],
   );
   await appendRunEvent(client, lease.tenantId, lease.runId, "publication.frozen", lease.owner, {
     batchId: input.batchId, operationSetHash: input.operationSetHash,

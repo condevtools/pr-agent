@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fingerprint } from "./versions.js";
 
 const text = z.string().max(100_000);
 const sha = z.string().min(1).max(128);
@@ -27,3 +28,8 @@ export const reviewRunInputSchema = z.object({
 }).strict();
 
 export type ReviewRunInput = z.infer<typeof reviewRunInputSchema>;
+
+/** Source request identity survives removal of the Run's private content. */
+export function reviewCreationRequestHash(input: Pick<ReviewRunInput, "source" | "platform" | "target" | "mode" | "trigger">): string {
+  return fingerprint({ source: input.source, platform: input.platform, target: input.target, mode: input.mode, trigger: input.trigger });
+}

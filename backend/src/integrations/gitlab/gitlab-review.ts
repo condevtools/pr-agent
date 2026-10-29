@@ -909,6 +909,7 @@ export async function runGitLabReview(
     throw new Error("GitLab review resolved a non-GitLab publication binding");
   }
   let activePublicationRuntime = resolvedPublicationRuntime as GitLabPublicationRuntime | undefined;
+  const resolvedExecutionModeGeneration = activePublicationRuntime?.binding?.executionModeGeneration ?? 0;
   const durableSourceKey = params.sourceKey ?? headers["x-gitlab-event-uuid"] ?? `gitlab:canonical:${stableGitLabEventHash(payload)}`;
   const durableSourceHash = params.sourceHash ?? stableGitLabEventHash({ payload, mode, trigger });
   if (shouldQueueReview(activePublicationRuntime?.binding)) {
@@ -924,8 +925,17 @@ export async function runGitLabReview(
       durableSourceHash,
     );
     if (existing) {
+      const lease = currentReviewRunLease();
+      if (lease) await activePublicationRuntime.batchStore.attachExistingBatchToRun(lease, existing.id);
+      else await activePublicationRuntime.batchStore.assertLegacyBatchExecution(
+        existing,
+        resolvedExecutionModeGeneration,
+      );
       await assertReviewRunActive();
-      assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter, currentReviewRunLease()));
+      assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(
+        existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter, lease,
+        lease ? undefined : resolvedExecutionModeGeneration,
+      ));
       return { ok: true, message: "existing durable publication batch resumed" };
     }
   }
@@ -1295,8 +1305,17 @@ async function prepareGitLabPublicationBatch(params: {
   const scope = { ...runtime.scope, target: String(params.mrId), revision: params.revision };
   const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
   if (existing) {
+    const lease = currentReviewRunLease();
+    if (lease) await runtime.batchStore.attachExistingBatchToRun(lease, existing.id);
+    else await runtime.batchStore.assertLegacyBatchExecution(
+      existing,
+      runtime.binding?.executionModeGeneration ?? 0,
+    );
     await assertReviewRunActive();
-    assertGitLabBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter, currentReviewRunLease()));
+    assertGitLabBatchSucceeded(await runtime.batchCoordinator.execute(
+      scope.tenantId, existing.id, runtime.createAdapter, lease,
+      lease ? undefined : runtime.binding?.executionModeGeneration ?? 0,
+    ));
     return { runtime, resumed: true, finish: async () => undefined };
   }
   const operations: Array<{ slot: string; payload: Record<string, unknown> }> = [];
@@ -1306,9 +1325,15 @@ async function prepareGitLabPublicationBatch(params: {
     resumed: false,
     finish: async () => {
       if (operations.length === 0) throw new Error("durable GitLab review produced no frozen publication operations");
-      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations, runLease: currentReviewRunLease() });
+      const lease = currentReviewRunLease();
+      const executionModeGeneration = runtime.binding?.executionModeGeneration ?? 0;
+      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations,
+        runLease: lease, executionModeGeneration });
       await assertReviewRunActive();
-      assertGitLabBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!, currentReviewRunLease()));
+      assertGitLabBatchSucceeded(await runtime.batchCoordinator!.execute(
+        scope.tenantId, frozen.id, runtime.createAdapter!, lease,
+        lease ? undefined : executionModeGeneration,
+      ));
     },
   };
 }

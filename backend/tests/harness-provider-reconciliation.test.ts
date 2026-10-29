@@ -14,6 +14,7 @@ import {
 } from "../src/integrations/github/github-publication.js";
 import type { MinimalGitHubOctokit } from "../src/integrations/github/github-review-types.js";
 import { runGitHubReview } from "../src/integrations/github/github-review.js";
+import { withReviewRunContext } from "../src/harness/review-run-context.js";
 
 const binding: GitHubPublicationBinding = {
   platform: "github",
@@ -134,6 +135,7 @@ test("existing frozen review batch resumes before context collection or model an
   let executions = 0;
   let providerReads = 0;
   let notifications = 0;
+  let attachments = 0;
   process.env.NOTIFY_WEBHOOK_URL = "https://notify.invalid/hook";
   globalThis.fetch = async () => { notifications += 1; return new Response(null, { status: 204 }); };
   const existing = {
@@ -155,8 +157,19 @@ test("existing frozen review batch resumes before context collection or model an
       authorityGeneration: 1,
     },
     binding,
-    batchStore: { findBySource: async () => existing },
-    batchCoordinator: { execute: async () => { executions += 1; return { ...existing, status: "succeeded" as const }; } },
+    batchStore: {
+      findBySource: async () => existing,
+      attachExistingBatchToRun: async (_lease: unknown, batchId: string) => {
+        assert.equal(batchId, existing.id);
+        attachments += 1;
+        return existing;
+      },
+    },
+    batchCoordinator: { execute: async () => {
+      assert.equal(attachments, 1);
+      executions += 1;
+      return { ...existing, status: "succeeded" as const };
+    } },
     createAdapter: async () => { throw new Error("adapter should be requested only by the coordinator fixture"); },
   };
   const context = {
@@ -166,15 +179,25 @@ test("existing frozen review batch resumes before context collection or model an
   };
 
   try {
-    await runGitHubReview({
-      context: context as never,
-      pullNumber: 42,
-      mode: "report",
-      trigger: "comment-command",
-      publicationRuntime: runtime as never,
-      sourceKey: existing.sourceKey,
-      sourceHash: existing.sourceHash,
-    });
+    await withReviewRunContext({
+      lease: {
+        tenantId: existing.scope.tenantId, integrationId: existing.scope.integrationId,
+        runId: "run-1", jobId: "job-1", owner: "worker", epoch: 1, jobAttempt: 1,
+        authorityGeneration: 1, executionModeGeneration: 1,
+        baseSha: "base", headSha: existing.scope.revision,
+      } as never,
+      assertActive: async () => undefined,
+      step: async (_key, _kind, _inputHash, action) => action(),
+    }, () => runGitHubReview({
+        context: context as never,
+        pullNumber: 42,
+        mode: "report",
+        trigger: "comment-command",
+        publicationRuntime: runtime as never,
+        sourceKey: existing.sourceKey,
+        sourceHash: existing.sourceHash,
+      }));
+    assert.equal(attachments, 1);
     assert.equal(executions, 1);
     assert.equal(providerReads, 0);
     assert.equal(notifications, 0);
@@ -216,6 +239,7 @@ test("two-operation review replay reconciles response loss without model rerun o
     binding,
     batchStore: {
       findBySource: async () => frozen,
+      assertLegacyBatchExecution: async () => undefined,
       freeze: async (input: any) => {
         assert.equal(input.operations.length, 2);
         frozen = { id: "pipeline-batch", scope: input.scope, sourceKey: input.sourceKey, sourceHash: input.sourceHash, status: "pending", operations: input.operations };

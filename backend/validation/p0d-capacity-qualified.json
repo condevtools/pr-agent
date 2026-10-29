@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "profile": "qualification",
+  "qualificationTarget": true,
+  "passed": true,
+  "startedAt": "2026-10-29T01:38:02.619Z",
+  "finishedAt": "2026-10-29T01:50:21.000Z",
+  "environment": {
+    "node": "v26.13.0",
+    "postgres": "17-alpine",
+    "database": "isolated-docker",
+    "provider": "local-http-fixture",
+    "runtimeRole": {
+      "superuser": false,
+      "bypassRls": false
+    }
+  },
+  "phases": {
+    "workers": {
+      "passed": true,
+      "durationMs": 106174,
+      "metrics": {
+        "target": 10000,
+        "processed": 10000,
+        "workers": 4,
+        "uniqueLeases": 10000,
+        "duplicateClaims": 0,
+        "duplicateAttempts": 0,
+        "claimLatencyMs": {
+          "count": 10005,
+          "p50": 17.92,
+          "p95": 26.28,
+          "p99": 50.45,
+          "max": 32225.37
+        },
+        "deadlineMs": 600000
+      }
+    },
+    "budget": {
+      "passed": true,
+      "durationMs": 358,
+      "metrics": {
+        "contenders": 100,
+        "accepted": 50,
+        "rejected": 50,
+        "reservedInputTokens": 50000,
+        "tenantInputLimit": 50000
+      }
+    },
+    "sse": {
+      "passed": true,
+      "durationMs": 1415,
+      "metrics": {
+        "connections": 1000,
+        "principals": 16,
+        "reconnects": 100,
+        "historyDelivered": 1000,
+        "backpressureClosed": true
+      }
+    },
+    "intake": {
+      "passed": true,
+      "durationMs": 630007,
+      "metrics": {
+        "requests": 15000,
+        "created": 13500,
+        "replayed": 1500,
+        "failures": 0,
+        "providerCalls": 13500,
+        "steady": {
+          "targetRps": 20,
+          "achievedRps": 19.999966666722223,
+          "durationMs": 600001
+        },
+        "burst": {
+          "targetRps": 100,
+          "achievedRps": 99.99666677777407,
+          "durationMs": 30001,
+          "duplicateRatio": 0.5
+        },
+        "latencyMs": {
+          "count": 15000,
+          "p50": 98.06,
+          "p95": 226.7,
+          "p99": 299.89,
+          "max": 577.92
+        }
+      }
+    }
+  }
+}

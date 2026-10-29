@@ -107,7 +107,7 @@ docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" harness-migr
 
 ## 异步 Run 与模型预算
 
-`integration_bindings.review_execution_mode` 默认为 `legacy_sync`。P0b 提供 `harness_async` 的执行能力和隔离测试，正式切换命令留给 P0d 故障与排空验证阶段。不要直接修改生产表来绕过阶段门。
+`integration_bindings.review_execution_mode` 默认为 `legacy_sync`。异步切换使用独立的 execution drain/switch 协议；不要直接修改表来绕过排空和 generation 检查。操作步骤、保留策略、备份演练及故障证据见 [HARNESS_OPERATIONS.md](HARNESS_OPERATIONS.md)。
 
 异步入口在确认签名、服务端仓库绑定和不可变 base/head SHA 后，同一事务保存 Run、初始 Event、Job、审计和预算 envelope，再返回 Run ID。输入只保存评审所需字段，凭证由 Worker 从服务端绑定重新解析。重复来源复用 Run，跨实例并发领取由 PostgreSQL Run lease 和单调 epoch 仲裁；Job 不另持有第二套租约。
 

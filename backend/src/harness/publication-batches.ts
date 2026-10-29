@@ -31,6 +31,7 @@ export interface FrozenPublicationBatch {
   sourceKey: string;
   sourceHash: string;
   status: PublicationBatchStatus;
+  executionModeGeneration?: number;
   operations: readonly {
     ordinal: number;
     businessOperationId: string;
@@ -41,6 +42,7 @@ export interface FrozenPublicationBatch {
 
 export interface FreezePublicationBatchInput {
   runLease?: RunLease;
+  executionModeGeneration?: number;
   scope: PublicationScope;
   sourceKey: string;
   sourceHash: string;
@@ -108,14 +110,22 @@ export class PublicationBatchStore {
           throw new Error("publication batch does not belong to the executing Run");
         }
         await assertRunLease(client, input.runLease, { lock: "update" });
+        await assertResumableExecutionAuthority(client, input.runLease);
+      } else {
+        await lockLegacyExecutionAuthority(
+          client,
+          scope,
+          input.executionModeGeneration ?? 0,
+        );
       }
       await lockActiveAuthority(client, scope);
       const inserted = await client.query<{ id: string }>(
         `
           INSERT INTO pr_agent_harness.publication_batches (
             tenant_id, integration_id, platform, origin, repository, target,
-            revision, authority_generation, source_key, source_hash
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            revision, authority_generation, source_key, source_hash,
+            execution_mode_generation
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           ON CONFLICT (tenant_id, integration_id, source_key) DO NOTHING
           RETURNING id
         `,
@@ -130,6 +140,7 @@ export class PublicationBatchStore {
           scope.authorityGeneration,
           sourceKey,
           sourceHash,
+          input.runLease?.executionModeGeneration ?? input.executionModeGeneration ?? 0,
         ],
       );
 
@@ -138,6 +149,12 @@ export class PublicationBatchStore {
         if (!existing || existing.sourceHash !== sourceHash || !sameScope(existing.scope, scope)) {
           throw new PublicationBatchSourceConflictError(sourceKey, existing?.id ?? "unknown");
         }
+        await assertBatchExecutionGeneration(
+          client,
+          scope.tenantId,
+          existing.id,
+          input.runLease?.executionModeGeneration ?? input.executionModeGeneration ?? 0,
+        );
         if (input.runLease) await checkpointFrozenBatch(client, input.runLease, existing.id);
         return existing;
       }
@@ -170,6 +187,58 @@ export class PublicationBatchStore {
       const frozen = await selectBatch(client, scope.tenantId, batchId);
       if (!frozen) throw new Error("frozen publication batch disappeared");
       return frozen;
+    });
+  }
+
+  async attachExistingBatchToRun(
+    lease: RunLease,
+    batchId: string,
+  ): Promise<FrozenPublicationBatch> {
+    return this.db.transaction(lease.tenantId, async (client) => {
+      await assertRunLease(client, lease, { lock: "update" });
+      await assertResumableExecutionAuthority(client, lease);
+      const batch = await client.query<{ operation_set_hash: string }>(
+        `SELECT operation_set_hash
+         FROM pr_agent_harness.publication_batches
+         WHERE tenant_id=$1 AND id=$2 AND integration_id=$3
+           AND revision=$4 AND authority_generation=$5 AND seal_state='sealed'
+         FOR SHARE`,
+        [lease.tenantId, batchId, lease.integrationId, lease.headSha,
+          lease.authorityGeneration],
+      );
+      if (!batch.rows[0]?.operation_set_hash) {
+        throw new Error("sealed publication batch does not match the executing Run revision");
+      }
+      await client.query(
+        `SELECT ro.business_operation_id
+         FROM pr_agent_harness.publication_batch_operations pbo
+         JOIN pr_agent_harness.repository_operations ro
+           ON ro.tenant_id=pbo.tenant_id
+          AND ro.business_operation_id=pbo.business_operation_id
+         WHERE pbo.tenant_id=$1 AND pbo.batch_id=$2
+         ORDER BY ro.business_operation_id
+         FOR UPDATE OF ro`,
+        [lease.tenantId, batchId],
+      );
+      await checkpointFrozenBatch(client, lease, batchId);
+      const attached = await selectBatch(client, lease.tenantId, batchId);
+      if (!attached) throw new Error("attached publication batch disappeared");
+      return attached;
+    });
+  }
+
+  async assertLegacyBatchExecution(
+    batch: FrozenPublicationBatch,
+    executionModeGeneration: number,
+  ): Promise<void> {
+    return this.db.transaction(batch.scope.tenantId, async (client) => {
+      await assertBatchExecutionGeneration(
+        client,
+        batch.scope.tenantId,
+        batch.id,
+        executionModeGeneration,
+      );
+      await lockResumableLegacyExecutionAuthority(client, batch.scope, executionModeGeneration);
     });
   }
 
@@ -300,6 +369,7 @@ export class PublicationBatchCoordinator {
     batchId: string,
     adapterFactory: PublicationAdapterFactory,
     executionLease?: RunLease,
+    legacyExecutionModeGeneration?: number,
   ): Promise<FrozenPublicationBatch> {
     const batch = await this.store.load(tenantId, batchId);
     if (!batch) throw new PublicationBatchNotFoundError(batchId);
@@ -315,7 +385,13 @@ export class PublicationBatchCoordinator {
       if (operation.status === "failed_definite" || operation.status === "cancelled") break;
       try {
         const adapter = await adapterFactory(operation);
-        await this.service.publish({ ...frozen.request, executionLease }, adapter);
+        await this.service.publish({
+          ...frozen.request,
+          executionLease,
+          legacyExecutionModeGeneration: executionLease
+            ? undefined
+            : legacyExecutionModeGeneration ?? batch.executionModeGeneration ?? 0,
+        }, adapter);
       } catch (error) {
         if (
           error instanceof PendingPublicationError ||
@@ -376,6 +452,7 @@ interface BatchRow {
   source_hash: string;
   status: PublicationBatchStatus;
   operation_count: number;
+  execution_mode_generation: string;
 }
 
 interface BatchOperationRow extends BatchRow {
@@ -509,6 +586,7 @@ async function selectBatch(
       SELECT pb.id, pb.tenant_id, pb.integration_id, pb.platform, pb.origin,
              pb.repository, pb.target, pb.revision, pb.authority_generation,
              pb.source_key, pb.source_hash, pb.status, pb.operation_count,
+             pb.execution_mode_generation,
              pbo.ordinal, pbo.business_operation_id, pbo.action_state,
              ro.publication_slot, ro.payload_json
       FROM pr_agent_harness.publication_batches pb
@@ -546,6 +624,7 @@ async function selectBatch(
     sourceKey: first.source_key,
     sourceHash: first.source_hash,
     status: first.status,
+    executionModeGeneration: Number(first.execution_mode_generation),
     operations: result.rows.flatMap((row) => {
       if (
         row.ordinal === null ||
@@ -584,6 +663,71 @@ async function lockActiveAuthority(client: PoolClient, scope: PublicationScope):
     ],
   );
   if (result.rows[0]?.allowed !== true) throw new InactiveIntegrationBindingError();
+}
+
+async function assertResumableExecutionAuthority(
+  client: PoolClient,
+  lease: RunLease,
+): Promise<void> {
+  const result = await client.query<{ allowed: boolean }>(
+    `SELECT pr_agent_harness.lock_resumable_review_execution_authority(
+       $1::uuid,$2::uuid,$3::bigint,$4::bigint
+     ) AS allowed`,
+    [lease.tenantId, lease.integrationId, lease.authorityGeneration,
+      lease.executionModeGeneration],
+  );
+  if (!result.rows[0]?.allowed) {
+    throw new Error("Run execution authority no longer permits publication freeze");
+  }
+}
+
+async function lockLegacyExecutionAuthority(
+  client: PoolClient,
+  scope: PublicationScope,
+  executionModeGeneration: number,
+): Promise<void> {
+  const result = await client.query<{ allowed: boolean }>(
+    `SELECT pr_agent_harness.lock_active_legacy_review_execution_authority(
+       $1::uuid,$2::uuid,$3::bigint,$4::bigint
+     ) AS allowed`,
+    [scope.tenantId, scope.integrationId, scope.authorityGeneration,
+      executionModeGeneration],
+  );
+  if (!result.rows[0]?.allowed) {
+    throw new InactiveIntegrationBindingError();
+  }
+}
+
+async function lockResumableLegacyExecutionAuthority(
+  client: PoolClient,
+  scope: PublicationScope,
+  executionModeGeneration: number,
+): Promise<void> {
+  const result = await client.query<{ allowed: boolean }>(
+    `SELECT pr_agent_harness.lock_resumable_legacy_review_execution_authority(
+       $1::uuid,$2::uuid,$3::bigint,$4::bigint
+     ) AS allowed`,
+    [scope.tenantId, scope.integrationId, scope.authorityGeneration,
+      executionModeGeneration],
+  );
+  if (!result.rows[0]?.allowed) throw new InactiveIntegrationBindingError();
+}
+
+async function assertBatchExecutionGeneration(
+  client: PoolClient,
+  tenantId: string,
+  batchId: string,
+  executionModeGeneration: number,
+): Promise<void> {
+  const result = await client.query(
+    `SELECT 1 FROM pr_agent_harness.publication_batches
+     WHERE tenant_id=$1 AND id=$2 AND seal_state='sealed'
+       AND execution_mode_generation=$3`,
+    [tenantId, batchId, executionModeGeneration],
+  );
+  if (result.rowCount !== 1) {
+    throw new Error("Publication batch execution generation does not match the caller");
+  }
 }
 
 async function assertReadableAuthority(client: PoolClient, scope: PublicationScope): Promise<void> {

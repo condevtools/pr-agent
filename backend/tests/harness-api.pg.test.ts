@@ -246,6 +246,26 @@ if (!databaseUrl) {
     assert.doesNotMatch(serialized, new RegExp([fullToken, "github-provider-secret", "authorization", "rawHeaders"].join("|"), "i"));
   });
 
+  test("creation idempotency survives content retention using the immutable request hash", async () => {
+    const original = await adminPool.query<{ id: string }>(
+      `UPDATE pr_agent_harness.agent_runs SET input_json='{}',content_purged_at=clock_timestamp()
+       WHERE tenant_id=$1 AND create_key=$2 RETURNING id`,
+      [tenantId, `api:${integrationId}:offline-replay`]);
+    const before = providerLookups;
+    providerOnline = false;
+    try {
+      const replay = await request("/runs", { method: "POST", token: fullToken,
+        idempotencyKey: "offline-replay", body: { number: 42, mode: "report" } });
+      assert.equal(replay.status, 202);
+      assert.equal(replay.value.id, original.rows[0]!.id);
+      assert.equal(replay.value.created, false);
+      const conflict = await request("/runs", { method: "POST", token: fullToken,
+        idempotencyKey: "offline-replay", body: { number: 43, mode: "report" } });
+      assert.equal(conflict.status, 409);
+      assert.equal(providerLookups, before);
+    } finally { providerOnline = true; }
+  });
+
   async function createFixtureRun(key: string): Promise<string> {
     const version = hash("api-fixture-version");
     return (await adminRuns.createRun({ tenantId, integrationId, actorType: "service", actorId: "api-fixture",

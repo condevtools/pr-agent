@@ -44,6 +44,8 @@ export interface PublicationRequest {
   slot: string;
   payload: Record<string, unknown>;
   executionLease?: RunLease;
+  /** Legacy batch generation fence; excluded from the durable operation identity. */
+  legacyExecutionModeGeneration?: number;
 }
 
 export interface PublicationOperation {
@@ -102,6 +104,7 @@ export interface PreparedOperationInput {
   scope: PublicationScope;
   slot: string;
   executionLease?: RunLease;
+  legacyExecutionModeGeneration?: number;
 }
 
 export type PreparedPublication =
@@ -451,6 +454,18 @@ export class PgPublicationStore implements PublicationStore {
       }
       if (initial?.status === "prepared" && initialLinks.length > 0) {
         assertLeaseMatchesLinkedRun(input, initialLinks);
+      }
+      if ((initial === undefined || initial.status === "prepared")
+          && !input.executionLease
+          && input.legacyExecutionModeGeneration !== undefined) {
+        const authority = await client.query<{ allowed: boolean }>(
+          `SELECT pr_agent_harness.lock_resumable_legacy_review_execution_authority(
+             $1::uuid,$2::uuid,$3::bigint,$4::bigint
+           ) AS allowed`,
+          [input.scope.tenantId, input.scope.integrationId,
+            input.scope.authorityGeneration ?? -1, input.legacyExecutionModeGeneration],
+        );
+        if (!authority.rows[0]?.allowed) throw new InactiveIntegrationBindingError();
       }
 
       const operationBeforeClaim = await preparePublicationInTransaction(client, input);
@@ -850,6 +865,7 @@ export function buildPublicationIdentity(request: PublicationRequest): PreparedO
     scope,
     slot,
     executionLease: request.executionLease,
+    legacyExecutionModeGeneration: request.legacyExecutionModeGeneration,
   };
 }
 

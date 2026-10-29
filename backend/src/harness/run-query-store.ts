@@ -20,6 +20,7 @@ export interface RunSnapshot {
   parentRunId: string | null;
   cancelRequested: boolean;
   publicationStatus: string | null;
+  contentPurgedAt: string | null;
   wait?: Record<string, unknown>;
 }
 export interface RunEventPage {
@@ -41,7 +42,10 @@ export class RunQueryStore {
   async originalInput(principal: RunPrincipal, runId: string): Promise<Record<string, unknown>> {
     requireRunPermission(principal, "runs:rerun");
     return this.db.transaction(principal.tenantId, async (client) => {
-      await selectScopedRun(client, principal, runId);
+      const run = await selectScopedRun(client, principal, runId, true);
+      if (run.content_purged_at) {
+        throw new RunControlError("RUN_CONTENT_EXPIRED", 410, "Run content expired; create a new review from its source");
+      }
       const result = await client.query<{ input_json: Record<string, unknown> }>(
         "SELECT input_json FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
         [principal.tenantId, runId],
@@ -112,12 +116,13 @@ interface SnapshotRow {
   outcome_code: string | null; error_code: string | null; parent_run_id: string | null;
   cancel_requested_at: Date | null; next_event_seq: string; event_retention_floor: string;
   publication_status: string | null; wait: Record<string, unknown> | null;
+  content_purged_at: Date | null;
 }
 
 async function selectScopedRun(client: PoolClient, principal: RunPrincipal, runId: string, lock = false): Promise<SnapshotRow> {
   const result = await client.query<SnapshotRow>(
     `SELECT r.id,r.status,r.version,r.run_type,r.base_sha,r.head_sha,r.created_at,r.updated_at,r.finished_at,
-            r.deadline_at,r.outcome_code,r.error_code,r.parent_run_id,r.cancel_requested_at,r.next_event_seq,r.event_retention_floor,
+            r.deadline_at,r.outcome_code,r.error_code,r.parent_run_id,r.cancel_requested_at,r.next_event_seq,r.event_retention_floor,r.content_purged_at,
             pb.status AS publication_status,
             (SELECT jsonb_build_object('id',w.id,'version',w.version,'batchId',w.batch_id,
               'operationId',w.business_operation_id,'operationVersion',w.operation_version,
@@ -145,7 +150,8 @@ function mapSnapshot(row: SnapshotRow): RunSnapshot {
     updatedAt: row.updated_at.toISOString(), finishedAt: row.finished_at?.toISOString() ?? null,
     deadlineAt: row.deadline_at.toISOString(), outcomeCode: row.outcome_code, errorCode: row.error_code,
     parentRunId: row.parent_run_id, cancelRequested: row.cancel_requested_at !== null,
-    publicationStatus: row.publication_status, ...(row.wait ? { wait: row.wait } : {}) };
+    publicationStatus: row.publication_status, contentPurgedAt: row.content_purged_at?.toISOString() ?? null,
+    ...(row.wait ? { wait: row.wait } : {}) };
 }
 
 export function runCursor(runId: string, sequence: number): string {

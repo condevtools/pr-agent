@@ -43,7 +43,8 @@ let recovery: PublicationRecoveryLoop | undefined;
 /** Explicit harness configuration only; never fall back to an unrelated DATABASE_URL. */
 export function harnessPoolConfig(env: NodeJS.ProcessEnv = process.env): PoolConfig {
   const connectionString = env.HARNESS_DATABASE_URL?.trim();
-  const common = { max: 8, connectionTimeoutMillis: 5_000, idleTimeoutMillis: 30_000 };
+  const common = { max: 8, connectionTimeoutMillis: 5_000, idleTimeoutMillis: 30_000,
+    statement_timeout: 15_000, lock_timeout: 5_000, idle_in_transaction_session_timeout: 15_000 };
   if (connectionString) return { ...common, connectionString };
   const host = env.HARNESS_PG_HOST?.trim();
   const database = env.HARNESS_PG_DATABASE?.trim();

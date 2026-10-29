@@ -4,15 +4,23 @@ import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "./model-
 import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
 import { getHarnessServices } from "./runtime.js";
 import { currentReviewRunContext } from "./review-run-context.js";
-import { reviewRunInputSchema, type ReviewRunInput } from "./review-run-input.js";
-import { fingerprint, REVIEW_RUNTIME_CONFIG, reviewVersionManifest } from "./versions.js";
+import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./review-run-input.js";
+import { REVIEW_RUNTIME_CONFIG, reviewVersionManifest } from "./versions.js";
 
 export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {
-  return Boolean(binding?.reviewExecutionMode === "harness_async" && !currentReviewRunContext());
+  if (!binding || currentReviewRunContext()) return false;
+  if ((binding.reviewExecutionState ?? "active") !== "active") {
+    throw new Error("Review execution is draining; new reviews are not admitted");
+  }
+  return binding.reviewExecutionMode === "harness_async";
 }
 
 /** Called only after authenticated provider routing has resolved the trusted binding. */
 export async function enqueueReviewRun(binding: PublicationBinding, input: ReviewRunInput): Promise<{ id: string; created: boolean }> {
+  if (binding.reviewExecutionMode !== "harness_async"
+      || (binding.reviewExecutionState ?? "active") !== "active") {
+    throw new Error("Active asynchronous review execution authority is required");
+  }
   const creation = await buildReviewRunCreationInput(binding, input);
   const services = await getHarnessServices();
   const result = await new HarnessRunStore(services.db).createRun(creation);
@@ -38,7 +46,7 @@ export async function buildReviewRunCreationInput(
     parentRunId: identity?.parentRunId,
     createScope: `review.single.v1:${binding.id}`, createKey: parsed.source.key,
     // Configuration revisions do not turn a redelivered event into a new request.
-    requestHash: fingerprint({ source: parsed.source, platform: parsed.platform, target: parsed.target, mode: parsed.mode, trigger: parsed.trigger }),
+    requestHash: reviewCreationRequestHash(parsed),
     runType: parsed.workflow, baseSha: parsed.revision.baseSha, headSha: parsed.revision.headSha,
     ...manifest, input: parsed, authorityGeneration: binding.generation,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
