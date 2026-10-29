@@ -79,22 +79,22 @@ npm --prefix backend run test:harness:backup
 
 ## 故障矩阵
 
-在 `backend` 中执行 `npm run test:harness:pg`。可追加具体 `harness-*.pg.test.ts` 文件名进行定向验证。每个 suite 使用单独的 Docker 数据库。
+在 `backend` 中执行 `npm run test:harness:pg`。可追加 `tests/` 下的相对路径或唯一的 `*.pg.test.ts` 文件名进行定向验证。每个 suite 使用单独的 Docker 数据库。
 
 | 故障/不变量 | 主要可执行证据 |
 | --- | --- |
-| 创建响应丢失、重复投递、同键异参 | `harness-run-store.pg.test.ts`、`harness-api.pg.test.ts` |
-| 双 Worker、旧 epoch、checkpoint 兼容 | `harness-run-execution.pg.test.ts` |
-| 模型返回后/结果提交前进程死亡 | `harness-crash-recovery.pg.test.ts`：本地 HTTP provider + SIGKILL，旧费用保留、新 attempt 有界 |
+| 创建响应丢失、重复投递、同键异参 | `agent-runtime/run-store.pg.test.ts`、`http/api.pg.test.ts` |
+| 双 Worker、旧 epoch、checkpoint 兼容 | `agent-runtime/run-execution.pg.test.ts` |
+| 模型返回后/结果提交前进程死亡 | `agent-runtime/crash-recovery.pg.test.ts`：本地 HTTP provider + SIGKILL，旧费用保留、新 attempt 有界 |
 | checkpoint 后、终态提交后进程死亡 | 同上：不重复已完成模型工作，终态不复活 |
-| provider 写入响应丢失、明确失败、stale head | `harness-publication.pg.test.ts`、`harness-provider-reconciliation.test.ts`、`harness-batches.pg.test.ts` |
-| cancel 与 finish 并发、死信重驱幂等 | `harness-crash-recovery.pg.test.ts`：重驱以新 Run + parent link 实现，原终态保留 |
-| 人工决定版本竞争、权限撤销、重复 resume | `harness-run-commands.pg.test.ts`、`harness-control.pg.test.ts` |
-| 多 coordinator、特殊 job 重试上限、终态外部观察 | `harness-publication-outcome.pg.test.ts` |
-| legacy/async 切换、迟到 freeze、原子 dispatch fence | `harness-execution-rollout.pg.test.ts`、provider replay 测试 |
+| provider 写入响应丢失、明确失败、stale head | `agent-runtime/publication.pg.test.ts`、`agent-runtime/provider-reconciliation.test.ts`、`agent-runtime/batches.pg.test.ts` |
+| cancel 与 finish 并发、死信重驱幂等 | `agent-runtime/crash-recovery.pg.test.ts`：重驱以新 Run + parent link 实现，原终态保留 |
+| 人工决定版本竞争、权限撤销、重复 resume | `agent-runtime/run-commands.pg.test.ts`、`agent-runtime/control.pg.test.ts` |
+| 多 coordinator、特殊 job 重试上限、终态外部观察 | `agent-runtime/publication-outcome.pg.test.ts` |
+| legacy/async 切换、迟到 freeze、原子 dispatch fence | `agent-runtime/execution-rollout.pg.test.ts`、provider replay 测试 |
 | RLS 与连接复用、共享预算争抢 | Run store/query、model budget PG suites |
-| SSE 补历史、隐藏事件游标、慢消费者与权限撤销 | `harness-sse.test.ts`、API/query suites、容量工具 |
-| retention 与 operation revive 并发 | `harness-maintenance.pg.test.ts` |
+| SSE 补历史、隐藏事件游标、慢消费者与权限撤销 | `http/sse.test.ts`、API/query suites、容量工具 |
+| retention 与 operation revive 并发 | `agent-runtime/maintenance.pg.test.ts` |
 | 迁移中断与恢复 | crash suite、备份恢复演练 |
 
 当前调度完全依赖 polling；没有启用 LISTEN/NOTIFY，因此不存在“丢失通知导致任务永久不执行”的依赖，也不把未实现的通知重连算作已验证功能。进程故障测试为缩短运行时间在隔离库中推进 lease 到期，随后调用实际 PG-clock sweeper/claim；这不等于测量了真实生产机器的最坏故障切换时间。

@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+
+import { discoverTests, isPostgresTestFile, selectTests } from "./test-discovery.mjs";
 
 const backend = fileURLToPath(new URL("../", import.meta.url));
 const container = `pr-agent-harness-test-${randomUUID().slice(0, 12)}`;
@@ -19,6 +20,9 @@ function docker(args, options = {}) {
 }
 
 try {
+  const available = await discoverTests(new URL("../tests/", import.meta.url), isPostgresTestFile);
+  const tests = selectTests(available, process.argv.slice(2));
+  if (!tests.length) throw new Error("No PostgreSQL tests found");
   docker(["info", "--format", "{{.ServerVersion}}"]);
   docker([
     "run", "--detach", "--name", container, "--label", "pr-agent.harness-test=true",
@@ -38,12 +42,6 @@ try {
   }
   if (!ready) throw new Error("PostgreSQL Docker container did not become ready");
   console.log(`Docker PostgreSQL: ${docker(["exec", container, "postgres", "--version"])}`);
-  const available = (await readdir(new URL("../tests/", import.meta.url)))
-    .filter((name) => /^harness-.*\.pg\.test\.ts$/.test(name)).sort();
-  const requested = process.argv.slice(2);
-  if (requested.some((name) => !available.includes(name))) throw new Error("Select existing harness-*.pg.test.ts filenames only");
-  const tests = requested.length ? [...new Set(requested)] : available;
-  if (!tests.length) throw new Error("No Harness PostgreSQL tests found");
   for (let index = 0; index < tests.length; index += 1) {
     const database = `harness_test_${index}_${randomUUID().replaceAll("-", "")}`;
     docker(["exec", container, "createdb", "-U", "postgres", database]);
