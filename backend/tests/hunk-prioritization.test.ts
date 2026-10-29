@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { prioritizePatchHunks } from "../src/review/patch.ts";
+import { prioritizePatchHunks } from "../src/repository/diff/patch.js";
 
 test("prioritizePatchHunks keeps higher-risk hunks when patch exceeds limit", () => {
   const patch = [

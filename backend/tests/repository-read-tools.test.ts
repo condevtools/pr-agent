@@ -3,11 +3,9 @@ import test from "node:test";
 
 import { GitHubRepositoryReadAdapter } from "../src/integrations/github/github-repository-read-tools.js";
 import { GitLabRepositoryReadAdapter } from "../src/integrations/gitlab/gitlab-repository-read-tools.js";
-import {
-  REPOSITORY_READ_LIMITS,
-  RepositoryReadToolRegistry,
-  type RepositoryReadAdapter,
-} from "../src/integrations/shared/repository-read-tools.js";
+import { REPOSITORY_READ_LIMITS } from "../src/repository/read-limits.js";
+import { RepositoryReadToolRegistry } from "../src/review/deep/tools/registry.js";
+import { type RepositoryReadAdapter } from "../src/repository/contracts.js";
 
 const identity = { tenantId: "00000000-0000-4000-8000-000000000001",
   integrationId: "00000000-0000-4000-8000-000000000002",

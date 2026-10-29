@@ -78,8 +78,8 @@ test("ask conversation state survives module reload via runtime state backend", 
     const runtime = await import(`../src/core/runtime-state.ts?runtime_c=${Date.now()}`);
     await runtime.prepareRuntimeStateBackend();
     runtime.clearRuntimeStateStore();
-    const modA = await import(`../src/core/ask-session.ts?ask_a=${Date.now()}`);
-    const modB = await import(`../src/core/ask-session.ts?ask_b=${Date.now()}`);
+    const modA = await import(`../src/commands/ask/session.ts?ask_a=${Date.now()}`);
+    const modB = await import(`../src/commands/ask/session.ts?ask_b=${Date.now()}`);
     const sessionKey = `session-${Date.now()}`;
 
     modA.rememberAskConversationTurn({

@@ -1,5 +1,14 @@
 import { z } from "zod";
-import { redactKnownSecretValues } from "./secret-scan.js";
+import type {
+  RepositoryReadAdapter,
+  RepositoryReadIdentity,
+} from "../../../repository/contracts.js";
+import {
+  assertSafePath,
+  isSensitivePath,
+  redactRepositoryText,
+} from "../../../repository/content-safety/repository-content.js";
+import { REPOSITORY_READ_LIMITS } from "../../../repository/read-limits.js";
 
 import type {
   DeepReviewRole,
@@ -7,39 +16,8 @@ import type {
   EvidenceKind,
   EvidenceRecord,
   ReadonlyToolRequest,
-} from "../../review/deep/contracts.js";
-import { fingerprint } from "../../agent-runtime/versions.js";
-
-export const REPOSITORY_READ_LIMITS = Object.freeze({
-  maxChangedFiles: 100,
-  maxFileBytes: 256 * 1024,
-  maxRangeLines: 200,
-  maxSearchFiles: 40,
-  maxSearchMatches: 50,
-  maxSummaryChars: 4_096,
-  maxQueryChars: 128,
-});
-
-export interface RepositoryReadIdentity {
-  tenantId: string;
-  integrationId: string;
-  runId: string;
-  platform: "github" | "gitlab";
-  repository: string;
-  baseSha: string;
-  headSha: string;
-}
-
-export interface RepositoryReadFile {
-  path: string;
-  bytes: Uint8Array;
-  mode?: string;
-}
-
-export interface RepositoryReadAdapter {
-  readFile(path: string, signal?: AbortSignal): Promise<RepositoryReadFile | undefined>;
-  readCiStatus(signal?: AbortSignal): Promise<unknown>;
-}
+} from "../contracts.js";
+import { fingerprint } from "../../../agent-runtime/versions.js";
 
 export interface RepositoryReadToolOptions {
   identity: RepositoryReadIdentity;
@@ -63,13 +41,6 @@ const MANIFEST_PATHS: Record<"package" | "dependencies" | "build" | "ci", readon
   build: ["tsconfig.json", "Makefile", "build.gradle", "build.gradle.kts", "pom.xml"],
   ci: [".github/workflows/ci.yml", ".github/workflows/ci.yaml", ".gitlab-ci.yml"],
 };
-
-export function isSensitivePath(path: string): boolean {
-  return path.split("/").some((segment) => /^(?:\.git|\.env(?:\..*)?|\.envrc|.*\.tfvars(?:\.json)?|\.npmrc|\.pypirc|id_(?:rsa|dsa|ecdsa|ed25519)|credentials?(?:\..*)?|secrets?(?:\..*)?|.*\.(?:pem|key|p12|pfx|jks|keystore))$/i.test(segment));
-}
-const SECRET_VALUE = /(["']?(?:token|password|passwd|secret|api[_-]?key|private[_-]?key)["']?\s*[:=]\s*["']?)([^\s,'"}]+)/gi;
-const TOKEN_VALUE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b/g;
-const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 
 export class RepositoryReadToolRegistry implements DeepToolRegistry {
   private readonly changedPaths: string[];
@@ -208,59 +179,6 @@ export class RepositoryFileUnavailableError extends Error {
   constructor(message: string) { super(message); this.name = "RepositoryFileUnavailableError"; }
 }
 
-export function assertSafePath(raw: string): string {
-  if (!raw || raw.length > 512 || raw.startsWith("/") || raw.includes("\\") || raw.includes("\0")) {
-    throw new Error("repository path is invalid");
-  }
-  const segments = raw.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
-    throw new Error("repository path traversal is not allowed");
-  }
-  if (isSensitivePath(raw)) throw new Error("sensitive repository path is not readable");
-  return raw;
-}
-
-export function redactRepositoryText(text: string): string {
-  return redactKnownSecretValues(text.replace(PRIVATE_KEY, (value) => "[REDACTED]" + "\n".repeat((value.match(/\n/g) ?? []).length)))
-    .replace(TOKEN_VALUE, "[REDACTED]")
-    .replace(SECRET_VALUE, "$1[REDACTED]");
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export async function boundedJson<T>(response: Response, maxBytes: number): Promise<T> {
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("provider response exceeds the read limit");
-  if (!response.body) return JSON.parse(await response.text()) as T;
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      length += next.value.byteLength;
-      if (length > maxBytes) throw new Error("provider response exceeds the read limit");
-      chunks.push(next.value);
-    }
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
-}
-
-export function repositoryReadSignal(parent?: AbortSignal, timeoutMs = 10_000, role?: AbortSignal): AbortSignal {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) {
-    throw new Error("repository read timeout must be between 100 and 30000ms");
-  }
-  return AbortSignal.any([parent, role, AbortSignal.timeout(timeoutMs)]
-    .filter((value): value is AbortSignal => Boolean(value)));
 }

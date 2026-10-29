@@ -2,8 +2,10 @@ import type { DeepReviewArtifact, DeepReviewSource, DeepWorkflowPolicy } from ".
 import { createDeepWorkflowPolicy } from "./policy.js";
 import { deepReviewWorkflow } from "./workflow.js";
 import { createStructuredModel } from "../../model/structured-model.js";
-import type { DiffFileContext, PullRequestReviewInput } from "../contracts.js";
-import { RepositoryReadToolRegistry, type RepositoryReadAdapter } from "../../integrations/shared/repository-read-tools.js";
+import type { DiffFileContext } from "../../repository/contracts.js";
+import type { PullRequestReviewInput } from "../contracts.js";
+import { RepositoryReadToolRegistry } from "./tools/registry.js";
+import { type RepositoryReadAdapter } from "../../repository/contracts.js";
 import { DeepReviewStore } from "./persistence/store.js";
 import { deepBudgetSchema } from "./budget.js";
 import type { RunLease } from "../../agent-runtime/runs/contracts.js";

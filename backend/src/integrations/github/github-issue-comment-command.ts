@@ -20,33 +20,8 @@ import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
 import { runGitHubImplementCommand } from "./github-implement.js";
 import { resolvePublicationRuntime } from "../../agent-runtime/runtime.js";
 import { guardGitHubOctokit } from "./github-rest-client.js";
-import {
-  findSimilarIssues,
-  parseAddDocCommand,
-  parseAskCommand,
-  parseChangelogCommand,
-  parseChecksCommand,
-  parseConfigCommand,
-  parseDescribeCommand,
-  parseFeedbackCommand,
-  parseGenerateTestsCommand,
-  parseHelpCommand,
-  parseImproveCommand,
-  parseImplementCommand,
-  parseMentionCommand,
-  parseReflectCommand,
-  parseReviewCommand,
-  parseSimilarIssueCommand,
-  parseCustomPromptCommand,
-  parseHelpDocsCommand,
-  parseAnalyzeCommand,
-  parseComplianceCommand,
-  parseImproveComponentCommand,
-  parseGenerateLabelsCommand,
-  parseSimilarCodeCommand,
-  parseAutoApproveCommand,
-  parseScanRepoDiscussionsCommand,
-} from "#review";
+import { findSimilarIssues } from "../../issues/similarity/scorer.js";
+import { parseAddDocCommand, parseAskCommand, parseChangelogCommand, parseChecksCommand, parseConfigCommand, parseDescribeCommand, parseFeedbackCommand, parseGenerateTestsCommand, parseHelpCommand, parseImproveCommand, parseImplementCommand, parseMentionCommand, parseReflectCommand, parseReviewCommand, parseSimilarIssueCommand, parseCustomPromptCommand, parseHelpDocsCommand, parseAnalyzeCommand, parseComplianceCommand, parseImproveComponentCommand, parseGenerateLabelsCommand, parseSimilarCodeCommand, parseAutoApproveCommand, parseScanRepoDiscussionsCommand } from "../../commands/parsers/index.js";
 import {
   buildAddDocRule,
   buildChecksQuestion,
@@ -60,23 +35,23 @@ import {
   buildAutoApproveQuestion,
   buildScanRepoDiscussionsQuestion,
   buildHelpDocsQuestion,
-} from "../shared/command-builders.js";
+} from "../../commands/builders/questions.js";
 import {
   dispatchCommandRegistrations,
   type CommandDispatchResult,
   type CommandRegistration,
-} from "../shared/command-dispatch.js";
+} from "../../commands/dispatch.js";
 import {
   buildCommandApplyDisabledByPolicyMessage,
   buildCommandDisabledByPolicyMessage,
   buildFeedbackSignalRecordedMessage,
   buildReflectDependsOnAskMessage,
-} from "../shared/command-messages.js";
-import { buildHelpMessage } from "../shared/command-help.js";
+} from "../../commands/presentation/messages.js";
+import { buildHelpMessage } from "../../commands/presentation/help.js";
 import {
   buildConfigFoundMessage,
   buildConfigNotFoundMessage,
-} from "../shared/command-config.js";
+} from "../../commands/config.js";
 import {
   loadRepositoryPolicyConfig,
   hasRepositoryPolicyConfigFile,
@@ -87,8 +62,8 @@ import {
   buildSimilarIssueComment,
   buildSimilarIssueQueryMissingMessage,
   resolveSimilarIssueQuery,
-} from "../shared/similar-issue.js";
-import { inferReviewLabels } from "../shared/auto-labels.js";
+} from "../../issues/similarity/presentation.js";
+import { inferReviewLabels } from "../../review/presentation/auto-labels.js";
 
 const DEFAULT_COMMAND_RATE_LIMIT_MAX = 10;
 const DEFAULT_COMMAND_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1_000;

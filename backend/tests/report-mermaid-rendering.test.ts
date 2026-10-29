@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildReportCommentMarkdown } from "../src/review/report-renderer.ts";
-import type { DiffFileContext, PullRequestReviewResult } from "../src/review/contracts.ts";
+import { buildReportCommentMarkdown } from "../src/review/rendering/report-renderer.ts";
+import type { DiffFileContext } from "../src/repository/contracts.js";
+import type { PullRequestReviewResult } from "../src/review/contracts.ts";
 
 function makeFile(path: string): DiffFileContext {
   return {

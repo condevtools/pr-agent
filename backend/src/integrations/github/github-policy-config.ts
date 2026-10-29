@@ -13,7 +13,7 @@ import { decodeGitHubFileContent } from "./github-content.js";
 import {
   parseYamlBooleanMaybe,
   stripYamlQuotes,
-} from "../shared/yaml.js";
+} from "../../core/config/yaml.js";
 import type {
   GitHubRepositoryContentFile,
   GitHubReviewContext,

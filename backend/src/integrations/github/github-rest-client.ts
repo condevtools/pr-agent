@@ -11,7 +11,7 @@ import {
   type GitHubReviewCommentSummary,
   type MinimalGitHubOctokit,
 } from "./github-review.js";
-import { buildGitHubHttpRetryOptions } from "../shared/http-retry-options.js";
+import { buildGitHubHttpRetryOptions } from "../../core/http/retry-options.js";
 import { assertPublicationWriteAllowed } from "../../agent-runtime/authority/write-boundary.js";
 
 const MAX_LIST_FILES_TRUNCATED_RECORDS = 500;

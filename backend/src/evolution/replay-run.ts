@@ -6,7 +6,8 @@ import { currentRunExecutionContext } from "../agent-runtime/execution/run-conte
 import { DeepReviewAnalysisFailedError } from "../agent-runtime/execution/run-context.js";
 import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import { getAgentRuntimeServices } from "../agent-runtime/runtime.js";
-import type { DiffFileContext, PullRequestReviewInput } from "../review/contracts.js";
+import type { DiffFileContext } from "../repository/contracts.js";
+import type { PullRequestReviewInput } from "../review/contracts.js";
 import { ReplayFixtureAdapter } from "./replay-fixture-adapter.js";
 import { replayRunInputSchema } from "./replay-contracts.js";
 import { buildReplayRunCreationInput, ReplayAdmissionManifestDriftError } from "./replay-intake.js";

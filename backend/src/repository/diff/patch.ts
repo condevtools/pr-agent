@@ -1,4 +1,4 @@
-import type { DiffFileContext, ReviewLineType } from "./contracts.js";
+import type { DiffFileContext, DiffSide } from "../contracts.js";
 
 interface Hunk {
   oldStart: number;
@@ -51,7 +51,7 @@ export function parsePatchWithLineNumbers(rawPatch: string): {
 
 export function getDiffSnippet(
   file: DiffFileContext,
-  type: ReviewLineType,
+  type: DiffSide,
   startLine: number,
   endLine: number,
   contextLines = 3,

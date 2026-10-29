@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { findSimilarIssues } from "../src/review/similar-issue.ts";
+import { findSimilarIssues } from "../src/issues/similarity/scorer.js";
 
 test("findSimilarIssues ranks candidates by keyword overlap and phrase hits", () => {
   const matches = findSimilarIssues({

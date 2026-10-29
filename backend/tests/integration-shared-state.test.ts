@@ -5,8 +5,8 @@ import {
   readMergedFeedbackSignals,
   rememberIncrementalReviewHead,
   loadIncrementalReviewHead,
-} from "../src/integrations/shared/review-state.ts";
-import { recordFeedbackSignal } from "../src/integrations/shared/feedback-signals.ts";
+} from "../src/review/state/review-state.ts";
+import { recordFeedbackSignal } from "../src/review/state/feedback-signals.ts";
 
 test("shared review-state merges scoped and repository-level feedback signals", () => {
   const scope = `feedback-scope-${Date.now()}-${Math.random().toString(16).slice(2)}`;

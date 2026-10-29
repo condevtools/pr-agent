@@ -10,7 +10,7 @@ import {
   type PublicationScope,
   type PublicationService,
 } from "../../agent-runtime/publication/publication.js";
-import { buildManagedCommentBody, buildManagedCommentMarker } from "../shared/managed-comments.js";
+import { buildManagedCommentBody, buildManagedCommentMarker } from "../../review/rendering/managed-comments.js";
 import { gitLabApiRequest } from "./gitlab-http.js";
 import type { PublicationAdapterFactory, PublicationBatchCoordinator, PublicationBatchStore } from "../../agent-runtime/publication/batches.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";

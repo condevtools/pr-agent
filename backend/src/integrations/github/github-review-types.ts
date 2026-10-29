@@ -1,4 +1,5 @@
-import type { DiffFileContext, PullRequestReviewInput, ReviewMode, ReviewTrigger } from "#review";
+import type { DiffFileContext } from "../../repository/contracts.js";
+import type { PullRequestReviewInput, ReviewMode, ReviewTrigger } from "#review";
 import type { GitHubPublicationRuntime } from "./github-publication.js";
 
 // ---------------------------------------------------------------------------

@@ -441,7 +441,7 @@ pr-agent/
 | `#review` | `backend/src/review/index.ts` |
 | `#integrations/github` | `backend/src/integrations/github/index.ts` |
 | `#integrations/gitlab` | `backend/src/integrations/gitlab/index.ts` |
-| `#integrations/notify` | `backend/src/integrations/notify/index.ts` |
+| `#integrations/notifications` | `backend/src/integrations/notifications/index.ts` |
 
 ---
 

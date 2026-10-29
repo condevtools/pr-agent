@@ -9,7 +9,7 @@ import {
 import type { ReviewMode } from "#review";
 import {
   parseYamlBoolean as parseSharedYamlBoolean,
-} from "../shared/yaml.js";
+} from "../../core/config/yaml.js";
 import type {
   GitHubCheckRunCreateParams,
   GitHubReviewContext,

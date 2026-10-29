@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { publishNotification } from "../src/integrations/notify/notification.ts";
+import { publishNotification } from "../src/integrations/notifications/notification.ts";
 
 test("notification payload supports slack webhook format", async () => {
   const originalFetch = globalThis.fetch;

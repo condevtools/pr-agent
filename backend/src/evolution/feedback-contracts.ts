@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { fingerprint } from "../agent-runtime/versions.js";
-import { assertSafePath } from "../integrations/shared/repository-read-tools.js";
+import { assertSafePath } from "../repository/content-safety/repository-content.js";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 

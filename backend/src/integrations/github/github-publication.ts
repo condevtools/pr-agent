@@ -10,7 +10,7 @@ import {
   type PublicationScope,
   type PublicationService,
 } from "../../agent-runtime/publication/publication.js";
-import { buildManagedCommentBody, buildManagedCommentMarker } from "../shared/managed-comments.js";
+import { buildManagedCommentBody, buildManagedCommentMarker } from "../../review/rendering/managed-comments.js";
 import { GitHubRestApiError } from "./github-rest-client.js";
 import type { GitHubReviewContext, MinimalGitHubOctokit } from "./github-review-types.js";
 import type { PublicationAdapterFactory, PublicationBatchCoordinator, PublicationBatchStore } from "../../agent-runtime/publication/batches.js";

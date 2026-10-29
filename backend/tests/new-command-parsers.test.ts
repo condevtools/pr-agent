@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  parseAddDocCommand,
-  parseImproveCommand,
-  parseMentionCommand,
-  parseReflectCommand,
-  parseSimilarIssueCommand,
-} from "../src/review/report-renderer.ts";
+import { parseAddDocCommand, parseImproveCommand, parseMentionCommand, parseReflectCommand, parseSimilarIssueCommand } from "../src/commands/parsers/index.js";
 
 test("parseImproveCommand supports optional focus", () => {
   const plain = parseImproveCommand("/improve");

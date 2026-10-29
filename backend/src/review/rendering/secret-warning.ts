@@ -1,5 +1,5 @@
 import { localizeText, resolveUiLocale, type UiLocale } from "#core";
-import type { SecretFinding } from "./secret-scan.js";
+import type { SecretFinding } from "../../repository/content-safety/secret-scan.js";
 
 export function buildSecretWarningComment(params: {
   platform: "github" | "gitlab";

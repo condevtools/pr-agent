@@ -8,7 +8,7 @@ import { createRunInTransaction, type CreateRunInput } from "../agent-runtime/po
 import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 import { requireRunPermission } from "../agent-runtime/runs/control-contracts.js";
 import { fingerprint, runtimeVersionManifest } from "../agent-runtime/versions.js";
-import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
+import { redactRepositoryText } from "../repository/content-safety/repository-content.js";
 import { resolveModelConfiguration } from "../model/configuration.js";
 import { trustedLabelSetSchema } from "./feedback-contracts.js";
 import type { EvolutionDevelopmentCaseSummary, EvolutionProposalRunInput, EvolutionProposalSource } from "./candidate-contracts.js";

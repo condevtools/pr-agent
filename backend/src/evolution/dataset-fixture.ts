@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type { RepositoryReadAdapter } from "../integrations/shared/repository-read-tools.js";
-import { assertSafePath, isSensitivePath, redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
+import type { RepositoryReadAdapter } from "../repository/contracts.js";
+import { assertSafePath, isSensitivePath, redactRepositoryText } from "../repository/content-safety/repository-content.js";
 import { fingerprint } from "../agent-runtime/versions.js";
 import { assertDatasetPath, type DatasetCaseSource, type DatasetFixtureFile, type DatasetFixtureV1 } from "./dataset-contracts.js";
 

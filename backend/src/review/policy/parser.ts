@@ -1,7 +1,7 @@
 import { load as loadYaml } from "js-yaml";
 import { z } from "zod";
 
-import { parseYamlBooleanMaybe } from "./yaml.js";
+import { parseYamlBooleanMaybe } from "../../core/config/yaml.js";
 
 const reviewPolicyOverridesSchema = z
   .object({

@@ -1,31 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeChangelogContent } from "../src/integrations/shared/changelog.ts";
+import { mergeChangelogContent } from "../src/commands/presentation/changelog.ts";
 import {
   buildAddDocRule,
   buildChecksQuestion,
   buildGenerateTestsQuestion,
   buildImproveRule,
   buildReflectQuestion,
-} from "../src/integrations/shared/command-builders.ts";
-import { buildDescribeQuestion } from "../src/integrations/shared/describe-question.ts";
-import { getPublicErrorMessage } from "../src/integrations/shared/public-error.ts";
+} from "../src/commands/builders/questions.ts";
+import { buildDescribeQuestion } from "../src/commands/builders/describe-question.ts";
+import { getPublicErrorMessage } from "../src/commands/presentation/public-error.ts";
 import {
   parseYamlBooleanMaybe,
   stripYamlQuotes,
-} from "../src/integrations/shared/yaml.ts";
+} from "../src/core/config/yaml.ts";
 import {
   findPotentialSecrets,
   isLikelyPlaceholder,
-} from "../src/integrations/shared/secret-scan.ts";
-import { inferReviewLabels } from "../src/integrations/shared/auto-labels.ts";
-import { buildSecretWarningComment } from "../src/integrations/shared/secret-warning.ts";
+} from "../src/repository/content-safety/secret-scan.ts";
+import { inferReviewLabels } from "../src/review/presentation/auto-labels.ts";
+import { buildSecretWarningComment } from "../src/review/rendering/secret-warning.ts";
 import {
   buildSimilarIssueComment,
   buildSimilarIssueQueryMissingMessage,
   resolveSimilarIssueQuery,
-} from "../src/integrations/shared/similar-issue.ts";
+} from "../src/issues/similarity/presentation.ts";
 
 test("shared changelog merger is idempotent for same title", () => {
   const existing = [

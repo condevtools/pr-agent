@@ -14,7 +14,7 @@ import type { RunPrincipal } from "../../../agent-runtime/runs/control-contracts
 import { requireRunPermission, runNotFound } from "../../../agent-runtime/runs/control-contracts.js";
 import type { RunLease } from "../../../agent-runtime/runs/contracts.js";
 import { fingerprint } from "../../../agent-runtime/versions.js";
-import { redactRepositoryText } from "../../../integrations/shared/repository-read-tools.js";
+import { redactRepositoryText } from "../../../repository/content-safety/repository-content.js";
 
 interface SuccessfulStepRow {
   step_id: string;

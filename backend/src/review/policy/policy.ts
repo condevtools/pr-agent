@@ -1,4 +1,5 @@
-import type { DiffFileContext, ReviewIssue } from "../contracts.js";
+import type { DiffFileContext } from "../../repository/contracts.js";
+import type { ReviewIssue } from "../contracts.js";
 import { readStringEnv } from "#core";
 
 const DEFAULT_REVIEW_CODE_EXTENSIONS =

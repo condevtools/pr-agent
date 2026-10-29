@@ -5,12 +5,8 @@ import { encodePath } from "../src/core/path.ts";
 import {
   createOpenAIClientCache,
 } from "../src/model/client-cache.ts";
-import {
-  buildAskPrompt,
-  buildUserPrompt,
-  resolveAskSystemPrompt,
-  resolveReviewSystemPrompt,
-} from "../src/review/standard/reviewer.ts";
+import { buildAskPrompt, resolveAskSystemPrompt } from "../src/commands/ask/prompts.js";
+import { buildUserPrompt, resolveReviewSystemPrompt } from "../src/review/standard/reviewer.ts";
 import type { PullRequestReviewInput } from "../src/review/contracts.ts";
 import { parseRepoPolicyConfig } from "../src/integrations/github/github-policy.ts";
 import { parseGitLabReviewPolicyConfig } from "../src/integrations/gitlab/gitlab-review.ts";

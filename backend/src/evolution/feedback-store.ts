@@ -7,7 +7,7 @@ import type { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
 import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 import { runConflict, runNotFound } from "../agent-runtime/runs/control-contracts.js";
 import { fingerprint } from "../agent-runtime/versions.js";
-import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
+import { redactRepositoryText } from "../repository/content-safety/repository-content.js";
 import {
   annotationRequestSchema, arbitrationRequestSchema, canonicalizeLabelSet, feedbackObservationSchema,
   labelSetHash, type AnnotationReceipt, type AnnotationRequest, type ArbitrationReceipt,

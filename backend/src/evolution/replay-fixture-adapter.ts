@@ -1,4 +1,4 @@
-import type { RepositoryReadAdapter, RepositoryReadFile } from "../integrations/shared/repository-read-tools.js";
+import type { RepositoryReadAdapter, RepositoryReadFile } from "../repository/contracts.js";
 import type { DatasetFixtureV1 } from "./dataset-contracts.js";
 
 /** Immutable, credential-free replay adapter. It has no network-capable dependency. */

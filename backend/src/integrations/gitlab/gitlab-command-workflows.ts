@@ -1,16 +1,9 @@
-import {
-  clearDuplicateRecord,
-  ensureError,
-  isDuplicateRequest,
-  loadAskConversationTurns,
-  localizeText,
-  rememberAskConversationTurn,
-  resolveUiLocale,
-  type UiLocale,
-} from "#core";
-import { answerPullRequestQuestion, type PullRequestReviewInput } from "#review";
-import { getPublicErrorMessage } from "../shared/public-error.js";
-import { reviewMessage } from "../shared/review-messages.js";
+import { clearDuplicateRecord, ensureError, isDuplicateRequest, localizeText, resolveUiLocale, type UiLocale } from "#core";
+import { loadAskConversationTurns, rememberAskConversationTurn } from "../../commands/ask/session.js";
+import { answerPullRequestQuestion } from "../../commands/ask/execute.js";
+import { type PullRequestReviewInput } from "#review";
+import { getPublicErrorMessage } from "../../commands/presentation/public-error.js";
+import { reviewMessage } from "../../review/rendering/messages.js";
 
 interface LoggerLike {
   info(metadata: unknown, message: string): void;

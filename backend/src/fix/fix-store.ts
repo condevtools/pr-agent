@@ -23,7 +23,7 @@ import { fingerprint } from "../agent-runtime/versions.js";
 import { verificationResultSchema } from "./fix-input.js";
 import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 import { requireRunPermission, runNotFound } from "../agent-runtime/runs/control-contracts.js";
-import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
+import { redactRepositoryText } from "../repository/content-safety/repository-content.js";
 
 export class FixStoreError extends Error {
   constructor(readonly code: string) { super(`fix store rejected operation: ${code}`); this.name = "FixStoreError"; }

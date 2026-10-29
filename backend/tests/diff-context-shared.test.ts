@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildDiffFileContexts } from "../src/integrations/shared/diff-context.ts";
+import { buildDiffFileContexts } from "../src/repository/diff/context.ts";
 
 test("shared diff context filters files and applies patch limits", () => {
   const result = buildDiffFileContexts({

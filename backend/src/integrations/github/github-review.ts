@@ -13,7 +13,7 @@ import {
   resolveUiLocale,
   type UiLocale,
 } from "#core";
-import { publishNotification } from "#integrations/notify";
+import { publishNotification } from "#integrations/notifications";
 import {
   analyzePullRequest,
   buildIssueCommentMarkdown,
@@ -25,45 +25,40 @@ import {
   isReviewTargetFile,
   resolveReviewLineForIssue,
 } from "#review";
-import type {
-  DiffFileContext,
-  PullRequestReviewInput,
-  PullRequestReviewResult,
-  ReviewMode,
-  ReviewTrigger,
-} from "#review";
+import type { DiffFileContext } from "../../repository/contracts.js";
+import type { PullRequestReviewInput, PullRequestReviewResult, ReviewMode, ReviewTrigger } from "#review";
 import { decodeGitHubFileContent } from "./github-content.js";
 import { createGitHubCommandWorkflows } from "./github-command-workflows.js";
-import { inferReviewLabels } from "../shared/auto-labels.js";
-import { buildChangelogQuestion } from "../shared/command-builders.js";
-import { mergeChangelogContent as mergeSharedChangelogContent } from "../shared/changelog.js";
-import { buildDescribeQuestion } from "../shared/describe-question.js";
-import { buildDiffFileContexts } from "../shared/diff-context.js";
-import { recordFeedbackSignal } from "../shared/feedback-signals.js";
+import { inferReviewLabels } from "../../review/presentation/auto-labels.js";
+import { buildChangelogQuestion } from "../../commands/builders/questions.js";
+import { mergeChangelogContent as mergeSharedChangelogContent } from "../../commands/presentation/changelog.js";
+import { buildDescribeQuestion } from "../../commands/builders/describe-question.js";
+import { buildDiffFileContexts } from "../../repository/diff/context.js";
+import { recordFeedbackSignal } from "../../review/state/feedback-signals.js";
 import {
   loadProcessGuidelinesWithCache,
   type ProcessGuideline,
-} from "../shared/process-guidelines.js";
-import { getPublicErrorMessage } from "../shared/public-error.js";
+} from "../../repository/process-guidelines.js";
+import { getPublicErrorMessage } from "../../commands/presentation/public-error.js";
 import {
   loadIncrementalReviewHead,
   readMergedFeedbackSignals,
   rememberIncrementalReviewHead,
-} from "../shared/review-state.js";
+} from "../../review/state/review-state.js";
 import {
   findPotentialSecrets as findSharedPotentialSecrets,
   isLikelyPlaceholder as isLikelyPlaceholderShared,
   type SecretFinding,
-} from "../shared/secret-scan.js";
-import { buildSecretWarningComment } from "../shared/secret-warning.js";
-import { reviewMessage } from "../shared/review-messages.js";
+} from "../../repository/content-safety/secret-scan.js";
+import { buildSecretWarningComment } from "../../review/rendering/secret-warning.js";
+import { reviewMessage } from "../../review/rendering/messages.js";
 import {
   buildManagedCommentBody,
   buildManagedCommentMarker,
   type ManagedCommentKey,
   MANAGED_COMMENT_SCAN_PER_PAGE,
   MAX_MANAGED_COMMENT_SCAN_PAGES,
-} from "../shared/managed-comments.js";
+} from "../../review/rendering/managed-comments.js";
 import {
   DEFAULT_DEDUPE_TTL_MS,
   isAutoReviewTrigger,
@@ -71,7 +66,7 @@ import {
   shouldSkipReviewForDraft,
   shouldUseIncrementalReview,
   shouldUseManagedReviewSummary,
-} from "../shared/review-triggers.js";
+} from "../../review/policy/triggers.js";
 export type {
   GitHubAskRunParams,
   GitHubChangelogRunParams,
@@ -162,7 +157,7 @@ export function resolveGitHubPatchCharLimits(): {
   };
 }
 
-export { buildManagedCommandCommentKey } from "../shared/managed-comments.js";
+export { buildManagedCommandCommentKey } from "../../review/rendering/managed-comments.js";
 
 export function shouldSkipGitHubReviewForDraft(
   trigger: ReviewTrigger,

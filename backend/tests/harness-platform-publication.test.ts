@@ -15,7 +15,7 @@ import { createRestBackedOctokit } from "../src/integrations/github/github-rest-
 import { publishGitHubIssueCommentDurably } from "../src/integrations/github/github-publication.js";
 import type { GitHubReviewContext } from "../src/integrations/github/github-review-types.js";
 import { publishGitLabNoteDurably } from "../src/integrations/gitlab/gitlab-publication.js";
-import { buildManagedCommentMarker } from "../src/integrations/shared/managed-comments.js";
+import { buildManagedCommentMarker } from "../src/review/rendering/managed-comments.js";
 
 const githubScope = {
   tenantId: "11111111-1111-4111-8111-111111111111",

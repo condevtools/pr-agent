@@ -1,4 +1,5 @@
-import type { DiffFileContext, PullRequestReviewResult } from "#review";
+import type { DiffFileContext } from "../../repository/contracts.js";
+import type { PullRequestReviewResult } from "#review";
 
 export interface InferReviewLabelsParams {
   title: string;

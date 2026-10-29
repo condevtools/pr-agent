@@ -1,8 +1,5 @@
-import {
-  parsePatchWithLineNumbers,
-  prioritizePatchHunks,
-  type DiffFileContext,
-} from "#review";
+import { parsePatchWithLineNumbers, prioritizePatchHunks } from "./patch.js";
+import { type DiffFileContext } from "../contracts.js";
 
 export interface DiffContextCandidate {
   newPath: string;

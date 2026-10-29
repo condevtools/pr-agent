@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeAskResultForSchema } from "../src/review/standard/normalization.ts";
+import { normalizeAskResultForSchema } from "../src/commands/ask/normalization.js";
 import { parseJsonFromModelText } from "../src/model/providers/json.ts";
 
 test("normalizeAskResultForSchema extracts trailing JSON answer from mixed text", () => {

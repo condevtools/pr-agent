@@ -43,18 +43,15 @@ import {
   shouldSkipGitLabReviewForDraft,
   upsertGitLabManagedComment,
 } from "../src/integrations/gitlab/gitlab-review.ts";
-import { buildManagedCommandCommentKey } from "../src/integrations/shared/managed-comments.ts";
+import { buildManagedCommandCommentKey } from "../src/review/rendering/managed-comments.ts";
 import {
   createOpenAIClientCache,
   openAIClientCacheKey,
 } from "../src/model/client-cache.ts";
-import {
-  buildAskPrompt,
-  buildUserPrompt,
-  normalizeAskResultForSchema,
-  normalizeReviewResultForSchema,
-  shouldRetryAskWithCompactContext,
-} from "../src/review/standard/reviewer.ts";
+import { buildAskPrompt } from "../src/commands/ask/prompts.js";
+import { buildUserPrompt, normalizeReviewResultForSchema } from "../src/review/standard/reviewer.ts";
+import { normalizeAskResultForSchema } from "../src/commands/ask/normalization.js";
+import { shouldRetryAskWithCompactContext } from "../src/commands/ask/execute.js";
 import {
   parseAnthropicJsonPayload,
   shouldRetryAnthropicWithoutTools,
@@ -71,10 +68,7 @@ import {
   getRateLimitRecordCount,
   isRateLimited,
 } from "../src/core/rate-limit.ts";
-import {
-  loadAskConversationTurns,
-  rememberAskConversationTurn,
-} from "../src/core/ask-session.ts";
+import { loadAskConversationTurns, rememberAskConversationTurn } from "../src/commands/ask/session.js";
 import {
   clearAskConversationState,
   clearGitHubFeedbackSignals,
@@ -84,7 +78,7 @@ import { localizeText, resolveUiLocale } from "../src/core/i18n.ts";
 import {
   buildIssueCommentMarkdown,
   buildReportCommentMarkdown,
-} from "../src/review/report-renderer.ts";
+} from "../src/review/rendering/report-renderer.ts";
 
 test("github no-diff status updates progress comment only when progressCommentId is present", async () => {
   let createCalls = 0;

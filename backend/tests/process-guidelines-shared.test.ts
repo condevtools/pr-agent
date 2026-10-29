@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadProcessGuidelinesWithCache } from "../src/integrations/shared/process-guidelines.ts";
+import { loadProcessGuidelinesWithCache } from "../src/repository/process-guidelines.ts";
 
 test("shared guideline loader reads direct files and template files from directories", async () => {
   const scope = `guideline-scope-${Date.now()}-${Math.random().toString(16).slice(2)}`;

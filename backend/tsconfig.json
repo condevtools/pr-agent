@@ -18,8 +18,8 @@
       "#integrations/github/*": ["src/integrations/github/*"],
       "#integrations/gitlab": ["src/integrations/gitlab/index.ts"],
       "#integrations/gitlab/*": ["src/integrations/gitlab/*"],
-      "#integrations/notify": ["src/integrations/notify/index.ts"],
-      "#integrations/notify/*": ["src/integrations/notify/*"]
+      "#integrations/notifications": ["src/integrations/notifications/index.ts"],
+      "#integrations/notifications/*": ["src/integrations/notifications/*"]
     },
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,

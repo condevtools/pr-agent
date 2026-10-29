@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseChangelogCommand } from "../src/review/report-renderer.ts";
+import { parseChangelogCommand } from "../src/commands/parsers/index.js";
 
 test("parseChangelogCommand supports --apply before focus", () => {
   const parsed = parseChangelogCommand("/changelog --apply optimize startup");

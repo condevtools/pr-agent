@@ -2,71 +2,16 @@ import { createHash } from "node:crypto";
 import { assertRunActive, assertReviewRunRevision, currentRunLease, durableReviewAnalysis, durableReviewCollection } from "../../agent-runtime/execution/run-context.js";
 import { shouldQueueReview } from "../../review/intake/run-intake.js";
 import { enqueueGitLabReview } from "../../review/intake/provider-intake.js";
-import {
-  BadWebhookRequestError,
-  clearDuplicateRecord,
-  ensureError,
-  isDuplicateRequest,
-  isRateLimited,
-  loadRuntimeStateValue,
-  loadAskConversationTurns,
-  localizeText,
-  nowMs,
-  normalizeRateLimitPart,
-  parseBooleanEnv,
-  readNumberEnv,
-  readOptionalStringEnv,
-  readStringEnv,
-  rememberAskConversationTurn,
-  resolveUiLocale,
-  saveRuntimeStateValue,
-  type UiLocale,
-} from "#core";
+import { BadWebhookRequestError, clearDuplicateRecord, ensureError, isDuplicateRequest, isRateLimited, loadRuntimeStateValue, localizeText, nowMs, normalizeRateLimitPart, parseBooleanEnv, readNumberEnv, readOptionalStringEnv, readStringEnv, resolveUiLocale, saveRuntimeStateValue, type UiLocale } from "#core";
+import { loadAskConversationTurns, rememberAskConversationTurn } from "../../commands/ask/session.js";
 import { z } from "zod";
-import { publishNotification } from "#integrations/notify";
-import {
-  analyzePullRequest,
-  answerPullRequestQuestion,
-  buildIssueCommentMarkdown,
-  buildReportCommentMarkdown,
-  countPatchChanges,
-  findSimilarIssues,
-  findFileForReview,
-  GITLAB_GUIDELINE_DIRECTORIES,
-  GITLAB_GUIDELINE_FILE_PATHS,
-  parseAddDocCommand,
-  isProcessTemplateFile,
-  isReviewTargetFile,
-  parseAskCommand,
-  parseChangelogCommand,
-  parseChecksCommand,
-  parseConfigCommand,
-  parseDescribeCommand,
-  parseFeedbackCommand,
-  parseGenerateTestsCommand,
-  parseHelpCommand,
-  parseImproveCommand,
-  parseReflectCommand,
-  parseReviewCommand,
-  parseSimilarIssueCommand,
-  parseCustomPromptCommand,
-  parseHelpDocsCommand,
-  parseAnalyzeCommand,
-  parseComplianceCommand,
-  parseImproveComponentCommand,
-  parseGenerateLabelsCommand,
-  parseSimilarCodeCommand,
-  parseAutoApproveCommand,
-  parseScanRepoDiscussionsCommand,
-  resolveReviewLineForIssue,
-} from "#review";
-import type {
-  DiffFileContext,
-  PullRequestReviewInput,
-  PullRequestReviewResult,
-  ReviewMode,
-  ReviewTrigger,
-} from "#review";
+import { publishNotification } from "#integrations/notifications";
+import { analyzePullRequest, buildIssueCommentMarkdown, buildReportCommentMarkdown, countPatchChanges, findFileForReview, GITLAB_GUIDELINE_DIRECTORIES, GITLAB_GUIDELINE_FILE_PATHS, isProcessTemplateFile, isReviewTargetFile, resolveReviewLineForIssue } from "#review";
+import { answerPullRequestQuestion } from "../../commands/ask/execute.js";
+import { findSimilarIssues } from "../../issues/similarity/scorer.js";
+import { parseAddDocCommand, parseAskCommand, parseChangelogCommand, parseChecksCommand, parseConfigCommand, parseDescribeCommand, parseFeedbackCommand, parseGenerateTestsCommand, parseHelpCommand, parseImproveCommand, parseReflectCommand, parseReviewCommand, parseSimilarIssueCommand, parseCustomPromptCommand, parseHelpDocsCommand, parseAnalyzeCommand, parseComplianceCommand, parseImproveComponentCommand, parseGenerateLabelsCommand, parseSimilarCodeCommand, parseAutoApproveCommand, parseScanRepoDiscussionsCommand } from "../../commands/parsers/index.js";
+import type { DiffFileContext } from "../../repository/contracts.js";
+import type { PullRequestReviewInput, PullRequestReviewResult, ReviewMode, ReviewTrigger } from "#review";
 import {
   buildAddDocRule,
   buildChangelogQuestion,
@@ -81,50 +26,50 @@ import {
   buildAutoApproveQuestion,
   buildScanRepoDiscussionsQuestion,
   buildHelpDocsQuestion,
-} from "../shared/command-builders.js";
-import { inferReviewLabels } from "../shared/auto-labels.js";
-import { buildDescribeQuestion } from "../shared/describe-question.js";
+} from "../../commands/builders/questions.js";
+import { inferReviewLabels } from "../../review/presentation/auto-labels.js";
+import { buildDescribeQuestion } from "../../commands/builders/describe-question.js";
 import {
   dispatchCommandRegistrations,
   type CommandDispatchResult,
   type CommandRegistration,
-} from "../shared/command-dispatch.js";
-import { buildDiffFileContexts } from "../shared/diff-context.js";
+} from "../../commands/dispatch.js";
+import { buildDiffFileContexts } from "../../repository/diff/context.js";
 import {
   buildCommandApplyDisabledByPolicyMessage,
   buildCommandDisabledByPolicyMessage,
   buildFeedbackSignalRecordedMessage,
   buildReflectDependsOnAskMessage,
-} from "../shared/command-messages.js";
-import { buildHelpMessage } from "../shared/command-help.js";
+} from "../../commands/presentation/messages.js";
+import { buildHelpMessage } from "../../commands/presentation/help.js";
 import {
   buildConfigFoundMessage,
   buildConfigNotFoundMessage,
-} from "../shared/command-config.js";
-import { mergeChangelogContent as mergeSharedChangelogContent } from "../shared/changelog.js";
-import { recordFeedbackSignal } from "../shared/feedback-signals.js";
+} from "../../commands/config.js";
+import { mergeChangelogContent as mergeSharedChangelogContent } from "../../commands/presentation/changelog.js";
+import { recordFeedbackSignal } from "../../review/state/feedback-signals.js";
 import {
   loadProcessGuidelinesWithCache,
   type ProcessGuideline,
-} from "../shared/process-guidelines.js";
-import { getPublicErrorMessage } from "../shared/public-error.js";
-import { parseReviewPolicyOverridesFromConfigText } from "../shared/review-policy-parser.js";
+} from "../../repository/process-guidelines.js";
+import { getPublicErrorMessage } from "../../commands/presentation/public-error.js";
+import { parseReviewPolicyOverridesFromConfigText } from "../../review/policy/parser.js";
 import {
   loadIncrementalReviewHead,
   readMergedFeedbackSignals,
   rememberIncrementalReviewHead,
-} from "../shared/review-state.js";
+} from "../../review/state/review-state.js";
 import {
   findPotentialSecrets as findSharedPotentialSecrets,
   type SecretFinding,
-} from "../shared/secret-scan.js";
-import { buildSecretWarningComment } from "../shared/secret-warning.js";
-import { reviewMessage } from "../shared/review-messages.js";
+} from "../../repository/content-safety/secret-scan.js";
+import { buildSecretWarningComment } from "../../review/rendering/secret-warning.js";
+import { reviewMessage } from "../../review/rendering/messages.js";
 import {
   buildSimilarIssueComment,
   buildSimilarIssueQueryMissingMessage,
   resolveSimilarIssueQuery,
-} from "../shared/similar-issue.js";
+} from "../../issues/similarity/presentation.js";
 import { createGitLabCommandWorkflows } from "./gitlab-command-workflows.js";
 import { gitLabApiRequest } from "./gitlab-http.js";
 import { PendingPublicationError, PublicationDefiniteFailureError } from "../../agent-runtime/publication/publication.js";
@@ -147,7 +92,7 @@ import {
   type ManagedCommentKey,
   MANAGED_COMMENT_SCAN_PER_PAGE,
   MAX_MANAGED_COMMENT_SCAN_PAGES,
-} from "../shared/managed-comments.js";
+} from "../../review/rendering/managed-comments.js";
 import {
   DEFAULT_DEDUPE_TTL_MS,
   isAutoReviewTrigger,
@@ -155,7 +100,7 @@ import {
   shouldSkipReviewForDraft,
   shouldUseIncrementalReview,
   shouldUseManagedReviewSummary,
-} from "../shared/review-triggers.js";
+} from "../../review/policy/triggers.js";
 
 const MAX_FILES = 40;
 const DEFAULT_MAX_PATCH_CHARS_PER_FILE = 4_000;

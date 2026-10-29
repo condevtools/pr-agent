@@ -9,13 +9,10 @@ import {
   resolveUiLocale,
   type UiLocale,
 } from "#core";
-import {
-  answerPullRequestQuestion,
-  findSimilarIssues,
-  type PullRequestReviewInput,
-  type SimilarIssueMatch,
-} from "#review";
-import { resolveSimilarIssueQuery } from "../shared/similar-issue.js";
+import { answerPullRequestQuestion } from "../../commands/ask/execute.js";
+import { findSimilarIssues, type SimilarIssueMatch } from "../../issues/similarity/scorer.js";
+import { type PullRequestReviewInput } from "#review";
+import { resolveSimilarIssueQuery } from "../../issues/similarity/presentation.js";
 import { hasRepositoryPolicyConfigFile } from "./github-policy-config.js";
 import {
   upsertGitHubManagedIssueComment,

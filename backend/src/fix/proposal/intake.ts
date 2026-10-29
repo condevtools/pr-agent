@@ -18,7 +18,7 @@ import { resolveApiReviewInput } from "../../http/runs/input.js";
 import type { RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { runConflict, runNotFound } from "../../agent-runtime/runs/control-contracts.js";
 import { reviewRunInputSchema, type ReviewRunInput } from "../../review/intake/run-input.js";
-import { assertSafePath } from "../../integrations/shared/repository-read-tools.js";
+import { assertSafePath } from "../../repository/content-safety/repository-content.js";
 import { publicationRuntimeForBinding } from "../../agent-runtime/runtime.js";
 import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 

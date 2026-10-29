@@ -24,7 +24,7 @@ import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
 import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
-import { RepositoryReadToolRegistry } from "../src/integrations/shared/repository-read-tools.js";
+import { RepositoryReadToolRegistry } from "../src/review/deep/tools/registry.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 

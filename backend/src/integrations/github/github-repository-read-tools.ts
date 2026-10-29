@@ -1,7 +1,9 @@
 import { ProviderHttpError } from "../../core/provider-http-error.js";
 
-import type { RepositoryReadAdapter, RepositoryReadFile } from "../shared/repository-read-tools.js";
-import { assertSafePath, boundedJson, repositoryReadSignal } from "../shared/repository-read-tools.js";
+import type { RepositoryReadAdapter, RepositoryReadFile } from "../../repository/contracts.js";
+import { assertSafePath } from "../../repository/content-safety/repository-content.js";
+import { boundedJson } from "../../core/http/bounded-json.js";
+import { repositoryReadSignal } from "../../repository/read-signal.js";
 
 export interface GitHubRepositoryReadAdapterOptions {
   apiBaseUrl: string;

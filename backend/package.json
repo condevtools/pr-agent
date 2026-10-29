@@ -12,8 +12,8 @@
     "#integrations/github/*": "./dist/integrations/github/*.js",
     "#integrations/gitlab": "./dist/integrations/gitlab/index.js",
     "#integrations/gitlab/*": "./dist/integrations/gitlab/*.js",
-    "#integrations/notify": "./dist/integrations/notify/index.js",
-    "#integrations/notify/*": "./dist/integrations/notify/*.js",
+    "#integrations/notifications": "./dist/integrations/notifications/index.js",
+    "#integrations/notifications/*": "./dist/integrations/notifications/*.js",
     "#model": "./dist/model/index.js",
     "#model/*": "./dist/model/*.js"
   },
