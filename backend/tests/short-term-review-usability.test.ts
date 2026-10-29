@@ -47,20 +47,26 @@ import { buildManagedCommandCommentKey } from "../src/integrations/shared/manage
 import {
   createOpenAIClientCache,
   openAIClientCacheKey,
-} from "../src/review/ai-client-cache.ts";
+} from "../src/model/client-cache.ts";
 import {
   buildAskPrompt,
   buildUserPrompt,
   normalizeAskResultForSchema,
   normalizeReviewResultForSchema,
-  buildGeminiGenerationConfig,
-  isModelResponseNotJsonError,
-  parseAnthropicJsonPayload,
-  shouldFallbackToJsonObject,
   shouldRetryAskWithCompactContext,
+} from "../src/review/standard/reviewer.ts";
+import {
+  parseAnthropicJsonPayload,
   shouldRetryAnthropicWithoutTools,
+} from "../src/model/providers/anthropic.ts";
+import {
+  buildGeminiGenerationConfig,
   shouldRetryGeminiWithoutSchema,
-} from "../src/review/ai-reviewer.ts";
+} from "../src/model/providers/gemini.ts";
+import {
+  isModelResponseNotJsonError,
+  shouldFallbackToJsonObject,
+} from "../src/model/runtime.ts";
 import {
   getRateLimitRecordCount,
   isRateLimited,

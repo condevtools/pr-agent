@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeAskResultForSchema } from "../src/review/ai-result-normalization.ts";
-import { parseJsonFromModelText } from "../src/review/ai-provider-json.ts";
+import { normalizeAskResultForSchema } from "../src/review/standard/normalization.ts";
+import { parseJsonFromModelText } from "../src/model/providers/json.ts";
 
 test("normalizeAskResultForSchema extracts trailing JSON answer from mixed text", () => {
   const mixed = [

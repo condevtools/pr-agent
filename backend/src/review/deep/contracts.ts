@@ -1,5 +1,6 @@
-import type { RunLease } from "../agent-runtime/runs/contracts.js";
-import type { PullRequestReviewInput, RiskLevel } from "../review/review-types.js";
+import type { RunLease } from "../../agent-runtime/runs/contracts.js";
+import type { StructuredModel } from "../../model/contracts.js";
+import type { PullRequestReviewInput, RiskLevel } from "../contracts.js";
 
 export type DeepReviewRole = "security" | "correctness";
 export type DeepStepKind = "model" | "tool" | "coordination" | "verification";
@@ -129,23 +130,6 @@ export interface DeepReviewArtifact {
   criticDecisions: CriticDecision[];
   gateDecisions: GateDecision[];
   coverage: RoleCoverage[];
-}
-
-export interface StructuredModelRequest<T> {
-  schemaName: string;
-  jsonSchema: Record<string, unknown>;
-  schema: { parse(value: unknown): T };
-  systemPrompt: string;
-  prompt: string;
-  role: DeepReviewRole | "critic" | "fix" | "evolution";
-  turn: number;
-  maxInputBytes: number;
-  maxOutputTokens: number;
-  signal?: AbortSignal;
-}
-
-export interface StructuredModel {
-  generate<T>(request: StructuredModelRequest<T>): Promise<T>;
 }
 
 export type ReadonlyToolRequest =

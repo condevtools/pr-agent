@@ -15,7 +15,7 @@ import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
 import { RunStore } from "../../agent-runtime/postgres/run-store.js";
 import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget-store.js";
-import { resolveModelConfiguration } from "../../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../../model/configuration.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import type { FixArtifact } from "../../fix/contracts.js";
 import { approveFixApprovalInTransaction, createApprovalInTransaction, PgFixStore, revokeApprovalInTransaction } from "../../fix/fix-store.js";

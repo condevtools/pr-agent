@@ -8,7 +8,8 @@ import {
 import type {
   StructuredModel,
   StructuredModelRequest,
-} from "../agents/contracts.js";
+} from "./contracts.js";
+import type { ModelConfiguration } from "./configuration.js";
 import {
   currentModelAbortSignal,
   currentModelExecutionContext,
@@ -17,20 +18,17 @@ import {
   estimateInputTokenUpperBound,
   executeModelRequest,
   modelRequestHash,
-  type ModelProvider,
   type NormalizedModelUsage,
-} from "../model/execution-context.js";
-import type { OpenAIClientCache } from "./ai-client-cache.js";
-import type { AiConcurrencyLimiter } from "./ai-concurrency.js";
-import { callAnthropicJson } from "./ai-provider-anthropic.js";
-import { callGeminiJson } from "./ai-provider-gemini.js";
-import { extractModelText, parseJsonFromModelText } from "./ai-provider-json.js";
-import { getSharedAiReviewerRuntime, resolveModelConfiguration } from "./ai-reviewer.js";
+} from "./execution-context.js";
+import type { OpenAIClientCache } from "./client-cache.js";
+import type { AiConcurrencyLimiter } from "./concurrency.js";
+import { callAnthropicJson } from "./providers/anthropic.js";
+import { callGeminiJson } from "./providers/gemini.js";
+import { extractModelText, parseJsonFromModelText } from "./providers/json.js";
+import { resolveModelConfiguration } from "./configuration.js";
+import { getSharedModelRuntime } from "./runtime.js";
 
-export interface StructuredModelConfiguration {
-  provider: ModelProvider;
-  model: string;
-}
+export type StructuredModelConfiguration = ModelConfiguration;
 
 export interface StructuredModelOptions {
   configuration?: StructuredModelConfiguration;
@@ -40,7 +38,7 @@ export interface StructuredModelOptions {
 
 export function createStructuredModel(options: StructuredModelOptions = {}): StructuredModel {
   const configuration = options.configuration ?? resolveModelConfiguration();
-  const sharedRuntime = getSharedAiReviewerRuntime();
+  const sharedRuntime = getSharedModelRuntime();
   const clientCache = options.clientCache ?? sharedRuntime.clientCache;
   const concurrencyLimiter = options.concurrencyLimiter ?? sharedRuntime.concurrencyLimiter;
   return {

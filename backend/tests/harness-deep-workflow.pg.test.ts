@@ -4,9 +4,10 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { createDeepReviewWorkflow } from "../src/agents/deep-workflow.js";
+import { createDeepReviewWorkflow } from "../src/review/deep/workflow.js";
 import type { DeepReviewArtifact, DeepReviewSource, DeepReviewStore as DeepReviewStorePort,
-  DeepWorkflowContext, DeepWorkflowPolicy, StructuredModel, StructuredModelRequest } from "../src/agents/contracts.js";
+  DeepWorkflowContext, DeepWorkflowPolicy } from "../src/review/deep/contracts.js";
+import type { StructuredModel, StructuredModelRequest } from "../src/model/contracts.js";
 import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
 import { DeepReviewEvidenceError, DeepReviewStore } from "../src/review/deep/persistence/store.js";
 import { ModelBudgetStore, type ModelExecutionPolicy } from "../src/agent-runtime/budget/model-budget-store.js";

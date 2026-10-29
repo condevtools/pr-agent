@@ -4,7 +4,7 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import type { EvidenceRecord } from "../src/agents/contracts.js";
+import type { EvidenceRecord } from "../src/review/deep/contracts.js";
 import { DeepReviewEvidenceError, DeepReviewStore } from "../src/review/deep/persistence/store.js";
 import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";

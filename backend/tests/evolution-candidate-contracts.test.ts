@@ -2,21 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  evolutionCandidateSchema,
   evolutionProposalRequestSchema,
   evolutionProposalRunInputSchema,
 } from "../src/evolution/candidate-contracts.js";
+import { reviewStrategyTextSchema } from "../src/review/strategy/contracts.js";
 import {
   BASELINE_REVIEW_TEXT,
   composeReviewSystemPrompt,
   reviewTextHashes,
   withReviewTextVersions,
-} from "../src/agents/text-components.js";
+} from "../src/review/strategy/text-components.js";
 
 const hash = "a".repeat(64);
 
 test("evolution candidates accept only the two bounded production text components", () => {
-  assert.deepEqual(evolutionCandidateSchema.parse({
+  assert.deepEqual(reviewStrategyTextSchema.parse({
     schemaVersion: 1, prompt_text: "Review the repository change.",
     tool_description_text: "Read repository evidence without side effects.",
   }), { schemaVersion: 1, prompt_text: "Review the repository change.",
@@ -25,16 +25,16 @@ test("evolution candidates accept only the two bounded production text component
 
 test("evolution candidates reject server-owned provenance and arbitrary metadata", () => {
   for (const forbidden of ["status", "datasetId", "baselinePromptHash", "modelConfigHash", "metadata", "permissions", "topology", "handlers", "auth", "budget"] as const) {
-    assert.equal(evolutionCandidateSchema.safeParse({ schemaVersion: 1, prompt_text: "candidate",
+    assert.equal(reviewStrategyTextSchema.safeParse({ schemaVersion: 1, prompt_text: "candidate",
       tool_description_text: "tools", [forbidden]: forbidden === "metadata" ? {} : "forged" }).success, false);
   }
 });
 
 test("evolution candidates reject empty or oversized text components", () => {
-  assert.equal(evolutionCandidateSchema.safeParse({ schemaVersion: 1, prompt_text: "",
+  assert.equal(reviewStrategyTextSchema.safeParse({ schemaVersion: 1, prompt_text: "",
     tool_description_text: "tools" }).success, false);
   for (const field of ["prompt_text", "tool_description_text"] as const) {
-    assert.equal(evolutionCandidateSchema.safeParse({ schemaVersion: 1, prompt_text: "candidate",
+    assert.equal(reviewStrategyTextSchema.safeParse({ schemaVersion: 1, prompt_text: "candidate",
       tool_description_text: "tools", [field]: "x".repeat(32_769) }).success, false);
   }
 });
@@ -55,7 +55,7 @@ test("durable proposal run inputs bind immutable dataset provenance only", () =>
 });
 
 test("the production baseline uses the same strict candidate schema and stable component hashes", () => {
-  assert.deepEqual(evolutionCandidateSchema.parse(BASELINE_REVIEW_TEXT), BASELINE_REVIEW_TEXT);
+  assert.deepEqual(reviewStrategyTextSchema.parse(BASELINE_REVIEW_TEXT), BASELINE_REVIEW_TEXT);
   assert.deepEqual(reviewTextHashes(BASELINE_REVIEW_TEXT), reviewTextHashes({ ...BASELINE_REVIEW_TEXT }));
 });
 

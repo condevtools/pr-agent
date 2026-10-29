@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
-import type { DeepReviewArtifact } from "../agents/contracts.js";
-import { evolutionProposalSourceSchema, type EvolutionCandidateV1, type EvolutionProposalSource } from "./candidate-contracts.js";
+import type { DeepReviewArtifact } from "../review/deep/contracts.js";
+import { evolutionProposalSourceSchema, type EvolutionProposalSource } from "./candidate-contracts.js";
+import type { ReviewStrategyText } from "../review/strategy/contracts.js";
 import type { DatasetFixtureV1 } from "./dataset-contracts.js";
 import { validateDatasetFixture } from "./dataset-fixture.js";
 import { scoreReplayArtifact } from "./replay-scorer.js";
@@ -30,7 +31,7 @@ export interface PendingReplayResult {
   fixtureHash: string; labelSetId: string; labelSetHash: string; componentHash: string;
   expectedModelHash: string; expectedRuntimeHash: string; baseSha: string; headSha: string;
   expectedWorkflowHash: string; expectedPromptHash: string; expectedToolHash: string; expectedPolicyHash: string;
-  baselineText: EvolutionCandidateV1; candidateText: EvolutionCandidateV1;
+  baselineText: ReviewStrategyText; candidateText: ReviewStrategyText;
 }
 
 export class EvaluationStore {
@@ -53,7 +54,7 @@ export class EvaluationStore {
         return mapEvaluation(duplicate.rows[0]);
       }
       const candidate = (await client.query<{ dataset_version: string; dataset_manifest_hash: string;
-        candidate_hash: string; candidate_json: EvolutionCandidateV1; expected_cases: number }>(
+        candidate_hash: string; candidate_json: ReviewStrategyText; expected_cases: number }>(
         `SELECT c.dataset_version,c.dataset_manifest_hash,c.candidate_hash,c.candidate_json,
            CASE $6::text WHEN 'development' THEN d.dev_count WHEN 'validation' THEN d.validation_count ELSE d.holdout_count END AS expected_cases
          FROM pr_agent_harness.evolution_candidates c
@@ -193,7 +194,7 @@ export class EvaluationStore {
         expectedWorkflowHash: string; expectedPromptHash: string; expectedModelHash: string;
         expectedToolHash: string; expectedPolicyHash: string; expectedRuntimeHash: string;
         baseSha: string; headSha: string;
-        candidate_text: EvolutionCandidateV1; source_json: EvolutionProposalSource;
+        candidate_text: ReviewStrategyText; source_json: EvolutionProposalSource;
         scheduling_policy_json: typeof EVALUATION_SCHEDULING_POLICY; scheduling_policy_hash: string;
       }>(
         `SELECT x.id,x.eval_run_id AS "evaluationId",x.dataset_id AS "datasetId",x.case_id AS "caseId",

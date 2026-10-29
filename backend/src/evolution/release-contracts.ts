@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { EvolutionCandidateV1 } from "./candidate-contracts.js";
+import type { ReviewStrategyText } from "../review/strategy/contracts.js";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const commandKey = z.string().trim().min(1).max(200);
@@ -81,7 +81,7 @@ export interface EvolutionReleaseReceipt {
 export interface EvolutionRunAssignment {
   runId: string; assignmentVersion: number; routing: EvolutionReleaseRouting;
   selection: "baseline" | "control" | "candidate";
-  candidateId?: string; qualificationId?: string; releaseReceiptId?: string; reviewText: EvolutionCandidateV1;
+  candidateId?: string; qualificationId?: string; releaseReceiptId?: string; reviewText: ReviewStrategyText;
   reviewTextHash: string; promptHash: string; toolHash: string; selectionHash: string; createdAt: string;
 }
 

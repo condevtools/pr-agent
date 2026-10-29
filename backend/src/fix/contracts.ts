@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-import type { StructuredModel } from "../agents/contracts.js";
+import type { StructuredModel } from "../model/contracts.js";
 import type { RunLease, RunStepKind } from "../agent-runtime/runs/contracts.js";
 
 export type FixOutcome = "verified" | "suggestion_only" | "failed";

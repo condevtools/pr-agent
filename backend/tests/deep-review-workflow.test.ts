@@ -11,8 +11,8 @@ import {
   type DeepToolRegistry,
   type DeepWorkflowContext,
   type EvidenceRecord,
-  type StructuredModel,
-} from "../src/agents/index.js";
+} from "../src/review/deep/index.js";
+import type { StructuredModel } from "../src/model/contracts.js";
 import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 

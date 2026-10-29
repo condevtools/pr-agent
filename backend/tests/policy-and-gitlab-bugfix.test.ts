@@ -11,7 +11,7 @@ import {
   inferMergeRequestLabels,
   mapGitLabStatusToConclusion,
 } from "../src/integrations/gitlab/gitlab-review.ts";
-import type { PullRequestReviewResult } from "../src/review/review-types.ts";
+import type { PullRequestReviewResult } from "../src/review/contracts.ts";
 
 const lowRiskResult: PullRequestReviewResult = {
   summary: "ok",

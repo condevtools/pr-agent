@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isCodeFile } from "../src/review/review-policy.ts";
+import { isCodeFile } from "../src/review/policy/policy.ts";
 
 test("isCodeFile only matches real extensions instead of full extensionless filename", () => {
   const original = process.env.REVIEW_CODE_EXTENSIONS;

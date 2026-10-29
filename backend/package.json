@@ -13,7 +13,9 @@
     "#integrations/gitlab": "./dist/integrations/gitlab/index.js",
     "#integrations/gitlab/*": "./dist/integrations/gitlab/*.js",
     "#integrations/notify": "./dist/integrations/notify/index.js",
-    "#integrations/notify/*": "./dist/integrations/notify/*.js"
+    "#integrations/notify/*": "./dist/integrations/notify/*.js",
+    "#model": "./dist/model/index.js",
+    "#model/*": "./dist/model/*.js"
   },
   "scripts": {
     "dev": "node --watch --env-file=../.env --import tsx src/main.ts",

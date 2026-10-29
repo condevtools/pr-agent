@@ -7,7 +7,7 @@ import type {
   EvidenceRecord,
   FindingCandidate,
   GateDecision,
-} from "../../../agents/contracts.js";
+} from "../contracts.js";
 import { RuntimeDatabase } from "../../../agent-runtime/postgres/database.js";
 import { assertRunLease } from "../../../agent-runtime/execution/store.js";
 import type { RunPrincipal } from "../../../agent-runtime/runs/control-contracts.js";

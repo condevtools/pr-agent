@@ -1,4 +1,4 @@
-import type { DiffFileContext, ReviewLineType } from "./review-types.js";
+import type { DiffFileContext, ReviewLineType } from "./contracts.js";
 
 interface Hunk {
   oldStart: number;

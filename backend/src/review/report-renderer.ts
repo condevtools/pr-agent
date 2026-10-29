@@ -1,5 +1,5 @@
 import { getDiffSnippet } from "./patch.js";
-import { findFileForReview } from "./review-utils.js";
+import { findFileForReview } from "./context/file-policy.js";
 import { encodePath, localizeText, resolveUiLocale, type UiLocale } from "#core";
 import type {
   DiffFileContext,
@@ -7,7 +7,7 @@ import type {
   ReviewIssue,
   ReviewMode,
   RiskLevel,
-} from "./review-types.js";
+} from "./contracts.js";
 
 export interface GitHubReportContext {
   platform: "github";

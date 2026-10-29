@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { DeepReviewArtifact } from "../agents/contracts.js";
+import type { DeepReviewArtifact } from "../review/deep/contracts.js";
 import { fingerprint } from "../agent-runtime/versions.js";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);

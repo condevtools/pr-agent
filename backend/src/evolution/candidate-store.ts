@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
-import { reviewTextHashes } from "../agents/text-components.js";
+import { reviewTextHashes } from "../review/strategy/text-components.js";
 import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
 import { assertRunLease } from "../agent-runtime/execution/store.js";
 import { requireRunPermission, RunControlError, type RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 import { fingerprint } from "../agent-runtime/versions.js";
 import {
-  evolutionCandidateSchema, type EvolutionCandidateRecord, type EvolutionCandidateV1,
+  type EvolutionCandidateRecord,
   evolutionProposalSourceSchema, type EvolutionProposalSource,
 } from "./candidate-contracts.js";
+import { reviewStrategyTextSchema, type ReviewStrategyText } from "../review/strategy/contracts.js";
 
 export class EvolutionCandidateError extends RunControlError {
   constructor(code: string, status: number, message: string) { super(code, status, message); }
@@ -30,7 +31,7 @@ export class PgEvolutionCandidateStore {
   }
 
   async saveCandidate(lease: RunLease, stepKey: string, raw: unknown, modelConfigHash: string): Promise<EvolutionCandidateRecord> {
-    const candidate = evolutionCandidateSchema.parse(raw); const candidateHash = fingerprint(candidate);
+    const candidate = reviewStrategyTextSchema.parse(raw); const candidateHash = fingerprint(candidate);
     return this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "share" });
       const source = await selectSource(client, lease.tenantId, lease.runId);
@@ -134,7 +135,7 @@ interface SourceRow {
 }
 interface CandidateRow {
   id: string; tenant_id: string; proposal_run_id: string; dataset_id: string; dataset_version: string;
-  dataset_manifest_hash: string; status: "research_draft"; candidate_json: EvolutionCandidateV1; candidate_hash: string;
+  dataset_manifest_hash: string; status: "research_draft"; candidate_json: ReviewStrategyText; candidate_hash: string;
   baseline_prompt_hash: string; baseline_tool_hash: string; model_config_hash: string;
   created_by_actor_type: "user" | "service"; created_by_actor_id: string; created_at: Date;
 }
@@ -154,7 +155,7 @@ async function selectCandidateByRun(client: PoolClient, tenantId: string, runId:
 }
 
 function mapCandidate(row: CandidateRow): EvolutionCandidateRecord {
-  const candidate = evolutionCandidateSchema.parse(row.candidate_json);
+  const candidate = reviewStrategyTextSchema.parse(row.candidate_json);
   if (fingerprint(candidate) !== row.candidate_hash) {
     throw new EvolutionCandidateError("EVOLUTION_CANDIDATE_HASH_INVALID", 409, "Candidate content hash is invalid");
   }

@@ -4,7 +4,7 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/agents/text-components.js";
+import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/review/strategy/text-components.js";
 import type { EvolutionProposalSource } from "../src/evolution/candidate-contracts.js";
 import { PgEvolutionCandidateStore } from "../src/evolution/candidate-store.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";

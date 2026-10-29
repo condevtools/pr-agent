@@ -7,7 +7,7 @@ import type {
   EvidenceKind,
   EvidenceRecord,
   ReadonlyToolRequest,
-} from "../../agents/contracts.js";
+} from "../../review/deep/contracts.js";
 import { fingerprint } from "../../agent-runtime/versions.js";
 
 export const REPOSITORY_READ_LIMITS = Object.freeze({

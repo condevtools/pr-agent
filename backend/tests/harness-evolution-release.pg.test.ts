@@ -9,7 +9,7 @@ import test, { after, before } from "node:test";
 import { NestFactory, type INestApplication } from "@nestjs/core";
 import { Pool, type PoolClient } from "pg";
 
-import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../src/agents/text-components.js";
+import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../src/review/strategy/text-components.js";
 import { evolutionReleasePolicy } from "../src/evolution/release-policy.js";
 import { evaluateOfflineReleaseGates, EvolutionReleaseGateError } from "../src/evolution/release-gates.js";
 import { PgEvolutionReleaseStore } from "../src/evolution/release-store.js";
@@ -27,7 +27,7 @@ import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
 import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint, runtimeVersionManifest, type RunVersionManifest } from "../src/agent-runtime/versions.js";
 import { getModelExecutionPolicy, ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";
-import { resolveModelConfiguration } from "../src/review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../src/model/configuration.js";
 import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;

@@ -10,6 +10,8 @@
     "paths": {
       "#core": ["src/core/index.ts"],
       "#core/*": ["src/core/*"],
+      "#model": ["src/model/index.ts"],
+      "#model/*": ["src/model/*"],
       "#review": ["src/review/index.ts"],
       "#review/*": ["src/review/*"],
       "#integrations/github": ["src/integrations/github/index.ts"],

@@ -1,10 +1,10 @@
-import { ProviderHttpError } from "../core/provider-http-error.js";
+import { ProviderHttpError } from "../../core/provider-http-error.js";
 import {
   fetchWithRetry,
   readNumberEnv,
   readOptionalStringEnv,
 } from "#core";
-import { parseJsonFromModelText } from "./ai-provider-json.js";
+import { parseJsonFromModelText } from "./json.js";
 import {
   currentModelExecutionContext,
   currentModelAbortSignal,
@@ -13,7 +13,7 @@ import {
   executeModelRequest,
   modelRequestHash,
   type NormalizedModelUsage,
-} from "../model/execution-context.js";
+} from "../execution-context.js";
 
 const MAX_ERROR_BODY_PREVIEW_CHARS = 300;
 

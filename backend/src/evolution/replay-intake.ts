@@ -1,5 +1,6 @@
-import { reviewTextHashes, withReviewTextVersions } from "../agents/text-components.js";
-import { evolutionCandidateSchema, evolutionProposalSourceSchema, type EvolutionCandidateV1 } from "./candidate-contracts.js";
+import { reviewTextHashes, withReviewTextVersions } from "../review/strategy/text-components.js";
+import { evolutionProposalSourceSchema } from "./candidate-contracts.js";
+import { reviewStrategyTextSchema, type ReviewStrategyText } from "../review/strategy/contracts.js";
 import { createEvaluationSchema, REPLAY_VERIFIER_HASH, type EvaluationReceipt, type ReplayRunInput } from "./replay-contracts.js";
 import { EvaluationStore, type PendingReplayResult } from "./replay-store.js";
 import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
@@ -10,7 +11,7 @@ import type { CreateRunInput } from "../agent-runtime/postgres/run-store.js";
 import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 import { requireRunPermission, RunControlError } from "../agent-runtime/runs/control-contracts.js";
 import { fingerprint, AGENT_RUNTIME_CONFIG, runtimeVersionManifest } from "../agent-runtime/versions.js";
-import { resolveModelConfiguration } from "../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../model/configuration.js";
 
 export class ReplayAdmissionManifestDriftError extends Error {
   constructor() { super("Replay component or model manifest drifted before child admission");
@@ -23,7 +24,7 @@ export async function admitEvaluation(input: { db: RuntimeDatabase; principal: R
   requireRunPermission(input.principal, "evaluations:create");
   if (request.split === "holdout") requireRunPermission(input.principal, "evaluations:holdout");
   const frozen = await input.db.transaction(input.principal.tenantId, async (client) => {
-    const row = await client.query<{ candidate_json: EvolutionCandidateV1; source_json: unknown }>(
+    const row = await client.query<{ candidate_json: ReviewStrategyText; source_json: unknown }>(
       `SELECT c.candidate_json,s.source_json FROM pr_agent_harness.evolution_candidates c
        JOIN pr_agent_harness.evolution_proposal_sources s
          ON s.tenant_id=c.tenant_id AND s.proposal_run_id=c.proposal_run_id AND s.content_purged_at IS NULL
@@ -36,7 +37,7 @@ export async function admitEvaluation(input: { db: RuntimeDatabase; principal: R
         input.principal.actorType, input.principal.subjectId]);
     if (!row.rows[0]) throw new RunControlError("CANDIDATE_NOT_FOUND", 404, "Evolution candidate was not found");
     const source = evolutionProposalSourceSchema.parse(row.rows[0].source_json);
-    return { candidate: evolutionCandidateSchema.parse(row.rows[0].candidate_json),
+    return { candidate: reviewStrategyTextSchema.parse(row.rows[0].candidate_json),
       baseline: { schemaVersion: 1 as const, prompt_text: source.baselinePromptText,
         tool_description_text: source.baselineToolDescriptionText } };
   });
@@ -63,7 +64,7 @@ export async function buildReplayRunCreationInput(binding: PublicationBinding, r
   const policy = getModelExecutionPolicy(provider, model);
   const base = await runtimeVersionManifest(policy);
   const reviewText = result.variant === "baseline"
-    ? evolutionCandidateSchema.parse(result.baselineText) : evolutionCandidateSchema.parse(result.candidateText);
+    ? reviewStrategyTextSchema.parse(result.baselineText) : reviewStrategyTextSchema.parse(result.candidateText);
   const manifest = withReviewTextVersions(base, reviewText);
   if (manifest.workflowVersionHash !== result.expectedWorkflowHash || manifest.promptVersionHash !== result.expectedPromptHash
       || manifest.modelVersionHash !== result.expectedModelHash || manifest.toolVersionHash !== result.expectedToolHash

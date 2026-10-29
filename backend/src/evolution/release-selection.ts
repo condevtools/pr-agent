@@ -1,7 +1,8 @@
 import type { PoolClient } from "pg";
 
-import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../agents/text-components.js";
-import { evolutionCandidateSchema, evolutionProposalSourceSchema, type EvolutionCandidateV1 } from "./candidate-contracts.js";
+import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../review/strategy/text-components.js";
+import { evolutionProposalSourceSchema } from "./candidate-contracts.js";
+import { reviewStrategyTextSchema, type ReviewStrategyText } from "../review/strategy/contracts.js";
 import type { EvolutionReleaseRouting, EvolutionReleaseState } from "./release-contracts.js";
 import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "./release-policy.js";
 import { REPLAY_VERIFIER_HASH } from "./replay-contracts.js";
@@ -15,11 +16,11 @@ export interface DeepReleaseSelectionRecord {
   tenantId: string; integrationId: string; assignmentVersion: number; routing: EvolutionReleaseRouting;
   selection: DeepReleaseSelectionKind; bucket: number; candidateId?: string; qualificationId?: string;
   releaseReceiptId?: string;
-  reviewText: EvolutionCandidateV1; reviewTextHash: string; promptHash: string; toolHash: string; selectionHash: string;
+  reviewText: ReviewStrategyText; reviewTextHash: string; promptHash: string; toolHash: string; selectionHash: string;
 }
 
 export interface ResolvedDeepReleaseSelection {
-  reviewText: EvolutionCandidateV1; manifest: RunVersionManifest;
+  reviewText: ReviewStrategyText; manifest: RunVersionManifest;
   releaseSelection: Readonly<Record<string, unknown>>; record: DeepReleaseSelectionRecord;
 }
 
@@ -121,7 +122,7 @@ export function releaseBucket(input: { tenantId: string; integrationId: string; 
 }
 
 function validateQualifiedSelection(row: SelectionRow, baseManifest: RunVersionManifest,
-  policyHash: string): { candidate: EvolutionCandidateV1; baseline: EvolutionCandidateV1 } | undefined {
+  policyHash: string): { candidate: ReviewStrategyText; baseline: ReviewStrategyText } | undefined {
   if (!row.candidate_id || !row.qualification_id || !row.release_receipt_id
       || !row.release_receipt_evidence
       || fingerprint(row.release_receipt_evidence) !== row.release_receipt_evidence_hash
@@ -139,10 +140,10 @@ function validateQualifiedSelection(row: SelectionRow, baseManifest: RunVersionM
       || row.holdout_runtime_hash !== baseManifest.runtimeVersionHash
       || row.validation_model_hash !== baseManifest.modelVersionHash
       || row.holdout_model_hash !== baseManifest.modelVersionHash) return undefined;
-  const candidate = evolutionCandidateSchema.parse(row.candidate_json);
+  const candidate = reviewStrategyTextSchema.parse(row.candidate_json);
   if (fingerprint(candidate) !== row.candidate_hash) return undefined;
   const source = evolutionProposalSourceSchema.parse(row.source_json);
-  const baseline = evolutionCandidateSchema.parse({ schemaVersion: 1, prompt_text: source.baselinePromptText,
+  const baseline = reviewStrategyTextSchema.parse({ schemaVersion: 1, prompt_text: source.baselinePromptText,
     tool_description_text: source.baselineToolDescriptionText });
   const currentBaseline = reviewTextHashes(BASELINE_REVIEW_TEXT);
   const frozenBaseline = reviewTextHashes(baseline);
@@ -154,7 +155,7 @@ function validateQualifiedSelection(row: SelectionRow, baseManifest: RunVersionM
 }
 
 async function qualificationPinsCurrent(client: PoolClient, tenantId: string, qualificationId: string, base: RunVersionManifest,
-  baseline: EvolutionCandidateV1, candidate: EvolutionCandidateV1): Promise<boolean> {
+  baseline: ReviewStrategyText, candidate: ReviewStrategyText): Promise<boolean> {
   const baselineManifest = withReviewTextVersions(base, baseline);
   const candidateManifest = withReviewTextVersions(base, candidate);
   const result = await client.query(
@@ -189,7 +190,7 @@ function baselineSelection(input: { binding: PublicationBinding; input: ReviewRu
 
 function selected(input: { binding: PublicationBinding; baseManifest: RunVersionManifest }, value: {
   assignmentVersion: number; routing: EvolutionReleaseRouting; selection: DeepReleaseSelectionKind; bucket: number;
-  candidateId?: string; qualificationId?: string; reviewText: EvolutionCandidateV1; reason?: string;
+  candidateId?: string; qualificationId?: string; reviewText: ReviewStrategyText; reason?: string;
   releaseReceiptId?: string;
 }): ResolvedDeepReleaseSelection {
   const hashes = reviewTextHashes(value.reviewText);

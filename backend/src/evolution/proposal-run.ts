@@ -1,10 +1,11 @@
 import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
 import { currentRunExecutionContext } from "../agent-runtime/execution/run-context.js";
 import type { RunLease } from "../agent-runtime/runs/contracts.js";
-import { createStructuredModel } from "../review/structured-model.js";
+import { createStructuredModel } from "../model/structured-model.js";
 import {
-  evolutionCandidateJsonSchema, evolutionCandidateSchema, evolutionProposalRunInputSchema,
+  evolutionProposalRunInputSchema,
 } from "./candidate-contracts.js";
+import { reviewStrategyTextJsonSchema, reviewStrategyTextSchema } from "../review/strategy/contracts.js";
 import { PgEvolutionCandidateStore } from "./candidate-store.js";
 import { getAgentRuntimeServices } from "../agent-runtime/runtime.js";
 
@@ -28,7 +29,7 @@ export async function executeEvolutionProposalRun(lease: RunLease): Promise<void
   if (Buffer.byteLength(prompt, "utf8") > policy.maxInputBytes) throw new EvolutionProposalFailedError("source_input_limit");
   const candidate = await context.step(MODEL_STEP_KEY, "model", fingerprint({ modelInput, modelConfigHash, policy }),
     () => createStructuredModel().generate({ schemaName: "evolution_candidate_v1",
-      jsonSchema: evolutionCandidateJsonSchema as unknown as Record<string, unknown>, schema: evolutionCandidateSchema,
+      jsonSchema: reviewStrategyTextJsonSchema as unknown as Record<string, unknown>, schema: reviewStrategyTextSchema,
       role: "evolution", turn: 1, maxInputBytes: policy.maxInputBytes, maxOutputTokens: policy.maxOutputTokens,
       systemPrompt: "Propose one bounded review prompt/tool-description candidate. Do not change permissions, tools, topology, schemas, budgets, or execution behavior.",
       prompt: `Using only these frozen development examples, return improved text components. Never infer or request holdout data.\n${prompt}`,

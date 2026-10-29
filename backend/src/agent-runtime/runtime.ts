@@ -22,7 +22,7 @@ import { getModelExecutionPolicy, ModelBudgetStore } from "./budget/model-budget
 import { RunWorker } from "./execution/run-worker.js";
 import type { RunLease } from "./runs/contracts.js";
 import { executeReviewRun } from "../review/run.js";
-import { resolveModelConfiguration } from "../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../model/configuration.js";
 import { runtimeVersionManifest } from "./versions.js";
 import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "./publication/outcome.js";
 import { PublicationControlStore } from "./publication/control.js";

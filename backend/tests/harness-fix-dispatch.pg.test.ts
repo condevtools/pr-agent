@@ -24,7 +24,7 @@ import { executeReviewRun } from "../src/review/run.js";
 import type { ReviewRunInput } from "../src/review/intake/run-input.js";
 import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
 import { RunsService } from "../src/modules/harness/runs.service.js";
-import { resolveModelConfiguration } from "../src/review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../src/model/configuration.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 

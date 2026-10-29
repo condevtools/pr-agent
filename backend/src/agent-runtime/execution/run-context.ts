@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { DiffFileContext } from "../../review/review-types.js";
+import type { DiffFileContext } from "../../review/contracts.js";
 import type { RunLease, RunStepKind } from "../runs/contracts.js";
 import { fingerprint } from "../versions.js";
 

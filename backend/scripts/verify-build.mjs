@@ -12,6 +12,7 @@ assert.deepEqual(await builtRuntime.runtimeVersionManifest({ fixture: "build-smo
   await sourceRuntime.runtimeVersionManifest({ fixture: "build-smoke" }));
 await import("#core");
 await import("#review");
+await import("#model");
 await access(new URL("../dist/main.js", import.meta.url));
 await access(new URL("../dist/agent-runtime/postgres/migrations/020_release_control.sql", import.meta.url));
 await assert.rejects(access(new URL("../dist/harness/", import.meta.url)), { code: "ENOENT" });

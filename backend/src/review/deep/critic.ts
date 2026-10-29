@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
-import { composeReviewSystemPrompt, frozenReviewText } from "./text-components.js";
+import { canonicalJson, fingerprint } from "../../agent-runtime/versions.js";
+import { composeReviewSystemPrompt, frozenReviewText } from "../strategy/text-components.js";
 import type {
   CriticDecision,
   DeepWorkflowContext,

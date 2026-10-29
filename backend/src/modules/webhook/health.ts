@@ -1,5 +1,5 @@
 import { parseBooleanEnv, readNumberEnv } from "#core";
-import { probeAiProviderConnectivity, type AiProviderProbeResult } from "#review";
+import { probeModelProviderConnectivity, type ModelProviderProbeResult } from "#model";
 import { incrementMetricCounter } from "./metrics-runtime.js";
 
 export interface WebhookHealthCheck {
@@ -12,7 +12,7 @@ export interface HealthStatus {
   name: string;
   mode: string;
   checks?: {
-    ai: AiProviderProbeResult;
+    ai: ModelProviderProbeResult;
     webhook?: WebhookHealthCheck;
   };
 }
@@ -42,7 +42,7 @@ export async function buildHealthStatus(params: {
     return base;
   }
 
-  const ai = await probeAiProviderConnectivity({
+  const ai = await probeModelProviderConnectivity({
     timeoutMs: readNumberEnv("HEALTHCHECK_AI_TIMEOUT_MS", 5_000),
   });
 

@@ -6,7 +6,7 @@ import { executeFixProposal } from "../fix-workflow.js";
 import { assertVerifierPolicy } from "../sandbox-policy.js";
 import { readSnapshotBundle } from "../snapshot-bundle.js";
 import { enqueueVerificationJob, waitForVerification } from "../verifier-jobs.js";
-import { createStructuredModel } from "../../review/structured-model.js";
+import { createStructuredModel } from "../../model/structured-model.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";
 import type { RunLease } from "../../agent-runtime/runs/contracts.js";

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   createAiConcurrencyLimiter,
-} from "../src/review/ai-concurrency.ts";
+} from "../src/model/concurrency.ts";
 
 test("ai concurrency limiter respects AI_MAX_CONCURRENCY", async () => {
   const originalLimit = process.env.AI_MAX_CONCURRENCY;

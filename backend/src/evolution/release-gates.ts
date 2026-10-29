@@ -1,8 +1,8 @@
 import type { PoolClient } from "pg";
 
-import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../agents/text-components.js";
+import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../review/strategy/text-components.js";
 import { fingerprint, type RunVersionManifest } from "../agent-runtime/versions.js";
-import { evolutionCandidateSchema } from "./candidate-contracts.js";
+import { reviewStrategyTextSchema } from "../review/strategy/contracts.js";
 import { REPLAY_VERIFIER_HASH } from "./replay-contracts.js";
 import type { EvolutionReleasePolicyV1, OfflineQualificationEvidenceV1 } from "./release-contracts.js";
 
@@ -28,7 +28,7 @@ export async function evaluateOfflineReleaseGates(client: PoolClient, input: { t
      WHERE c.tenant_id=$1 AND c.id=$2 AND c.dataset_id=$3 AND c.content_purged_at IS NULL`,
     [input.tenantId, input.candidateId, input.datasetId])).rows[0];
   if (!candidate) fail("RELEASE_CANDIDATE_INELIGIBLE", "Candidate is not an eligible succeeded proposal");
-  const candidateText = evolutionCandidateSchema.parse(candidate.candidate_json);
+  const candidateText = reviewStrategyTextSchema.parse(candidate.candidate_json);
   if (fingerprint(candidateText) !== candidate.candidate_hash) fail("RELEASE_CANDIDATE_CHANGED", "Candidate hash is invalid");
   const base = reviewTextHashes(BASELINE_REVIEW_TEXT);
   if (candidate.baseline_prompt_hash !== base.promptHash || candidate.baseline_tool_hash !== base.toolHash) {

@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../agents/text-components.js";
+import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../review/strategy/text-components.js";
 import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
 import { getModelExecutionPolicy, reserveRunBudgetInTransaction, type ModelExecutionPolicy } from "../agent-runtime/budget/model-budget-store.js";
 import type { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
@@ -9,7 +9,7 @@ import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 import { requireRunPermission } from "../agent-runtime/runs/control-contracts.js";
 import { fingerprint, runtimeVersionManifest } from "../agent-runtime/versions.js";
 import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
-import { resolveModelConfiguration } from "../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../model/configuration.js";
 import { trustedLabelSetSchema } from "./feedback-contracts.js";
 import type { EvolutionDevelopmentCaseSummary, EvolutionProposalRunInput, EvolutionProposalSource } from "./candidate-contracts.js";
 import { EvolutionCandidateError, insertEvolutionProposalSource } from "./candidate-store.js";

@@ -7,7 +7,7 @@ import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
 import { runtimeVersionManifest } from "../../agent-runtime/versions.js";
-import { resolveModelConfiguration } from "../../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../../model/configuration.js";
 import { RunsService } from "../harness/runs.service.js";
 
 @Injectable()

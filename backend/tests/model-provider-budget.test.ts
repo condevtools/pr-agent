@@ -6,7 +6,7 @@ import {
   type ModelRequestIntent,
   withModelExecutionContext,
 } from "../src/model/execution-context.js";
-import { callGeminiJson } from "../src/review/ai-provider-gemini.js";
+import { callGeminiJson } from "../src/model/providers/gemini.js";
 
 test("durable Gemini compatibility fallback is two visible physical calls with no hidden retry", async () => {
   const originalFetch = globalThis.fetch;

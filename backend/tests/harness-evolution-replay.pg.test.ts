@@ -17,7 +17,7 @@ import { closeAgentRuntime, executeAgentRun } from "../src/agent-runtime/runtime
 import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
 import { RunControlError } from "../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint, runtimeVersionManifest } from "../src/agent-runtime/versions.js";
-import { resolveModelConfiguration } from "../src/review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../src/model/configuration.js";
 import { DatasetStore } from "../src/evolution/dataset-store.js";
 import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../src/evolution/dataset-fixture.js";
 import { FeedbackStore } from "../src/evolution/feedback-store.js";
@@ -28,7 +28,7 @@ import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH } from 
 import { EvaluationCoordinator } from "../src/evolution/replay-run.js";
 import { EvaluationStore } from "../src/evolution/replay-store.js";
 import type { TrustedLabelSetV1 } from "../src/evolution/feedback-contracts.js";
-import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/agents/text-components.js";
+import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/review/strategy/text-components.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 

@@ -4,14 +4,14 @@ import test from "node:test";
 import { encodePath } from "../src/core/path.ts";
 import {
   createOpenAIClientCache,
-} from "../src/review/ai-client-cache.ts";
+} from "../src/model/client-cache.ts";
 import {
   buildAskPrompt,
   buildUserPrompt,
   resolveAskSystemPrompt,
   resolveReviewSystemPrompt,
-} from "../src/review/ai-reviewer.ts";
-import type { PullRequestReviewInput } from "../src/review/review-types.ts";
+} from "../src/review/standard/reviewer.ts";
+import type { PullRequestReviewInput } from "../src/review/contracts.ts";
 import { parseRepoPolicyConfig } from "../src/integrations/github/github-policy.ts";
 import { parseGitLabReviewPolicyConfig } from "../src/integrations/gitlab/gitlab-review.ts";
 

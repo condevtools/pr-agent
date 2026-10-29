@@ -1,4 +1,4 @@
-import type { DeepReviewArtifact, FindingCandidate } from "../agents/contracts.js";
+import type { DeepReviewArtifact, FindingCandidate } from "../review/deep/contracts.js";
 import type { ReplayScoreV1 } from "./replay-contracts.js";
 
 interface ExpectedFinding {

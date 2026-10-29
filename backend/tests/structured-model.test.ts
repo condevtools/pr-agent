@@ -4,11 +4,11 @@ import test from "node:test";
 import { z } from "zod";
 
 import { withModelExecutionContext, type ModelRequestIntent } from "../src/model/execution-context.js";
-import { createStructuredModel } from "../src/review/structured-model.js";
-import { createAiConcurrencyLimiter } from "../src/review/ai-concurrency.js";
-import type { OpenAIClientCache } from "../src/review/ai-client-cache.js";
-import { deepRoleTurnJsonSchema, deepRoleTurnResponseSchema } from "../src/agents/role-loop.js";
-import { deepCriticJsonSchema, deepCriticResponseSchema } from "../src/agents/critic.js";
+import { createStructuredModel } from "../src/model/structured-model.js";
+import { createAiConcurrencyLimiter } from "../src/model/concurrency.js";
+import type { OpenAIClientCache } from "../src/model/client-cache.js";
+import { deepRoleTurnJsonSchema, deepRoleTurnResponseSchema } from "../src/review/deep/roles/role-loop.js";
+import { deepCriticJsonSchema, deepCriticResponseSchema } from "../src/review/deep/critic.js";
 
 test("structured Gemini transport enforces the per-turn output cap", async () => {
   const originalFetch = globalThis.fetch;

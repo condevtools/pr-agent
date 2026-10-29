@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnApplicationShutdown } from "@nestjs/common";
 
 import { beginHttpShutdown } from "#core";
-import { beginAiShutdown, drainAiRequests } from "#review";
+import { beginModelShutdown, drainModelRequests } from "#model";
 import { closeAgentRuntime, stopPublicationRecovery, stopRunWorker } from "../../agent-runtime/runtime.js";
 
 @Injectable()
@@ -12,8 +12,8 @@ export class ShutdownCoordinatorService implements OnApplicationShutdown {
     beginHttpShutdown();
     await stopRunWorker();
     await stopPublicationRecovery();
-    beginAiShutdown();
-    const drained = await drainAiRequests();
+    beginModelShutdown();
+    const drained = await drainModelRequests();
     await closeAgentRuntime();
     if (!drained) {
       this.logger.warn(

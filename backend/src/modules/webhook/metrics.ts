@@ -1,5 +1,5 @@
 import { nowMs, readNumberEnv, resolveRuntimeStateBackend, systemClock, type Clock } from "#core";
-import { getAiConcurrencyStats } from "#review";
+import { getModelConcurrencyStats } from "#model";
 
 interface MetricDefinition {
   help: string;
@@ -14,7 +14,7 @@ interface MetricCounterRecord {
 
 export interface MetricStoreOptions {
   clock?: Clock;
-  resolveAiConcurrencyStats?: typeof getAiConcurrencyStats;
+  resolveModelConcurrencyStats?: typeof getModelConcurrencyStats;
 }
 
 const DEFAULT_MAX_METRIC_COUNTER_RECORDS = 5_000;
@@ -74,11 +74,11 @@ export class MetricStore {
   private readonly metricCounters = new Map<string, MetricCounterRecord>();
   private processStartedAt: number;
   private readonly clock: Clock;
-  private readonly resolveAiStats: typeof getAiConcurrencyStats;
+  private readonly resolveModelStats: typeof getModelConcurrencyStats;
 
   constructor(options?: MetricStoreOptions) {
     this.clock = options?.clock ?? systemClock;
-    this.resolveAiStats = options?.resolveAiConcurrencyStats ?? getAiConcurrencyStats;
+    this.resolveModelStats = options?.resolveModelConcurrencyStats ?? getModelConcurrencyStats;
     this.processStartedAt = nowMs(this.clock);
   }
 
@@ -157,7 +157,7 @@ export class MetricStore {
         continue;
       }
 
-      const ai = this.resolveAiStats();
+      const ai = this.resolveModelStats();
       if (name === "pr_agent_ai_requests_active") {
         lines.push(formatMetricLine(name, ai.activeRequests, {}));
         continue;

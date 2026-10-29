@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
-import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../agent-runtime/runs/contracts.js";
-import { composeReviewSystemPrompt, frozenReviewText } from "./text-components.js";
+import { canonicalJson, fingerprint } from "../../../agent-runtime/versions.js";
+import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../../../agent-runtime/runs/contracts.js";
+import { composeReviewSystemPrompt, frozenReviewText } from "../../strategy/text-components.js";
 import type {
   DeepReviewRole,
   DeepReviewSource,
@@ -12,7 +12,7 @@ import type {
   ReadonlyToolRequest,
   RoleLimits,
   RoleResult,
-} from "./contracts.js";
+} from "../contracts.js";
 
 const toolRequestSchema = z.discriminatedUnion("name", [
   z.object({ name: z.literal("read_file_range"), path: z.string().min(1).max(1024),

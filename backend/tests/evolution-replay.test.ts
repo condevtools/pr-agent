@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { DeepReviewArtifact, FindingCandidate } from "../src/agents/contracts.js";
+import type { DeepReviewArtifact, FindingCandidate } from "../src/review/deep/contracts.js";
 import type { DatasetFixtureV1 } from "../src/evolution/dataset-contracts.js";
 import { ReplayFixtureAdapter } from "../src/evolution/replay-fixture-adapter.js";
 import { replayRunInputSchema } from "../src/evolution/replay-contracts.js";

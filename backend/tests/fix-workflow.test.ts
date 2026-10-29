@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { StructuredModelRequest } from "../src/agents/contracts.js";
+import type { StructuredModelRequest } from "../src/model/contracts.js";
 import type { FixArtifact, FixProposal, FixSource, FixWorkflowPolicy, VerificationResult } from "../src/fix/contracts.js";
 import { executeFixProposal } from "../src/fix/fix-workflow.js";
 import { FixPatchValidationError, validateFixPatchPair } from "../src/fix/patch-validator.js";

@@ -1,7 +1,7 @@
 import type { AskConversationTurn, UiLocale } from "#core";
 import { resolveUiLocale } from "#core";
-import { isProcessTemplateFile } from "./review-policy.js";
-import type { PullRequestReviewInput } from "./review-types.js";
+import { isProcessTemplateFile } from "../policy/policy.js";
+import type { PullRequestReviewInput } from "../contracts.js";
 
 const REVIEW_SYSTEM_PROMPT_ZH = [
   "你是资深代码评审工程师。",

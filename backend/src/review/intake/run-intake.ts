@@ -2,12 +2,12 @@ import { freezeDeepBudget } from "../deep/budget.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { RunStore, type CreateRunInput } from "../../agent-runtime/postgres/run-store.js";
 import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../../agent-runtime/budget/model-budget-store.js";
-import { resolveModelConfiguration } from "../ai-reviewer.js";
+import { resolveModelConfiguration } from "../../model/configuration.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
 import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";
 import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
 import { AGENT_RUNTIME_CONFIG, runtimeVersionManifest } from "../../agent-runtime/versions.js";
-import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../../agents/text-components.js";
+import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../strategy/text-components.js";
 import { recordDeepReleaseSelection, resolveDeepReleaseSelection } from "../../evolution/release-selection.js";
 
 export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {

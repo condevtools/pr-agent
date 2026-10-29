@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { gateDeepReviewFindings } from "../src/agents/gate.js";
-import type { DeepReviewSource, EvidenceRecord, FindingCandidate } from "../src/agents/contracts.js";
+import { gateDeepReviewFindings } from "../src/review/deep/gate.js";
+import type { DeepReviewSource, EvidenceRecord, FindingCandidate } from "../src/review/deep/contracts.js";
 import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const runId = randomUUID();

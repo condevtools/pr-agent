@@ -1,5 +1,5 @@
-import { fingerprint } from "../agent-runtime/versions.js";
-import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../agent-runtime/runs/contracts.js";
+import { fingerprint } from "../../agent-runtime/versions.js";
+import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../../agent-runtime/runs/contracts.js";
 import type {
   CoverageStatus,
   DeepReviewArtifact,
@@ -11,7 +11,7 @@ import type {
 } from "./contracts.js";
 import { runDeepReviewCritic } from "./critic.js";
 import { gateDeepReviewFindings } from "./gate.js";
-import { runDeepReviewRole } from "./role-loop.js";
+import { runDeepReviewRole } from "./roles/role-loop.js";
 
 export function createDeepReviewWorkflow(): ReviewWorkflow {
   return {

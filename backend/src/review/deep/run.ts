@@ -1,8 +1,8 @@
-import type { DeepReviewArtifact, DeepReviewSource, DeepWorkflowPolicy } from "../../agents/contracts.js";
-import { createDeepWorkflowPolicy } from "../../agents/policy.js";
-import { deepReviewWorkflow } from "../../agents/deep-workflow.js";
-import { createStructuredModel } from "../structured-model.js";
-import type { DiffFileContext, PullRequestReviewInput } from "../review-types.js";
+import type { DeepReviewArtifact, DeepReviewSource, DeepWorkflowPolicy } from "./contracts.js";
+import { createDeepWorkflowPolicy } from "./policy.js";
+import { deepReviewWorkflow } from "./workflow.js";
+import { createStructuredModel } from "../../model/structured-model.js";
+import type { DiffFileContext, PullRequestReviewInput } from "../contracts.js";
 import { RepositoryReadToolRegistry, type RepositoryReadAdapter } from "../../integrations/shared/repository-read-tools.js";
 import { DeepReviewStore } from "./persistence/store.js";
 import { deepBudgetSchema } from "./budget.js";

@@ -1,4 +1,4 @@
-import type { DiffFileContext, ReviewIssue } from "./review-types.js";
+import type { DiffFileContext, ReviewIssue } from "../contracts.js";
 
 export function findFileForReview(
   files: DiffFileContext[],

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
-import type { FindingCandidate } from "../../agents/contracts.js";
+import type { FindingCandidate } from "../../review/deep/contracts.js";
 import type { FixRunInput, FixSource, VerificationPolicy } from "../contracts.js";
 import { loadFixPolicyRegistry } from "../fix-policy.js";
 import { assertVerifierPolicy } from "../sandbox-policy.js";
@@ -9,7 +9,7 @@ import { calculateSnapshotBundleHash, writeSnapshotBundle } from "../snapshot-bu
 import { lockFixSnapshots } from "../snapshot-gc.js";
 import { GitHubRepositoryReadAdapter } from "../../integrations/github/github-repository-read-tools.js";
 import { GitLabRepositoryReadAdapter } from "../../integrations/gitlab/gitlab-repository-read-tools.js";
-import { resolveModelConfiguration } from "../../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../../model/configuration.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../../agent-runtime/budget/model-budget-store.js";
 import type { RuntimeDatabase } from "../../agent-runtime/postgres/database.js";
