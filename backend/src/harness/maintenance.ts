@@ -190,6 +190,19 @@ async function selectCandidates(
          WHERE rbe.tenant_id=r.tenant_id AND rbe.run_id=r.id
            AND rbe.status<>'closed'
        )
+       AND NOT EXISTS (
+         SELECT 1 FROM pr_agent_harness.agent_runs child
+         WHERE child.tenant_id=r.tenant_id AND child.parent_run_id=r.id
+           AND child.status NOT IN ('succeeded','failed','cancelled')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM pr_agent_harness.fix_approval_requests far
+         WHERE far.tenant_id=r.tenant_id AND far.proposal_run_id=r.id
+           AND ((far.status IN ('open','approved') AND far.expires_at>clock_timestamp())
+             OR EXISTS (SELECT 1 FROM pr_agent_harness.agent_runs publish
+               WHERE publish.tenant_id=far.tenant_id AND publish.id=far.approved_publish_run_id
+                 AND publish.status NOT IN ('succeeded','failed','cancelled')))
+       )
      ORDER BY r.finished_at,r.id LIMIT $3
      ${lock ? "FOR UPDATE OF r SKIP LOCKED" : ""}`,
     [request.tenantId, cutoff, request.limit],
@@ -266,6 +279,26 @@ async function scrubRunContent(
      WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
     [tenantId, runId],
   );
+  await client.query(
+    `UPDATE pr_agent_harness.fix_run_sources
+     SET source_json='{}'::jsonb,allowed_paths_json='[]'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(
+    `UPDATE pr_agent_harness.fix_proposals
+     SET code_patch='',test_patch='',proposal_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(
+    `UPDATE pr_agent_harness.verification_jobs
+     SET result_json=CASE WHEN result_json IS NULL THEN NULL ELSE '{}'::jsonb END,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(
+    `UPDATE pr_agent_harness.fix_verifications
+     SET result_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(
+    `UPDATE pr_agent_harness.fix_artifacts
+     SET artifact_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
 }
 
 async function administrativeIdentity(client: PoolClient): Promise<string> {

@@ -9,9 +9,14 @@ import type { PublicationBinding } from "./authority.js";
 import type { RunLease } from "./run-contracts.js";
 import { reviewRunInputSchema } from "./review-run-input.js";
 import { publicationRuntimeForBinding } from "./runtime.js";
+import { executeFixProposalRun } from "./fix-proposal-run.js";
 
 /** The production worker reuses the same collectors, analyzer, renderers and publisher. */
 export async function executeReviewRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
+  if (lease.input.workflow === "fix.propose.v1") {
+    await executeFixProposalRun(lease, binding);
+    return;
+  }
   const input = reviewRunInputSchema.parse(lease.input);
   if (lease.tenantId !== binding.tenantId || lease.integrationId !== binding.id
       || input.platform !== binding.platform

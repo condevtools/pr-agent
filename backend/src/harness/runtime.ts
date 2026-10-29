@@ -1,3 +1,5 @@
+import { executeFixPublicationRun } from "../fix/publish-workflow.js";
+import { createFixPublicationAdapter } from "../fix/fix-publication-adapter.js";
 import { Pool, type PoolConfig } from "pg";
 import { createProbot } from "probot";
 
@@ -110,23 +112,29 @@ export async function publicationRuntimeForBinding(
           || operation.scope.authorityGeneration !== binding.generation) throw new Error("Publication gateway scope mismatch");
       const credential = await resolvePublicationCredential(binding);
       if (binding.platform === "gitlab") {
+        if (operation.operationType && operation.operationType !== "publication") {
+          return createFixPublicationAdapter({ binding, token: credential, operation });
+        }
         return createGitLabPublicationAdapter({ binding: { ...binding, platform: "gitlab" }, token: credential, operation });
       }
       const octokit = createRestBackedOctokit({ token: credential, baseUrl: binding.origin });
-      return createGitHubPublicationAdapter({ binding: { ...binding, platform: "github" }, octokit, operation,
-        verifyCredentialIdentity: () => verifyGitHubCredentialIdentity({
-          credentialRef: binding.credentialRef, octokit,
-          loadAppIdentity: async (installationId) => {
-            const appClient = await getCredentialApp(binding).auth();
-            const { data: app } = await appClient.request("GET /app");
-            if (!app) throw new Error("GitHub App identity is unavailable");
-            const { data: installation } = await appClient.request("GET /app/installations/{installation_id}", {
-              installation_id: installationId,
-            });
-            return { app, installation };
-          },
-        }),
+      const verifyCredentialIdentity = () => verifyGitHubCredentialIdentity({
+        credentialRef: binding.credentialRef, octokit,
+        loadAppIdentity: async (installationId: number) => {
+          const appClient = await getCredentialApp(binding).auth();
+          const { data: app } = await appClient.request("GET /app");
+          if (!app) throw new Error("GitHub App identity is unavailable");
+          const { data: installation } = await appClient.request("GET /app/installations/{installation_id}", {
+            installation_id: installationId,
+          });
+          return { app, installation };
+        },
       });
+      if (operation.operationType && operation.operationType !== "publication") {
+        return createFixPublicationAdapter({ binding, token: credential, operation, verifyCredentialIdentity });
+      }
+      return createGitHubPublicationAdapter({ binding: { ...binding, platform: "github" }, octokit, operation,
+        verifyCredentialIdentity });
     },
   };
 }
@@ -216,7 +224,8 @@ export async function startReviewRunWorker(): Promise<void> {
       const { provider, model } = resolveReviewModelConfiguration();
       return (await reviewVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash;
     },
-    execute: executeReviewRun,
+    execute: (lease,binding) => lease.input.workflow === "fix.publish.v1"
+      ? executeFixPublicationRun(lease,binding) : executeReviewRun(lease,binding),
     onError: (error, runId) => process.emitWarning(JSON.stringify({ component: "review-run-worker", runId,
       errorType: error instanceof Error ? error.name : "unknown" })),
   });

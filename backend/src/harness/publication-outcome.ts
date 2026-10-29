@@ -125,7 +125,7 @@ export class PublicationOutcomeHandler {
 
   private async finishOutcome(lease: RunLease, batch: FrozenPublicationBatch): Promise<void> {
     if (batch.status === "succeeded") {
-      await this.dependencies.budget.closeRunBudget(lease);
+      if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
       await this.dependencies.store.transition(lease, {
         to: "succeeded",
         outcomeCode: "publication_completed",
@@ -133,7 +133,7 @@ export class PublicationOutcomeHandler {
       return;
     }
     if (batch.status === "failed_definite") {
-      await this.dependencies.budget.closeRunBudget(lease);
+      if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
       await this.dependencies.store.transition(lease, {
         to: "failed",
         reasonCode: "publication_failed_definite",

@@ -60,6 +60,14 @@ export class GitHubRepositoryReadAdapter implements RepositoryReadAdapter {
     }));
   }
 
+  async listFiles(signal?: AbortSignal): Promise<string[]> {
+    const entries = await (this.treeEntries ??= this.loadTree(signal));
+    const paths = [...entries.entries()].filter(([, entry]) => entry.type === "blob"
+      && ["100644", "100755"].includes(entry.mode ?? "")).map(([path]) => path).sort();
+    if (paths.length === 0 || paths.length > 2_000) throw new Error("GitHub fixed tree exceeds the snapshot file limit");
+    return paths;
+  }
+
   private get(path: string, signal?: AbortSignal): Promise<Response> {
     return this.fetcher(`${this.base}${path}`, {
       method: "GET",

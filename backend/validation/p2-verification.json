@@ -1,0 +1,69 @@
+{
+  "stage": "P2",
+  "implementationStatus": "verified_safe_defaults",
+  "productionQualification": "NOT_VERIFIED",
+  "codeReview": "APPROVE",
+  "architecture": "CLEAR",
+  "verification": {
+    "typecheck": "PASS",
+    "build": "PASS",
+    "unit": {
+      "passed": 304,
+      "skipped": 25,
+      "failed": 0
+    },
+    "dockerPostgresql": {
+      "version": "17.11",
+      "suites": 23,
+      "passed": 143,
+      "failed": 0
+    },
+    "dockerSandbox": {
+      "passed": 2,
+      "failed": 0,
+      "coverage": [
+        "four isolated phases",
+        "no credentials/socket/default route",
+        "read-only root",
+        "bounded timeout/log output",
+        "actual controller SIGKILL",
+        "expired orphan recovery",
+        "active resource preservation"
+      ]
+    },
+    "compiledCompose": {
+      "migrationRerun": "PASS",
+      "appLeastPrivilege": "PASS",
+      "verifierFunctionOnlyRole": "PASS",
+      "manifest": "PASS",
+      "verifierStartup": "running, restart count 0"
+    },
+    "diffCheck": "PASS"
+  },
+  "images": {
+    "web": "sha256:be2ecebf703dbaf36ea462bd900b47ef49b8b2326435d3cae44741723415f0be",
+    "verifier": "sha256:0fcbbd3cf8919ed9f156adb1a8b2e65042128533b988370370ac397b4c32edbf",
+    "sandbox": "sha256:19b5f2919702a2e1e6dcd00a76f1b5924c8e8d48c082f4f2c7d199f41acd0010"
+  },
+  "limits": [
+    "No real 50-case/10-repository qualification dataset; default publication disabled",
+    "GitLab publication suggestion-only; no proven branch conditional write",
+    "Node direct tests only; baseline and patched regression must both pass",
+    "Human relevance attestation required",
+    "Sandbox logs retained as hashes only",
+    "Trusted verifier controller has Docker daemon authority; untrusted children do not"
+  ],
+  "regressionsFixed": [
+    "runtime version mismatch at Fix admission",
+    "immutable table row-lock privilege mismatch",
+    "approval consume-before-link foreign key",
+    "human relevance unreachable gate",
+    "zero-test/crashed regression acceptance",
+    "snapshot sensitive suffix filter and collection bounds",
+    "verifier expired lease recovery",
+    "source snapshot retention and Docker crash orphan cleanup",
+    "uncertain provider result classification and postcondition checks",
+    "sequential test role reuse and per-job resource assertions"
+  ],
+  "sourceSkillSqlHash": "a256f659f77290b5992ebee7d98a5110cc4bbad39ddb520af7640968e5f5a3a2"
+}

@@ -1,3 +1,4 @@
+import { isDurablePublicationEnabled } from "../../harness/publication-mode.js";
 import { localizeText, type UiLocale } from "#core";
 import { getPublicErrorMessage } from "../shared/public-error.js";
 import type {
@@ -19,6 +20,9 @@ export async function runGitHubImplementCommand(params: {
   locale: UiLocale;
   throwOnError?: boolean;
 }): Promise<void> {
+  if (isDurablePublicationEnabled()) {
+    throw new Error("Legacy /implement is disabled in Harness mode; use an approved FixRun");
+  }
   const { context, owner, repo, pullNumber, locale } = params;
   const octokit = context.octokit;
 

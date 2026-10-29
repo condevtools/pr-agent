@@ -68,6 +68,24 @@ export class GitLabRepositoryReadAdapter implements RepositoryReadAdapter {
     }));
   }
 
+  async listFiles(signal?: AbortSignal): Promise<string[]> {
+    const paths: string[] = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const response = await this.get(`/api/v4/projects/${this.options.projectId}/repository/tree`+
+        `?ref=${encodeURIComponent(this.options.headSha)}&recursive=true&per_page=100&page=${page}`, signal);
+      if (!response.ok) throw new ProviderHttpError("GitLab repository tree read", response.status);
+      const entries = await boundedJson<Array<{ path?: string; type?: string; mode?: string }>>(response, 512 * 1024);
+      paths.push(...entries.filter((item): item is { path: string; type?: string; mode?: string } =>
+        typeof item.path === "string" && item.type === "blob" && ["100644", "100755"].includes(item.mode ?? ""))
+        .map(({ path }) => path));
+      if (paths.length > 2_000) throw new Error("GitLab fixed tree exceeds the snapshot file limit");
+      const next = response.headers.get("x-next-page");
+      if (!next) return [...new Set(paths)].sort();
+      if (next !== String(page + 1)) throw new Error("GitLab repository tree pagination is invalid");
+    }
+    throw new Error("GitLab fixed tree exceeds the snapshot page limit");
+  }
+
   private get(path: string, signal?: AbortSignal): Promise<Response> {
     return this.fetcher(`${this.base}${path}`, { method: "GET", redirect: "error",
       signal: repositoryReadSignal(this.options.signal, this.options.timeoutMs, signal),

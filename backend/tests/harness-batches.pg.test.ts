@@ -138,6 +138,27 @@ if (!databaseUrl) {
     );
   });
 
+  test("domain authorization runs after sealing for new and reused batches and rolls back denied freezes", async () => {
+    const { scope } = await createScope("domain-authorization");
+    const input = { scope, sourceKey: "domain:authorization", sourceHash: hash("authorization"),
+      operations: [{ slot: "one", payload: { body: "one" } }] };
+    let calls = 0;
+    await assert.rejects(batchStore.freeze({ ...input, authorize: async (client, batch) => {
+      calls++;
+      const row = await client.query("SELECT seal_state FROM pr_agent_harness.publication_batches WHERE tenant_id=$1 AND id=$2", [scope.tenantId,batch.id]);
+      assert.equal(row.rows[0]?.seal_state, "sealed");
+      throw new Error("approval revoked");
+    } }), /approval revoked/);
+    assert.equal(await batchStore.findBySource(scope,input.sourceKey,input.sourceHash), undefined);
+    const operations = await adminPool.query("SELECT 1 FROM pr_agent_harness.repository_operations WHERE tenant_id=$1", [scope.tenantId]);
+    assert.equal(operations.rowCount, 0);
+    const first = await batchStore.freeze({ ...input, authorize: async () => { calls++; } });
+    const second = await batchStore.freeze({ ...input, authorize: async () => { calls++; } });
+    assert.equal(first.id, second.id);
+    assert.equal(calls, 3);
+    await assert.rejects(batchStore.freeze({ ...input, authorize: async () => { throw new Error("replay denied"); } }), /replay denied/);
+  });
+
   test("all operation slots and links roll back when one member cannot freeze", async () => {
     const { scope } = await createScope("atomic");
     await assert.rejects(

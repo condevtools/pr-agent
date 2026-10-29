@@ -12,6 +12,7 @@ import {
   PublicationDefiniteFailureError,
   PublicationSlotConflictError,
   StalePublicationError,
+  type RepositoryOperationType,
   type PublicationAdapter,
   type PublicationOperation,
   type PublicationRequest,
@@ -41,12 +42,15 @@ export interface FrozenPublicationBatch {
 }
 
 export interface FreezePublicationBatchInput {
+  /** Trusted domain authorization; called in the sealing transaction for new and reused batches. */
+  authorize?: (client: PoolClient, batch: FrozenPublicationBatch) => Promise<void>;
   runLease?: RunLease;
   executionModeGeneration?: number;
   scope: PublicationScope;
   sourceKey: string;
   sourceHash: string;
   operations: readonly {
+    operationType?: RepositoryOperationType;
     slot: string;
     payload: Record<string, unknown>;
   }[];
@@ -92,11 +96,16 @@ export class PublicationBatchStore {
     if (input.operations.length === 0) {
       throw new Error("publication batch must contain at least one operation");
     }
+    if (input.operations.some((operation) => (operation.operationType ?? "publication") !== "publication")
+        && (!input.runLease || !input.authorize)) {
+      throw new Error("Fix batch freeze requires a Run lease and exact approval authorization");
+    }
     const sourceKey = requiredText(input.sourceKey, "source key");
     const sourceHash = requiredHash(input.sourceHash, "source hash");
     const identities = input.operations.map((operation) =>
       buildPublicationIdentity({
         scope: input.scope,
+        operationType: operation.operationType,
         slot: operation.slot,
         payload: operation.payload,
       }),
@@ -155,6 +164,7 @@ export class PublicationBatchStore {
           existing.id,
           input.runLease?.executionModeGeneration ?? input.executionModeGeneration ?? 0,
         );
+        await input.authorize?.(client, existing);
         if (input.runLease) await checkpointFrozenBatch(client, input.runLease, existing.id);
         return existing;
       }
@@ -183,9 +193,10 @@ export class PublicationBatchStore {
         );
       }
       await sealBatch(client, scope.tenantId, batchId);
-      if (input.runLease) await checkpointFrozenBatch(client, input.runLease, batchId);
       const frozen = await selectBatch(client, scope.tenantId, batchId);
       if (!frozen) throw new Error("frozen publication batch disappeared");
+      await input.authorize?.(client, frozen);
+      if (input.runLease) await checkpointFrozenBatch(client, input.runLease, batchId);
       return frozen;
     });
   }
@@ -456,6 +467,7 @@ interface BatchRow {
 }
 
 interface BatchOperationRow extends BatchRow {
+  operation_type: RepositoryOperationType | null;
   ordinal: number | null;
   business_operation_id: string | null;
   publication_slot: string | null;
@@ -588,7 +600,7 @@ async function selectBatch(
              pb.source_key, pb.source_hash, pb.status, pb.operation_count,
              pb.execution_mode_generation,
              pbo.ordinal, pbo.business_operation_id, pbo.action_state,
-             ro.publication_slot, ro.payload_json
+             ro.publication_slot, ro.operation_type, ro.payload_json
       FROM pr_agent_harness.publication_batches pb
       LEFT JOIN pr_agent_harness.publication_batch_operations pbo
         ON pbo.tenant_id = pb.tenant_id AND pbo.batch_id = pb.id
@@ -639,6 +651,7 @@ async function selectBatch(
         request: deepFreeze({
           scope: { ...scope },
           slot: row.publication_slot,
+          operationType: row.operation_type ?? "publication",
           payload: structuredClone(row.payload_json),
         }),
       }];
@@ -753,7 +766,7 @@ async function assertReadableAuthority(client: PoolClient, scope: PublicationSco
 }
 
 const OPERATION_SELECT = `
-  SELECT business_operation_id, tenant_id, integration_id, platform, origin,
+  SELECT business_operation_id, operation_type, tenant_id, integration_id, platform, origin,
          repository, target, revision, authority_generation, publication_slot,
          payload_hash, payload_json, marker, status, outcome_code, remote_id,
          attempt_count, version, last_error_code
@@ -762,6 +775,7 @@ const OPERATION_SELECT = `
 `;
 
 interface OperationRow {
+  operation_type: RepositoryOperationType;
   business_operation_id: string;
   tenant_id: string;
   integration_id: string;
@@ -785,6 +799,7 @@ interface OperationRow {
 
 function mapOperation(row: OperationRow): PublicationOperation {
   return {
+    operationType: row.operation_type ?? "publication",
     businessOperationId: row.business_operation_id,
     scope: {
       tenantId: row.tenant_id,

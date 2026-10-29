@@ -8,6 +8,8 @@ import { assertRunLease } from "./run-execution-store.js";
 import type { RunLease } from "./run-contracts.js";
 import { withPublicationWriteAuthority } from "./write-boundary.js";
 
+export type RepositoryOperationType = "publication" | "fix_branch" | "fix_commit" | "fix_draft_pr";
+
 export type PublicationPlatform = "github" | "gitlab";
 export type PublicationOperationStatus =
   | "prepared"
@@ -40,6 +42,7 @@ export interface PublicationScope {
 }
 
 export interface PublicationRequest {
+  operationType?: RepositoryOperationType;
   scope: PublicationScope;
   slot: string;
   payload: Record<string, unknown>;
@@ -49,6 +52,7 @@ export interface PublicationRequest {
 }
 
 export interface PublicationOperation {
+  operationType?: RepositoryOperationType;
   businessOperationId: string;
   scope: PublicationScope;
   slot: string;
@@ -97,6 +101,7 @@ export interface PublicationAdapter {
 }
 
 export interface PreparedOperationInput {
+  operationType?: RepositoryOperationType;
   businessOperationId: string;
   marker: string;
   payloadHash: string;
@@ -496,6 +501,22 @@ export class PgPublicationStore implements PublicationStore {
         await assertRunLease(client, input.executionLease!, { lock: "update" });
       }
 
+      if ((operationBeforeClaim.operationType ?? "publication") !== "publication") {
+        if (!input.executionLease) throw new Error("Fix publication requires its approved child Run lease");
+        const approval = await client.query(
+          `SELECT 1 FROM pr_agent_harness.fix_approval_consumptions c
+           JOIN pr_agent_harness.fix_approval_requests a ON a.tenant_id=c.tenant_id AND a.id=c.approval_id
+           JOIN pr_agent_harness.publication_batches b ON b.tenant_id=c.tenant_id AND b.id=c.batch_id
+           JOIN pr_agent_harness.publication_batch_operations o ON o.tenant_id=b.tenant_id AND o.batch_id=b.id
+           WHERE c.tenant_id=$1 AND c.publish_run_id=$2 AND o.business_operation_id=$3
+             AND a.status='consumed' AND a.approved_publish_run_id=c.publish_run_id
+             AND a.intent_hash=c.intent_hash AND b.operation_set_hash=c.operation_set_hash
+             AND b.seal_state='sealed' AND a.integration_id=$4 FOR SHARE OF a`,
+          [input.scope.tenantId,input.executionLease.runId,input.businessOperationId,input.scope.integrationId],
+        );
+        if (approval.rowCount !== 1) throw new Error("Fix publication has no matching consumed approval");
+      }
+
       const claimed = await client.query<PublicationRow>(
         `
           UPDATE pr_agent_harness.repository_operations
@@ -560,7 +581,7 @@ export class PgPublicationStore implements PublicationStore {
     return this.db.transaction(tenantId, async (client) => {
       const result = await client.query<PublicationRow>(
         `
-          SELECT business_operation_id, tenant_id, integration_id, platform, origin,
+          SELECT business_operation_id, operation_type, tenant_id, integration_id, platform, origin,
                  repository, target, revision, authority_generation, publication_slot,
                  payload_hash, payload_json,
                  marker, status, outcome_code, remote_id, attempt_count, version,
@@ -658,8 +679,8 @@ async function insertOperation(client: PoolClient, input: PreparedOperationInput
       INSERT INTO pr_agent_harness.repository_operations (
         tenant_id, integration_id, business_operation_id, platform, origin,
         repository, target, revision, authority_generation, publication_slot,
-        payload_hash, payload_json, marker
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+        payload_hash, payload_json, marker, operation_type
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
       ON CONFLICT (tenant_id, business_operation_id) DO NOTHING
     `,
     [
@@ -676,6 +697,7 @@ async function insertOperation(client: PoolClient, input: PreparedOperationInput
       input.payloadHash,
       stableJson(input.payload),
       input.marker,
+      input.operationType ?? "publication",
     ],
   );
   const existing = await selectOperation(client, input.scope.tenantId, input.businessOperationId);
@@ -837,6 +859,8 @@ export class InactiveIntegrationBindingError extends Error {
 
 export function buildPublicationIdentity(request: PublicationRequest): PreparedOperationInput {
   const scope = normalizeScope(request.scope);
+  const operationType = request.operationType ?? "publication";
+  if (!["publication", "fix_branch", "fix_commit", "fix_draft_pr"].includes(operationType)) throw new Error("Invalid repository operation type");
   const slot = requiredText(request.slot, "publication slot");
   const canonicalPayload = stableJson(request.payload);
   const payload = deepFreeze(JSON.parse(canonicalPayload) as Record<string, unknown>);
@@ -846,6 +870,7 @@ export function buildPublicationIdentity(request: PublicationRequest): PreparedO
       ...(scope.authorityGeneration === undefined
         ? {}
         : { authorityGeneration: scope.authorityGeneration }),
+      ...(operationType === "publication" ? {} : { operationType }),
       integrationId: scope.integrationId,
       origin: scope.origin,
       platform: scope.platform,
@@ -858,6 +883,7 @@ export function buildPublicationIdentity(request: PublicationRequest): PreparedO
     }),
   );
   return {
+    operationType,
     businessOperationId,
     marker: `<!-- pr-agent-operation:${businessOperationId} -->`,
     payloadHash,
@@ -929,6 +955,7 @@ function normalizeScope(scope: PublicationScope): PublicationScope {
 
 function sameIntent(operation: PublicationOperation, input: PreparedOperationInput): boolean {
   return (
+    (operation.operationType ?? "publication") === (input.operationType ?? "publication") &&
     operation.businessOperationId === input.businessOperationId &&
     operation.scope.tenantId === input.scope.tenantId &&
     operation.scope.integrationId === input.scope.integrationId &&
@@ -1054,6 +1081,7 @@ function toCurrentResult(
 }
 
 interface PublicationRow {
+  operation_type: RepositoryOperationType;
   business_operation_id: string;
   tenant_id: string;
   integration_id: string;
@@ -1082,7 +1110,7 @@ async function selectOperation(
 ): Promise<PublicationOperation | undefined> {
   const result = await client.query<PublicationRow>(
     `
-      SELECT business_operation_id, tenant_id, integration_id, platform, origin,
+      SELECT business_operation_id, operation_type, tenant_id, integration_id, platform, origin,
              repository, target, revision, authority_generation, publication_slot,
              payload_hash, payload_json, marker,
              status, outcome_code, remote_id, attempt_count, version, last_error_code
@@ -1159,6 +1187,7 @@ async function auditPublication(
 
 function mapOperation(row: PublicationRow): PublicationOperation {
   return {
+    operationType: row.operation_type ?? "publication",
     businessOperationId: row.business_operation_id,
     scope: {
       tenantId: row.tenant_id,

@@ -42,6 +42,39 @@ export class RunsController {
     return this.service.artifact(this.service.authenticate(request), id, raw);
   }
 
+  @Post(":id/fixes")
+  @HttpCode(202)
+  createFix(@Req() request: Request, @Headers("idempotency-key") key: string | undefined,
+    @Param("id") id: string, @Body() body: unknown) {
+    return this.service.createFix(this.service.authenticate(request), id, key, body);
+  }
+
+  @Post(":id/fix-approvals")
+  @HttpCode(201)
+  createFixApproval(@Req() request: Request, @Headers("idempotency-key") key: string | undefined,
+    @Param("id") id: string, @Body() body: unknown) {
+    return this.service.createFixApproval(this.service.authenticate(request), id, key, body);
+  }
+
+  @Post(":id/fix-relevance")
+  @HttpCode(201)
+  attestFixRelevance(@Req() request: Request, @Param("id") id: string, @Body() body: unknown) {
+    return this.service.attestFixRelevance(this.service.authenticate(request), id, body);
+  }
+
+  @Post(":id/fix-approvals/:approvalId/approve")
+  @HttpCode(202)
+  approveFix(@Req() request: Request, @Param("id") id: string, @Param("approvalId") approvalId: string,
+    @Body() body: unknown) {
+    return this.service.approveFix(this.service.authenticate(request), id, approvalId, body);
+  }
+
+  @Post(":id/fix-approvals/:approvalId/revoke")
+  revokeFix(@Req() request: Request, @Param("id") id: string, @Param("approvalId") approvalId: string,
+    @Body() body: unknown) {
+    return this.service.revokeFix(this.service.authenticate(request), id, approvalId, body);
+  }
+
   @Post(":id/commands/:kind")
   @HttpCode(202)
   command(@Req() request: Request, @Param("id") id: string, @Param("kind") kind: string, @Body() body: unknown) {

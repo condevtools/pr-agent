@@ -18,7 +18,7 @@ test("dependency and migration changes invalidate the built runtime manifest", a
   try {
     await mkdir(join(root, "backend/src"), { recursive: true });
     await mkdir(join(root, "backend/scripts"));
-    for (const file of ["backend/package.json", "backend/tsconfig.json", "backend/scripts/copy-harness-assets.mjs",
+    for (const file of ["backend/package.json", "backend/tsconfig.json", "backend/scripts/copy-harness-assets.mjs", "backend/scripts/fix-sandbox-runner.mjs",
       "package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "backend/src/main.ts", "backend/src/001.sql"]) {
       await writeFile(join(root, file), "original");
     }
@@ -28,7 +28,10 @@ test("dependency and migration changes invalidate the built runtime manifest", a
     const changedDependencies = await buildCodeManifest(source);
     assert.notEqual(changedDependencies.sourceHash, baseline.sourceHash);
     await writeFile(join(root, "backend/src/001.sql"), "new-schema-contract");
-    assert.notEqual((await buildCodeManifest(source)).sourceHash, changedDependencies.sourceHash);
+    const changedMigration = await buildCodeManifest(source);
+    assert.notEqual(changedMigration.sourceHash, changedDependencies.sourceHash);
+    await writeFile(join(root, "backend/scripts/fix-sandbox-runner.mjs"), "changed-sandbox-protocol");
+    assert.notEqual((await buildCodeManifest(source)).sourceHash, changedMigration.sourceHash);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

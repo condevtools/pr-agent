@@ -9,6 +9,7 @@ import { PublicationAuthorityStore } from "./authority.js";
 import { PublicationControlStore, type PublicationControlInput } from "./publication-control.js";
 import { HarnessMaintenanceStore } from "./maintenance.js";
 import { HarnessMetricsStore } from "./metrics.js";
+import { collectFixSnapshots } from "../fix/snapshot-gc.js";
 
 const [command, ...args] = process.argv.slice(2);
 const pool = new Pool(harnessPoolConfig());
@@ -56,8 +57,44 @@ try {
         REVOKE UPDATE, DELETE ON pr_agent_harness.evidence_records,
           pr_agent_harness.finding_candidates, pr_agent_harness.finding_decisions,
           pr_agent_harness.review_artifacts FROM pr_agent_app;
+        GRANT SELECT, INSERT ON pr_agent_harness.fix_run_sources,
+          pr_agent_harness.fix_run_findings, pr_agent_harness.fix_proposals,
+          pr_agent_harness.fix_verifications, pr_agent_harness.fix_artifacts,
+          pr_agent_harness.fix_relevance_attestations,
+          pr_agent_harness.fix_approval_decisions, pr_agent_harness.fix_approval_consumptions,
+          pr_agent_harness.verification_jobs TO pr_agent_app;
+        GRANT SELECT, INSERT ON pr_agent_harness.fix_approval_requests TO pr_agent_app;
+        GRANT UPDATE (status,version,approved_publish_run_id,approved_at,revoked_at,consumed_at)
+          ON pr_agent_harness.fix_approval_requests TO pr_agent_app;
+        REVOKE UPDATE, DELETE ON pr_agent_harness.fix_run_sources,
+          pr_agent_harness.fix_run_findings, pr_agent_harness.fix_proposals,
+          pr_agent_harness.fix_verifications, pr_agent_harness.fix_artifacts,
+          pr_agent_harness.fix_relevance_attestations,
+          pr_agent_harness.fix_approval_decisions, pr_agent_harness.fix_approval_consumptions,
+          pr_agent_harness.verification_jobs FROM pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
           pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO pr_agent_app;
+    `);
+    let verifier = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_verifier'");
+    const verifierPassword = process.env.HARNESS_VERIFIER_PASSWORD;
+    if (!verifier.rowCount && verifierPassword) {
+      if (verifierPassword.length < 16 || verifierPassword.length > 1024) {
+        throw new Error("HARNESS_VERIFIER_PASSWORD must contain 16-1024 characters");
+      }
+      const ddl = await pool.query<{ sql: string }>(
+        `SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS',
+          'pr_agent_verifier',$1::text) AS sql`, [verifierPassword]);
+      await pool.query(ddl.rows[0]!.sql);
+      verifier = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_verifier'");
+    }
+    if (verifier.rowCount) await pool.query(`
+      GRANT USAGE ON SCHEMA pr_agent_harness TO pr_agent_verifier;
+      GRANT EXECUTE ON FUNCTION pr_agent_harness.claim_verification_job(text,integer),
+        pr_agent_harness.heartbeat_verification_job(uuid,uuid,text,bigint,integer),
+        pr_agent_harness.complete_verification_job(uuid,uuid,text,bigint,jsonb,text),
+        pr_agent_harness.fail_verification_job(uuid,uuid,text,bigint,text,integer) TO pr_agent_verifier;
+      REVOKE ALL ON pr_agent_harness.verification_jobs,pr_agent_harness.agent_runs,
+        pr_agent_harness.fix_verifications FROM pr_agent_verifier;
     `);
     console.log("Harness migrations applied and runtime grants configured");
   } else if (command === "bind") {
@@ -115,6 +152,15 @@ try {
       olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
       limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined };
     console.log(JSON.stringify(await new HarnessMaintenanceStore(pool)[action](request)));
+  } else if (command === "snapshot-retention") {
+    const fields = parseFields(args, ["--action"], ["--days", "--limit"]);
+    const action = fields.get("--action");
+    if (action !== "preview" && action !== "apply") throw new Error("Snapshot retention action must be preview or apply");
+    const root = process.env.FIX_VERIFIER_SNAPSHOT_ROOT?.trim();
+    if (!root) throw new Error("FIX_VERIFIER_SNAPSHOT_ROOT is required for snapshot retention");
+    console.log(JSON.stringify(await collectFixSnapshots({ db, root, apply: action === "apply",
+      olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
+      limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined })));
   } else if (command === "metrics") {
     const fields = parseFields(args, ["--tenant", "--id"]);
     console.log(JSON.stringify(await new HarnessMetricsStore(db).snapshot(fields.get("--tenant")!, fields.get("--id")!)));
@@ -140,7 +186,7 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | metrics | inspect | control (see backend/HARNESS.md)");
+    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | snapshot-retention | metrics | inspect | control (see backend/HARNESS.md)");
   }
 } catch (error) {
   // Do not dump the Pool/driver error object, which can contain connection credentials.

@@ -44,7 +44,7 @@ export async function buildCodeManifest(sourceRoot: URL): Promise<{ schemaVersio
     hash.update(relative(root, file)).update("\0").update(await readFile(file)).update("\0");
   }
   for (const name of ["../package.json", "../tsconfig.json", "../scripts/copy-harness-assets.mjs",
-    "../../package.json", "../../pnpm-workspace.yaml", "../../pnpm-lock.yaml"]) {
+    "../../package.json", "../../pnpm-workspace.yaml", "../../pnpm-lock.yaml", "../scripts/fix-sandbox-runner.mjs"]) {
     hash.update(name).update("\0").update(await readFile(join(root, name))).update("\0");
   }
   return { schemaVersion: 1, sourceHash: hash.digest("hex") };

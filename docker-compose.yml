@@ -25,6 +25,7 @@ services:
     volumes:
       - ./data:/data
       - ./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro
+      - verifier-snapshots:/var/lib/pr-agent-verifier/snapshots
 
   postgres:
     image: postgres:17-alpine
@@ -34,6 +35,7 @@ services:
       POSTGRES_USER: pr_agent_migrator
       POSTGRES_PASSWORD: ${HARNESS_MIGRATION_PASSWORD:-pr_agent_local_migrator}
       HARNESS_APP_PASSWORD: ${HARNESS_APP_PASSWORD:-pr_agent_local_app}
+      HARNESS_VERIFIER_PASSWORD: ${HARNESS_VERIFIER_PASSWORD:-pr_agent_local_verifier}
     volumes:
       - harness-postgres:/var/lib/postgresql/data
       - ./docker/postgres/10-runtime-role.sql:/docker-entrypoint-initdb.d/10-runtime-role.sql:ro
@@ -55,9 +57,35 @@ services:
       HARNESS_PG_DATABASE: pr_agent
       HARNESS_PG_USER: pr_agent_migrator
       HARNESS_PG_PASSWORD: ${HARNESS_MIGRATION_PASSWORD:-pr_agent_local_migrator}
+      HARNESS_VERIFIER_PASSWORD: ${HARNESS_VERIFIER_PASSWORD:-pr_agent_local_verifier}
     depends_on:
       postgres:
         condition: service_healthy
 
+  verifier:
+    profiles: ["verifier"]
+    build:
+      context: .
+      target: verifier
+    restart: unless-stopped
+    command: ["node", "dist/fix/verifier-cli.js"]
+    environment:
+      HARNESS_PG_HOST: postgres
+      HARNESS_PG_PORT: "5432"
+      HARNESS_PG_DATABASE: pr_agent
+      HARNESS_PG_USER: pr_agent_verifier
+      HARNESS_PG_PASSWORD: ${HARNESS_VERIFIER_PASSWORD:-pr_agent_local_verifier}
+      FIX_POLICY_REGISTRY_JSON: ${FIX_POLICY_REGISTRY_JSON:-}
+      FIX_VERIFIER_SNAPSHOT_ROOT: /var/lib/pr-agent-verifier/snapshots
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - verifier-snapshots:/var/lib/pr-agent-verifier/snapshots:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      harness-migrate:
+        condition: service_completed_successfully
+
 volumes:
   harness-postgres:
+  verifier-snapshots:
