@@ -114,10 +114,26 @@ test("sensitive filename suffixes and nested secret directories never reach the 
   const tools = new RepositoryReadToolRegistry({ identity, changedPaths: [], adapter: {
     readFile: async () => { calls += 1; return undefined; }, readCiStatus: async () => [],
   } });
-  for (const path of [".env.local", "credentials.json", "secret.yaml", "src/secrets/config.ts", ".env.production", "nested/id_ed25519"]) {
+  for (const path of [".env.local", ".envrc", "infra/terraform.tfvars", "infra/prod.tfvars.json", "credentials.json", "secret.yaml", "src/secrets/config.ts", ".env.production", "nested/id_ed25519"]) {
     await assert.rejects(tools.invoke("security", "read_file_range", { path, startLine: 1, endLine: 1 }), /sensitive/);
   }
   assert.equal(calls, 0);
+});
+
+test("GitLab fixed file lookup follows bounded directory pages before reading metadata", async () => {
+  const urls: URL[] = [];
+  const adapter = new GitLabRepositoryReadAdapter({ baseUrl: "https://gitlab.test", token: "fixture-token",
+    projectId: 7, headSha: "a".repeat(40), fetcher: async (input) => {
+      const url = new URL(String(input)); urls.push(url);
+      if (url.pathname.endsWith("/tree")) return url.searchParams.get("page") === "1"
+        ? Response.json([{ name: "other.ts", path: "src/other.ts", type: "blob", mode: "100644" }], { headers: { "x-next-page": "2" } })
+        : Response.json([{ name: "target.ts", path: "src/target.ts", type: "blob", mode: "100644" }]);
+      return Response.json({ file_path: "src/target.ts", encoding: "base64", content: Buffer.from("ok").toString("base64"), size: 2 });
+    } });
+  assert.equal(Buffer.from((await adapter.readFile("src/target.ts"))!.bytes).toString(), "ok");
+  assert.equal(urls.length, 3);
+  assert.equal(urls[1]!.searchParams.get("page"), "2");
+  assert.ok(urls.every((url) => url.searchParams.get("ref") === "a".repeat(40)));
 });
 
 test("literal percent-encoded path segments cannot normalize outside the repository endpoint", async () => {

@@ -299,6 +299,18 @@ async function scrubRunContent(
     `UPDATE pr_agent_harness.fix_artifacts
      SET artifact_json='{}'::jsonb,content_purged_at=clock_timestamp()
      WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(`UPDATE pr_agent_harness.feedback_observations
+    SET observation_json='{"purged":true}'::jsonb,content_purged_at=clock_timestamp()
+    WHERE tenant_id=$1 AND source_run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(`UPDATE pr_agent_harness.review_annotations
+    SET label_set_json='{"purged":true}'::jsonb,provenance_json='{"purged":true}'::jsonb,content_purged_at=clock_timestamp()
+    WHERE tenant_id=$1 AND source_run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(`UPDATE pr_agent_harness.review_annotation_arbitrations
+    SET reason='content purged by retention',content_purged_at=clock_timestamp()
+    WHERE tenant_id=$1 AND source_run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
+  await client.query(`UPDATE pr_agent_harness.trusted_review_label_sets
+    SET label_set_json='{"purged":true}'::jsonb,resolution_json='{"purged":true}'::jsonb,content_purged_at=clock_timestamp()
+    WHERE tenant_id=$1 AND source_run_id=$2 AND content_purged_at IS NULL`, [tenantId, runId]);
 }
 
 async function administrativeIdentity(client: PoolClient): Promise<string> {

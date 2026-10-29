@@ -1,0 +1,48 @@
+{
+  "stage": "P3a",
+  "status": "engineering_verified",
+  "scope": "feedback, independent annotations/arbitration, immutable isolated evaluation datasets, admin retention",
+  "unit": {
+    "command": "npm --prefix backend test",
+    "passed": 322,
+    "conditionalSkipped": 27,
+    "failed": 0
+  },
+  "postgres": {
+    "environment": "Docker PostgreSQL 17, actual CLI-granted NOSUPERUSER/NOBYPASSRLS runtime role",
+    "fullRegression": {
+      "suites": 25,
+      "passed": 161,
+      "failed": 0
+    },
+    "finalTargetedAfterReview": {
+      "feedback": 4,
+      "evolutionData": 15,
+      "failed": 0
+    }
+  },
+  "checks": [
+    "TypeScript check",
+    "backend build",
+    "git diff --check",
+    "compiled Docker Compose migration rerun and minimum column grants",
+    "bounded cleanup plus post-cleanup unit/PG regression"
+  ],
+  "dockerImage": "sha256:23936be7f24173ea087bcc49d595cf810e29b93ee70630c0b458a04bea03dc45",
+  "independentReview": {
+    "codeReview": "APPROVE",
+    "architecture": "CLEAR"
+  },
+  "quality": "NOT_VERIFIED: no real independent production quality dataset supplied",
+  "remainingStages": [
+    "P3b",
+    "P3c"
+  ],
+  "safety": [
+    "No live provider writes",
+    "No secrets/.env expanded by this smoke",
+    "No new dependencies or brokers",
+    "PostgreSQL stays in root Docker Compose",
+    "Repository fixture reports scoped read coverage; deletion-only empty snapshots explicitly unsupported"
+  ]
+}

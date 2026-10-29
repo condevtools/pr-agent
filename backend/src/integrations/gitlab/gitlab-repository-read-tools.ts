@@ -37,11 +37,19 @@ export class GitLabRepositoryReadAdapter implements RepositoryReadAdapter {
     const slash = safePath.lastIndexOf("/");
     const directory = slash < 0 ? "" : safePath.slice(0, slash);
     const fileName = slash < 0 ? safePath : safePath.slice(slash + 1);
-    const tree = await this.get(`/api/v4/projects/${this.options.projectId}/repository/tree` +
-      `?ref=${encodeURIComponent(this.options.headSha)}&path=${encodeURIComponent(directory)}&per_page=100`, signal);
-    if (!tree.ok) throw new ProviderHttpError("GitLab repository read", tree.status);
-    const entries = await boundedJson<Array<{ name?: string; path?: string; type?: string; mode?: string }>>(tree, 512 * 1024);
-    const entry = entries.find((item) => item.name === fileName && item.path === safePath);
+    let entry: { name?: string; path?: string; type?: string; mode?: string } | undefined;
+    for (let page = 1; page <= 20; page += 1) {
+      const tree = await this.get(`/api/v4/projects/${this.options.projectId}/repository/tree` +
+        `?ref=${encodeURIComponent(this.options.headSha)}&path=${encodeURIComponent(directory)}&per_page=100&page=${page}`, signal);
+      if (!tree.ok) throw new ProviderHttpError("GitLab repository read", tree.status);
+      const entries = await boundedJson<Array<{ name?: string; path?: string; type?: string; mode?: string }>>(tree, 512 * 1024);
+      entry = entries.find((item) => item.name === fileName && item.path === safePath);
+      if (entry) break;
+      const next = tree.headers.get("x-next-page");
+      if (!next) return undefined;
+      if (next !== String(page + 1)) throw new Error("GitLab repository tree pagination is invalid");
+      if (page === 20) throw new Error("GitLab directory exceeds the snapshot page limit");
+    }
     if (!entry) return undefined;
     if (entry.type !== "blob" || !["100644", "100755"].includes(entry.mode ?? "")) {
       throw new Error("GitLab repository path is not a regular file in the fixed tree");

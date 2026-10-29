@@ -10,6 +10,7 @@ import { PublicationControlStore, type PublicationControlInput } from "./publica
 import { HarnessMaintenanceStore } from "./maintenance.js";
 import { HarnessMetricsStore } from "./metrics.js";
 import { collectFixSnapshots } from "../fix/snapshot-gc.js";
+import { EvolutionDatasetMaintenanceStore } from "../evolution/dataset-maintenance.js";
 
 const [command, ...args] = process.argv.slice(2);
 const pool = new Pool(harnessPoolConfig());
@@ -74,6 +75,51 @@ try {
           pr_agent_harness.verification_jobs FROM pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
           pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO pr_agent_app;
+        REVOKE INSERT, UPDATE, DELETE ON pr_agent_harness.feedback_observations,
+          pr_agent_harness.review_annotations,
+          pr_agent_harness.review_annotation_arbitrations,
+          pr_agent_harness.trusted_review_label_sets,
+          pr_agent_harness.eval_datasets,
+          pr_agent_harness.eval_cases,
+          pr_agent_harness.eval_fixtures,
+          pr_agent_harness.eval_fixture_files FROM pr_agent_app;
+        GRANT SELECT ON pr_agent_harness.feedback_observations,
+          pr_agent_harness.review_annotations,
+          pr_agent_harness.review_annotation_arbitrations,
+          pr_agent_harness.trusted_review_label_sets,
+          pr_agent_harness.eval_datasets,
+          pr_agent_harness.eval_cases,
+          pr_agent_harness.eval_fixtures,
+          pr_agent_harness.eval_fixture_files TO pr_agent_app;
+        GRANT INSERT (tenant_id,integration_id,source_run_id,artifact_hash,command_key,request_hash,actor_type,actor_id,
+          observation_json)
+          ON pr_agent_harness.feedback_observations TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,integration_id,source_run_id,artifact_hash,rubric_version,label_set_hash,label_set_json,
+          provenance_json,actor_type,actor_id,command_key,request_hash,supersedes_annotation_id)
+          ON pr_agent_harness.review_annotations TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,integration_id,source_run_id,artifact_hash,rubric_version,left_annotation_id,
+          left_label_set_hash,right_annotation_id,right_label_set_hash,chosen_label_set_hash,actor_type,
+          actor_id,command_key,request_hash,reason)
+          ON pr_agent_harness.review_annotation_arbitrations TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,integration_id,source_run_id,artifact_hash,rubric_version,label_set_hash,label_set_json,
+          version,active,supersedes_label_set_id,resolution_kind,resolution_json,arbitration_id)
+          ON pr_agent_harness.trusted_review_label_sets TO pr_agent_app;
+        GRANT INSERT (tenant_id,name,curator_actor_type,curator_actor_id,split_policy_json,split_policy_hash)
+          ON pr_agent_harness.eval_datasets TO pr_agent_app;
+        GRANT INSERT (tenant_id,integration_id,dataset_id,source_run_id,fixture_id,label_set_id,source_artifact_hash,
+          fixture_hash,label_set_hash,label_set_json,lineage_hash,shingle_hash,shingle_hashes_json,
+          source_created_at,repository,pull_number)
+          ON pr_agent_harness.eval_cases TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,integration_id,run_id,repository,base_sha,head_sha,input_hash,source_step_id,
+          source_step_output_hash,artifact_hash,fixture_hash,input_json,files_manifest_json,coverage_json,
+          ci_json,total_bytes)
+          ON pr_agent_harness.eval_fixtures TO pr_agent_app;
+        GRANT INSERT (tenant_id,fixture_id,path,kind,content_text,content_hash,size_bytes) ON pr_agent_harness.eval_fixture_files TO pr_agent_app;
+        GRANT UPDATE (superseded_by_annotation_id) ON pr_agent_harness.review_annotations TO pr_agent_app;
+        GRANT UPDATE (active) ON pr_agent_harness.trusted_review_label_sets TO pr_agent_app;
+        GRANT UPDATE (status,version,manifest_hash,case_count,dev_count,validation_count,holdout_count,frozen_at,updated_at)
+          ON pr_agent_harness.eval_datasets TO pr_agent_app;
+        GRANT UPDATE (split,ordinal) ON pr_agent_harness.eval_cases TO pr_agent_app;
     `);
     let verifier = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_verifier'");
     const verifierPassword = process.env.HARNESS_VERIFIER_PASSWORD;
@@ -161,6 +207,14 @@ try {
     console.log(JSON.stringify(await collectFixSnapshots({ db, root, apply: action === "apply",
       olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
       limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined })));
+  } else if (command === "dataset-retire") {
+    const fields = parseFields(args, ["--tenant", "--dataset", "--version"]);
+    console.log(JSON.stringify(await new EvolutionDatasetMaintenanceStore(pool).retire({
+      tenantId: fields.get("--tenant")!, datasetId: fields.get("--dataset")!, expectedVersion: Number(fields.get("--version")) })));
+  } else if (command === "dataset-purge") {
+    const fields = parseFields(args, ["--tenant", "--dataset"]);
+    console.log(JSON.stringify(await new EvolutionDatasetMaintenanceStore(pool).purge({
+      tenantId: fields.get("--tenant")!, datasetId: fields.get("--dataset")! })));
   } else if (command === "metrics") {
     const fields = parseFields(args, ["--tenant", "--id"]);
     console.log(JSON.stringify(await new HarnessMetricsStore(db).snapshot(fields.get("--tenant")!, fields.get("--id")!)));
@@ -186,7 +240,7 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | snapshot-retention | metrics | inspect | control (see backend/HARNESS.md)");
+    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | execution-switch | retention | snapshot-retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/HARNESS.md)");
   }
 } catch (error) {
   // Do not dump the Pool/driver error object, which can contain connection credentials.
