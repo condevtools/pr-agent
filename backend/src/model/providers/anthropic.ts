@@ -1,4 +1,4 @@
-import { ProviderHttpError } from "../../core/provider-http-error.js";
+import { ProviderHttpError } from "../../core/http/provider-error.js";
 import {
   fetchWithRetry,
   readNumberEnv,

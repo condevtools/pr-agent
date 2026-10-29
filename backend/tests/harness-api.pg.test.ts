@@ -13,7 +13,7 @@ import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
 import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
-import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
+import { AgentRuntimeModule } from "../src/http/runs/agent-runtime.module.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 

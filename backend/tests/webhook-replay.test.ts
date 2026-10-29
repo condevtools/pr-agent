@@ -10,7 +10,7 @@ import {
   listStoredWebhookEvents,
   recordWebhookEvent,
   resolveStoredWebhookReplayPayload,
-} from "../src/modules/webhook/webhook-replay.ts";
+} from "../src/http/webhooks/replay/store.ts";
 
 const storeFile = join(
   "/tmp",

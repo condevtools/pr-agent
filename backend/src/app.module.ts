@@ -1,20 +1,21 @@
 import { Module } from "@nestjs/common";
 import { APP_FILTER } from "@nestjs/core";
 
-import { AppController } from "./app.controller.js";
-import { AppService } from "./app.service.js";
-import { HttpErrorFilter } from "./common/filters/http-error.filter.js";
-import { GithubAppModule } from "./modules/github-app/github-app.module.js";
-import { GithubModule } from "./modules/github/github.module.js";
-import { GitlabModule } from "./modules/gitlab/gitlab.module.js";
-import { ShutdownCoordinatorService } from "./modules/webhook/shutdown-coordinator.service.js";
-import { AgentRuntimeModule } from "./modules/harness/harness.module.js";
+import { SystemModule } from "./http/system/system.module.js";
+import { WebhookEventsModule } from "./http/webhooks/webhook-events.module.js";
+import { FixesModule } from "./http/fixes/fixes.module.js";
+import { EvolutionModule } from "./http/evolution/evolution.module.js";
+import { HttpErrorFilter } from "./http/common/filters/http-error.filter.js";
+import { GithubAppModule } from "./bootstrap/github-app/github-app.module.js";
+import { GithubModule } from "./http/webhooks/github/github.module.js";
+import { GitlabModule } from "./http/webhooks/gitlab/gitlab.module.js";
+import { ShutdownCoordinatorService } from "./bootstrap/shutdown-coordinator.service.js";
+import { AgentRuntimeModule } from "./http/runs/agent-runtime.module.js";
 
 @Module({
-  imports: [GithubModule, GitlabModule, GithubAppModule, AgentRuntimeModule],
-  controllers: [AppController],
+  imports: [GithubModule, GitlabModule, GithubAppModule, AgentRuntimeModule,
+    FixesModule, EvolutionModule, SystemModule, WebhookEventsModule],
   providers: [
-    AppService,
     ShutdownCoordinatorService,
     {
       provide: APP_FILTER,

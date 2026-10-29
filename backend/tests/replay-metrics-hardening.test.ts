@@ -3,17 +3,17 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { GithubWebhookController } from "../src/modules/github/github.webhook.controller.ts";
-import { GitlabWebhookController } from "../src/modules/gitlab/gitlab.webhook.controller.ts";
+import { GithubWebhookController } from "../src/http/webhooks/github/github.webhook.controller.ts";
+import { GitlabWebhookController } from "../src/http/webhooks/gitlab/gitlab.webhook.controller.ts";
 import {
   flushWebhookStoreWrites,
   listStoredWebhookEvents,
-} from "../src/modules/webhook/webhook-replay.ts";
+} from "../src/http/webhooks/replay/store.ts";
 import {
   incrementMetricCounter,
   renderPrometheusMetrics,
-} from "../src/modules/webhook/metrics-runtime.ts";
-import { clearMetricState } from "../src/testing/metrics-test-api.ts";
+} from "../src/http/system/metrics-runtime.ts";
+import { clearMetricState } from "./support/metrics-test-api.ts";
 
 function buildStorePath(label: string): string {
   return join(

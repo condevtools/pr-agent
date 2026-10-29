@@ -6,7 +6,7 @@ import {
   computeRetryDelayMs,
   createHttpLifecycleRuntime,
   fetchWithRetry,
-} from "../src/core/http.ts";
+} from "../src/core/http/client.ts";
 
 test("http retry delay grows exponentially by attempt", () => {
   assert.equal(computeRetryDelayMs(0, 400, 0), 400);

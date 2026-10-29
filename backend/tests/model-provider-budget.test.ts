@@ -1,4 +1,4 @@
-import { ProviderHttpError } from "../src/core/provider-http-error.js";
+import { ProviderHttpError } from "../src/core/http/provider-error.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 

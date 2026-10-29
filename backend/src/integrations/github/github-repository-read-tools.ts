@@ -1,4 +1,4 @@
-import { ProviderHttpError } from "../../core/provider-http-error.js";
+import { ProviderHttpError } from "../../core/http/provider-error.js";
 
 import type { RepositoryReadAdapter, RepositoryReadFile } from "../../repository/contracts.js";
 import { assertSafePath } from "../../repository/content-safety/repository-content.js";

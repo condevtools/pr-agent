@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import "reflect-metadata";
 
-import { AppController } from "../src/app.controller.js";
+import { SystemController } from "../src/http/system/system.controller.js";
 import { AppModule } from "../src/app.module.js";
-import { AppService } from "../src/app.service.js";
-import { HttpErrorFilter } from "../src/common/filters/http-error.filter.js";
-import { BadWebhookRequestError } from "../src/core/errors.js";
-import { GithubWebhookController } from "../src/modules/github/github.webhook.controller.js";
-import { GithubWebhookService } from "../src/modules/github/github.webhook.service.js";
-import { GitlabWebhookController } from "../src/modules/gitlab/gitlab.webhook.controller.js";
-import { GitlabWebhookService } from "../src/modules/gitlab/gitlab.webhook.service.js";
-import { clearMetricState } from "../src/testing/metrics-test-api.ts";
+import { HealthService } from "../src/http/system/health.service.js";
+import { SystemModule } from "../src/http/system/system.module.js";
+import { HttpErrorFilter } from "../src/http/common/filters/http-error.filter.js";
+import { BadWebhookRequestError } from "../src/core/errors/errors.js";
+import { GithubWebhookController } from "../src/http/webhooks/github/github.webhook.controller.js";
+import { GithubWebhookService } from "../src/http/webhooks/github/github.webhook.service.js";
+import { GitlabWebhookController } from "../src/http/webhooks/gitlab/gitlab.webhook.controller.js";
+import { GitlabWebhookService } from "../src/http/webhooks/gitlab/gitlab.webhook.service.js";
+import { clearMetricState } from "./support/metrics-test-api.ts";
 
 interface MockResponse {
   statusCode?: number;
@@ -22,18 +23,18 @@ interface MockResponse {
 
 test("nestjs module metadata declares expected imports/controllers/providers", () => {
   const imports = (Reflect.getMetadata("imports", AppModule) as unknown[]) ?? [];
-  const controllers =
-    (Reflect.getMetadata("controllers", AppModule) as unknown[]) ?? [];
-  const providers = (Reflect.getMetadata("providers", AppModule) as unknown[]) ?? [];
+  const controllers = (Reflect.getMetadata("controllers", SystemModule) as unknown[]) ?? [];
+  const providers = (Reflect.getMetadata("providers", SystemModule) as unknown[]) ?? [];
 
   assert.ok(imports.length >= 2);
-  assert.ok(controllers.includes(AppController));
-  assert.ok(providers.includes(AppService));
+  assert.ok(imports.includes(SystemModule));
+  assert.ok(controllers.includes(SystemController));
+  assert.ok(providers.includes(HealthService));
 });
 
 test("nestjs controllers expose health/metrics and validate webhook payloads", async () => {
   clearMetricState();
-  const appController = new AppController(new AppService());
+  const appController = new SystemController(new HealthService());
   const githubController = new GithubWebhookController(new GithubWebhookService());
   const gitlabController = new GitlabWebhookController(new GitlabWebhookService());
 

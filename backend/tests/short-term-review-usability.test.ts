@@ -29,7 +29,7 @@ import {
 import {
   GitlabWebhookService,
   shouldRequireGitLabWebhookSecret,
-} from "../src/modules/gitlab/gitlab.webhook.service.ts";
+} from "../src/http/webhooks/gitlab/gitlab.webhook.service.ts";
 import {
   isGitLabWebhookTokenValid,
 } from "../src/integrations/gitlab/gitlab-webhook-security.ts";
@@ -67,14 +67,14 @@ import {
 import {
   getRateLimitRecordCount,
   isRateLimited,
-} from "../src/core/rate-limit.ts";
+} from "../src/core/state/rate-limit.ts";
 import { loadAskConversationTurns, rememberAskConversationTurn } from "../src/commands/ask/session.js";
 import {
   clearAskConversationState,
   clearGitHubFeedbackSignals,
   clearRateLimitState,
-} from "../src/testing/runtime-state-test-api.ts";
-import { localizeText, resolveUiLocale } from "../src/core/i18n.ts";
+} from "./support/runtime-state-test-api.ts";
+import { localizeText, resolveUiLocale } from "../src/core/i18n/locale.ts";
 import {
   buildIssueCommentMarkdown,
   buildReportCommentMarkdown,
@@ -462,8 +462,8 @@ test("review result normalizer fills required fields when model omits keys", () 
     reviews: [
       {
         severity: "high",
-        newPath: "src/app.ts",
-        oldPath: "src/app.ts",
+        newPath: "src/bootstrap/probot-app.ts",
+        oldPath: "src/bootstrap/probot-app.ts",
         type: "new",
         startLine: 10,
         endLine: 10,
@@ -1707,8 +1707,8 @@ test("ask prompt includes previous q&a conversation context", () => {
       changedFilesCount: 1,
       changedFiles: [
         {
-          newPath: "src/app.ts",
-          oldPath: "src/app.ts",
+          newPath: "src/bootstrap/probot-app.ts",
+          oldPath: "src/bootstrap/probot-app.ts",
           status: "modified",
           additions: 1,
           deletions: 1,
@@ -1813,8 +1813,8 @@ test("github truncated warning supports english locale", () => {
 test("issue comment markdown localizes table headers and risk label in english", () => {
   const markdown = buildIssueCommentMarkdown(
     {
-      newPath: "src/app.ts",
-      oldPath: "src/app.ts",
+      newPath: "src/bootstrap/probot-app.ts",
+      oldPath: "src/bootstrap/probot-app.ts",
       type: "new",
       severity: "high",
       startLine: 10,

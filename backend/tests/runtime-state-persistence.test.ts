@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   clearAskConversationState,
   clearRateLimitState,
-} from "../src/testing/runtime-state-test-api.ts";
+} from "./support/runtime-state-test-api.ts";
 
 const stateFile = join(
   "/tmp",
@@ -27,11 +27,11 @@ test("dedupe state survives module reload via runtime state backend", async () =
   process.env.RUNTIME_STATE_FILE = stateFile;
 
   try {
-    const runtime = await import(`../src/core/runtime-state.ts?runtime_a=${Date.now()}`);
+    const runtime = await import(`../src/core/state/registry.ts?runtime_a=${Date.now()}`);
     await runtime.prepareRuntimeStateBackend();
     runtime.clearRuntimeStateStore();
-    const modA = await import(`../src/core/dedupe.ts?dedupe_a=${Date.now()}`);
-    const modB = await import(`../src/core/dedupe.ts?dedupe_b=${Date.now()}`);
+    const modA = await import(`../src/core/state/dedupe.ts?dedupe_a=${Date.now()}`);
+    const modB = await import(`../src/core/state/dedupe.ts?dedupe_b=${Date.now()}`);
     const key = `dedupe-${Date.now()}`;
 
     assert.equal(modA.isDuplicateRequest(key, 10_000), false);
@@ -51,11 +51,11 @@ test("rate-limit state survives module reload via runtime state backend", async 
   process.env.RUNTIME_STATE_FILE = stateFile;
 
   try {
-    const runtime = await import(`../src/core/runtime-state.ts?runtime_b=${Date.now()}`);
+    const runtime = await import(`../src/core/state/registry.ts?runtime_b=${Date.now()}`);
     await runtime.prepareRuntimeStateBackend();
     runtime.clearRuntimeStateStore();
-    const modA = await import(`../src/core/rate-limit.ts?rate_a=${Date.now()}`);
-    const modB = await import(`../src/core/rate-limit.ts?rate_b=${Date.now()}`);
+    const modA = await import(`../src/core/state/rate-limit.ts?rate_a=${Date.now()}`);
+    const modB = await import(`../src/core/state/rate-limit.ts?rate_b=${Date.now()}`);
     const key = `rate-${Date.now()}`;
 
     assert.equal(modA.isRateLimited(key, 1, 60_000), false);
@@ -75,7 +75,7 @@ test("ask conversation state survives module reload via runtime state backend", 
   process.env.RUNTIME_STATE_FILE = stateFile;
 
   try {
-    const runtime = await import(`../src/core/runtime-state.ts?runtime_c=${Date.now()}`);
+    const runtime = await import(`../src/core/state/registry.ts?runtime_c=${Date.now()}`);
     await runtime.prepareRuntimeStateBackend();
     runtime.clearRuntimeStateStore();
     const modA = await import(`../src/commands/ask/session.ts?ask_a=${Date.now()}`);
@@ -106,7 +106,7 @@ test("runtime state backend supports sqlite persistence", async () => {
   process.env.RUNTIME_STATE_SQLITE_FILE = sqliteStateFile;
 
   try {
-    const runtimeA = await import(`../src/core/runtime-state.ts?runtime_sqlite_a=${Date.now()}`);
+    const runtimeA = await import(`../src/core/state/registry.ts?runtime_sqlite_a=${Date.now()}`);
     await runtimeA.prepareRuntimeStateBackend();
     runtimeA.clearRuntimeStateStore();
     runtimeA.saveRuntimeStateValue({
@@ -116,7 +116,7 @@ test("runtime state backend supports sqlite persistence", async () => {
       expiresAt: Date.now() + 60_000,
     });
 
-    const runtimeB = await import(`../src/core/runtime-state.ts?runtime_sqlite_b=${Date.now()}`);
+    const runtimeB = await import(`../src/core/state/registry.ts?runtime_sqlite_b=${Date.now()}`);
     await runtimeB.prepareRuntimeStateBackend();
     const loaded = runtimeB.loadRuntimeStateValue<{ ok: boolean }>("sqlite-scope", "entry");
     assert.equal(loaded?.ok, true);
@@ -134,7 +134,7 @@ test("runtime state sqlite backend fails fast on initialization errors", async (
 
   try {
     const runtime = await import(
-      `../src/core/runtime-state.ts?runtime_sqlite_failfast=${Date.now()}`
+      `../src/core/state/registry.ts?runtime_sqlite_failfast=${Date.now()}`
     );
     await assert.rejects(
       () => runtime.prepareRuntimeStateBackend(),
@@ -158,7 +158,7 @@ test("runtime state backend readiness check fails fast for sqlite init errors", 
 
   try {
     const runtime = await import(
-      `../src/core/runtime-state.ts?runtime_sqlite_ready_failfast=${Date.now()}`
+      `../src/core/state/registry.ts?runtime_sqlite_ready_failfast=${Date.now()}`
     );
     assert.throws(
       () => runtime.assertRuntimeStateBackendReady(),
@@ -185,7 +185,7 @@ test("runtime state file backend persists after temporary file lock contention",
   const lockPath = `${lockStateFile}.lock`;
 
   try {
-    const runtimeA = await import(`../src/core/runtime-state.ts?runtime_file_lock_a=${Date.now()}`);
+    const runtimeA = await import(`../src/core/state/registry.ts?runtime_file_lock_a=${Date.now()}`);
     await runtimeA.prepareRuntimeStateBackend();
     runtimeA.clearRuntimeStateStore();
     mkdirSync(lockPath, { recursive: true });
@@ -202,7 +202,7 @@ test("runtime state file backend persists after temporary file lock contention",
     await runtimeA.flushRuntimeStatePersistence();
     clearTimeout(releaseTimer);
 
-    const runtimeB = await import(`../src/core/runtime-state.ts?runtime_file_lock_b=${Date.now()}`);
+    const runtimeB = await import(`../src/core/state/registry.ts?runtime_file_lock_b=${Date.now()}`);
     await runtimeB.prepareRuntimeStateBackend();
     const loaded = runtimeB.loadRuntimeStateValue<{ ok: boolean }>("file-lock-scope", "entry");
     assert.equal(loaded?.ok, true);

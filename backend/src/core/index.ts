@@ -4,16 +4,16 @@ export {
   trimCache,
   type ExpiringCacheEntry,
 } from "./cache.js";
-export { ManualClock, nowMs, systemClock, type Clock } from "./clock.js";
-export { clearDuplicateRecord, isDuplicateRequest } from "./dedupe.js";
+export { ManualClock, nowMs, systemClock, type Clock } from "./time/clock.js";
+export { clearDuplicateRecord, isDuplicateRequest } from "./state/dedupe.js";
 export {
   parseBooleanEnv,
   readNumberEnv,
   readOptionalStringEnv,
   readStringEnv,
-} from "./env.js";
-export { BadWebhookRequestError, ensureError, WebhookAuthError } from "./errors.js";
-export { fnv1a32Hex } from "./fnv.js";
+} from "./config/env.js";
+export { BadWebhookRequestError, ensureError, WebhookAuthError } from "./errors/errors.js";
+export { fnv1a32Hex } from "./hashing/fnv.js";
 export {
   beginHttpShutdown,
   computeRetryDelayMs,
@@ -21,11 +21,11 @@ export {
   getHttpShutdownSignal,
   isHttpShutdownRequested,
   type FetchRetryOptions,
-} from "./http.js";
-export { detectTextLocale, localizeText, resolveUiLocale, type UiLocale } from "./i18n.js";
-export { logCore } from "./logger.js";
-export { encodePath } from "./path.js";
-export { isRateLimited, normalizeRateLimitPart } from "./rate-limit.js";
+} from "./http/client.js";
+export { detectTextLocale, localizeText, resolveUiLocale, type UiLocale } from "./i18n/locale.js";
+export { logCore } from "./logging/logger.js";
+export { encodePath } from "./paths/encode-path.js";
+export { isRateLimited, normalizeRateLimitPart } from "./state/rate-limit.js";
 export {
   assertRuntimeStateBackendReady,
   deleteRuntimeStateValue,
@@ -33,8 +33,8 @@ export {
   prepareRuntimeStateBackend,
   resolveRuntimeStateBackend,
   saveRuntimeStateValue,
-} from "./runtime-state.js";
+} from "./state/registry.js";
 export {
   compileCustomSecretPatterns,
   type CustomSecretPatternMatcher,
-} from "./secret-patterns.js";
+} from "./security/secret-patterns.js";

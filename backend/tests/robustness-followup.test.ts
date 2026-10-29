@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { encodePath } from "../src/core/path.ts";
+import { encodePath } from "../src/core/paths/encode-path.ts";
 import {
   createOpenAIClientCache,
 } from "../src/model/client-cache.ts";

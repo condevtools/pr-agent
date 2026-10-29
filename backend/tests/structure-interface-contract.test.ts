@@ -5,7 +5,7 @@ import "reflect-metadata";
 import { RequestMethod } from "@nestjs/common";
 import { METHOD_METADATA, PATH_METADATA } from "@nestjs/common/constants";
 
-import { app as githubApp } from "../src/app.js";
+import { app as githubApp } from "../src/bootstrap/probot-app.js";
 import { AppModule } from "../src/app.module.js";
 
 const EXPECTED_HTTP_ROUTES = [

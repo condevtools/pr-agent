@@ -14,7 +14,7 @@ import type { PublicationBinding } from "../../agent-runtime/authority/publicati
 import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../../agent-runtime/budget/model-budget-store.js";
 import type { RuntimeDatabase } from "../../agent-runtime/postgres/database.js";
 import { createRunInTransaction, type CreateRunInput } from "../../agent-runtime/postgres/run-store.js";
-import { resolveApiReviewInput } from "../../http/runs/input.js";
+import { resolveReviewInput } from "../../review/intake/resolve-input.js";
 import type { RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { runConflict, runNotFound } from "../../agent-runtime/runs/control-contracts.js";
 import { reviewRunInputSchema, type ReviewRunInput } from "../../review/intake/run-input.js";
@@ -56,7 +56,7 @@ export async function admitFixProposalRun(input: {
   }
   const source = await loadAcceptedSource(input.db, input.principal, input.sourceReviewRunId, input.findingId);
   const policy = resolveServerFixPolicy();
-  const current = await resolveApiReviewInput(input.binding, {
+  const current = await resolveReviewInput(input.binding, {
     workflow: "review.deep.v1", number: source.review.target.number, mode: source.review.mode, options: source.review.options,
   }, { key: `fix-head-check:${input.sourceReviewRunId}`, hash: requestHash });
   if (current.revision.headSha !== source.review.revision.headSha || current.revision.baseSha !== source.review.revision.baseSha

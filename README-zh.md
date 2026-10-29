@@ -274,7 +274,7 @@ flowchart LR
         E5["/health /metrics /webhook/events"]
     end
 
-    subgraph GHA["GitHub App 事件路由 (backend/src/app.ts)"]
+    subgraph GHA["GitHub App 事件路由 (backend/src/bootstrap/probot-app.ts)"]
         A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
         A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
         A3["resolveGitHubPullRequestAutoReviewPolicy"]
@@ -394,15 +394,23 @@ flowchart LR
 pr-agent/
 ├── backend/
 │   ├── src/
-│   │   ├── main.ts                 # NestJS 启动入口
-│   │   ├── app.ts                  # Probot 事件处理（GitHub App）
-│   │   ├── app.module.ts           # NestJS 根模块
-│   │   ├── common/                 # 过滤器与共享请求类型
-│   │   ├── core/                   # 运行时状态、缓存、环境变量、i18n、HTTP
-│   │   ├── integrations/           # GitHub / GitLab / 通知适配层
-│   │   ├── modules/                # Webhook、健康检查、回放等 NestJS 模块
-│   │   └── review/                 # AI 评审引擎与报告渲染
+│   │   ├── main.ts                  # NestJS 启动入口
+│   │   ├── app.module.ts            # NestJS 根模块
+│   │   ├── bootstrap/               # Probot、GitHub App 与关闭协调
+│   │   ├── http/                    # 路由、鉴权、Runs / Fixes / Evolution API
+│   │   ├── agent-runtime/           # Run 执行、预算、持久化、发布恢复
+│   │   ├── model/                   # 模型契约、配置、Provider、并发与健康检查
+│   │   ├── review/                  # 标准评审、多 Agent 深度评审、策略与渲染
+│   │   ├── commands/                # 命令解析、Ask 会话与命令编排
+│   │   ├── repository/              # 仓库读取契约、diff 与内容安全
+│   │   ├── issues/                  # 相似 Issue、分诊与策略
+│   │   ├── fix/                     # 修复提案、验证、审批与发布
+│   │   ├── evolution/               # 反馈、数据集、评测、候选与发布控制
+│   │   ├── integrations/            # GitHub / GitLab / notifications 适配层
+│   │   ├── core/                    # 通用配置、HTTP、状态、安全与基础工具
+│   │   └── types/                   # 共享类型声明
 │   ├── tests/                      # 后端测试套件
+│   │   └── support/                # 测试辅助 API，不进入生产构建
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
@@ -439,6 +447,7 @@ pr-agent/
 |---|---|
 | `#core` | `backend/src/core/index.ts` |
 | `#review` | `backend/src/review/index.ts` |
+| `#model` | `backend/src/model/index.ts` |
 | `#integrations/github` | `backend/src/integrations/github/index.ts` |
 | `#integrations/gitlab` | `backend/src/integrations/gitlab/index.ts` |
 | `#integrations/notifications` | `backend/src/integrations/notifications/index.ts` |
@@ -819,7 +828,7 @@ PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
-- GitHub App 启用条件（见 `backend/src/modules/github-app/github-app.bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
+- GitHub App 启用条件（见 `backend/src/bootstrap/github-app/github-app.bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
 - `docker-compose.yml` 默认挂载私钥路径为 `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`。如果本地缺少 `secrets/` 目录或 PEM 文件，`docker compose up` 会失败。
 - 建议本地预先创建：`mkdir -p secrets data`。`data` 目录通常可由 Docker 自动创建，但手动创建更可控。
 

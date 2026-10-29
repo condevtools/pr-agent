@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { clearDuplicateRequestState } from "../src/testing/runtime-state-test-api.ts";
+import { clearDuplicateRequestState } from "./support/runtime-state-test-api.ts";
 import { runGitHubIssuePolicyCheck } from "../src/integrations/github/github-policy.ts";
 
 test("github policy reminder uses english by default when locale is not configured", async () => {

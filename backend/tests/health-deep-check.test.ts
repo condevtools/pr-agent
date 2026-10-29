@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AppService } from "../src/app.service.ts";
+import { HealthService } from "../src/http/system/health.service.ts";
 
 test("health endpoint returns static status when deep check is disabled", async () => {
-  const service = new AppService();
+  const service = new HealthService();
   const result = await service.getHealth({
     mode: "nest",
     deep: false,
@@ -38,7 +38,7 @@ test("health deep check includes ai probe details", async () => {
     );
 
   try {
-    const service = new AppService();
+    const service = new HealthService();
     const result = await service.getHealth({
       mode: "nest",
       deep: true,
@@ -72,7 +72,7 @@ test("health deep check skips live provider request by default", async () => {
   };
 
   try {
-    const service = new AppService();
+    const service = new HealthService();
     const result = await service.getHealth({
       mode: "nest",
       deep: true,

@@ -274,7 +274,7 @@ flowchart LR
         E5["/health /metrics /webhook/events"]
     end
 
-    subgraph GHA["GitHub App Event Routing (backend/src/app.ts)"]
+    subgraph GHA["GitHub App Event Routing (backend/src/bootstrap/probot-app.ts)"]
         A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
         A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
         A3["resolveGitHubPullRequestAutoReviewPolicy"]
@@ -394,15 +394,23 @@ flowchart LR
 pr-agent/
 ├── backend/
 │   ├── src/
-│   │   ├── main.ts                 # NestJS bootstrap & server startup
-│   │   ├── app.ts                  # Probot event handlers (GitHub App)
-│   │   ├── app.module.ts           # Root NestJS module
-│   │   ├── common/                 # Filters and shared request types
-│   │   ├── core/                   # Runtime state, cache, env, i18n, HTTP
-│   │   ├── integrations/           # GitHub / GitLab / notify adapters
-│   │   ├── modules/                # NestJS webhook, health, replay modules
-│   │   └── review/                 # AI review engine and report rendering
+│   │   ├── main.ts                  # NestJS startup entry
+│   │   ├── app.module.ts            # Root NestJS composition
+│   │   ├── bootstrap/               # Probot, GitHub App and shutdown lifecycle
+│   │   ├── http/                    # Routes, authentication and capability APIs
+│   │   ├── agent-runtime/           # Run execution, budgets, persistence and publication recovery
+│   │   ├── model/                   # Model contracts, providers, concurrency and health
+│   │   ├── review/                  # Standard/deep review, strategy and rendering
+│   │   ├── commands/                # Command parsing, Ask sessions and orchestration
+│   │   ├── repository/              # Repository ports, diffs and content safety
+│   │   ├── issues/                  # Issue similarity, triage and policy
+│   │   ├── fix/                     # Fix proposals, verification, approval and publication
+│   │   ├── evolution/               # Feedback, datasets, evaluations, candidates and releases
+│   │   ├── integrations/            # GitHub / GitLab / notifications adapters
+│   │   ├── core/                    # Shared config, HTTP, state, security and utilities
+│   │   └── types/                   # Shared ambient type declarations
 │   ├── tests/                      # Backend test suite
+│   │   └── support/                # Test helpers, excluded from production builds
 │   ├── package.json
 │   └── tsconfig.json
 ├── frontend/
@@ -439,6 +447,7 @@ The backend package uses Node.js ESM subpath imports (configured in `backend/tsc
 |---|---|
 | `#core` | `backend/src/core/index.ts` |
 | `#review` | `backend/src/review/index.ts` |
+| `#model` | `backend/src/model/index.ts` |
 | `#integrations/github` | `backend/src/integrations/github/index.ts` |
 | `#integrations/gitlab` | `backend/src/integrations/gitlab/index.ts` |
 | `#integrations/notifications` | `backend/src/integrations/notifications/index.ts` |
@@ -819,7 +828,7 @@ PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
-- GitHub App enablement condition (see `backend/src/modules/github-app/github-app.bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
+- GitHub App enablement condition (see `backend/src/bootstrap/github-app/github-app.bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
 - `docker-compose.yml` mounts the private key at `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`. If `secrets/` or the PEM file is missing, `docker compose up` will fail.
 - Recommended local prep: `mkdir -p secrets data`. Docker usually auto-creates `data`, but pre-creating it is more predictable.
 

@@ -5,7 +5,7 @@ import {
   BadWebhookRequestError,
   WebhookAuthError,
   ensureError,
-} from "../src/core/errors.ts";
+} from "../src/core/errors/errors.ts";
 
 test("ensureError preserves original value via cause for non-Error inputs", () => {
   const source = { reason: "boom" };

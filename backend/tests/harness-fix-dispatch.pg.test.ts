@@ -23,7 +23,9 @@ import { runtimeVersionManifest, fingerprint } from "../src/agent-runtime/versio
 import { executeReviewRun } from "../src/review/run.js";
 import type { ReviewRunInput } from "../src/review/intake/run-input.js";
 import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
-import { RunsService } from "../src/modules/harness/runs.service.js";
+import { RunsService } from "../src/http/runs/runs.service.js";
+import { FixesService } from "../src/http/fixes/fixes.service.js";
+import { RunApiContextService } from "../src/http/common/run-api-context.service.js";
 import { resolveModelConfiguration } from "../src/model/configuration.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -57,7 +59,8 @@ if (!databaseUrl) {
   let appPool: Pool;
   let appDb: RuntimeDatabase;
   let binding: PublicationBinding;
-  let service: RunsService;
+  let runsService: RunsService;
+  let fixesService: FixesService;
 
   before(async () => {
     snapshotRoot = await mkdtemp(join(tmpdir(), "pr-agent-fix-dispatch-"));
@@ -126,7 +129,9 @@ if (!databaseUrl) {
     appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); appDb = new RuntimeDatabase(appPool);
     binding = await bind();
     await seedAcceptedReview();
-    service = new RunsService();
+    const context = new RunApiContextService();
+    runsService = new RunsService(context);
+    fixesService = new FixesService(context);
   });
 
   after(async () => {
@@ -138,7 +143,7 @@ if (!databaseUrl) {
 
   test("creates and executes a FixRun from an accepted deep finding through the production worker", async () => {
     calls.length = 0;
-    const created = await service.createFix(principal, sourceRunId, "fix-command-1", { findingId });
+    const created = await fixesService.createFix(principal, sourceRunId, "fix-command-1", { findingId });
     assert.equal(created.created, true);
     const runtime = await appDb.transaction(tenantId, async (client) => (await client.query<{
       runtime_version_hash: string }>("SELECT runtime_version_hash FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
@@ -155,16 +160,16 @@ if (!databaseUrl) {
     assert.equal((await execution.load(tenantId, created.id))?.status, "succeeded",
       errors.map((error) => error instanceof Error ? error.stack : String(error)).join("\n"));
     assert.equal(errors.length, 0);
-    const artifact = await service.artifact(principal, created.id, "false") as Record<string, unknown>;
+    const artifact = await runsService.artifact(principal, created.id, "false") as Record<string, unknown>;
     assert.equal(artifact.outcome, "suggestion_only");
     assert.equal(artifact.publicationMode, "suggestion_only");
-    const raw = await service.artifact(principal, created.id, "true") as { proposal?: { codePatch?: string }; verification?: { relevance?: string } };
+    const raw = await runsService.artifact(principal, created.id, "true") as { proposal?: { codePatch?: string }; verification?: { relevance?: string } };
     assert.match(raw.proposal?.codePatch ?? "", /throw new Error\('zero'\)/);
     assert.equal(raw.verification?.relevance, "unknown");
     assert.equal(calls.filter(({ method, path }) => method === "POST" && path === "/v1/chat/completions").length, 1);
 
     const bundleCount = (await readdir(snapshotRoot)).filter((name) => /^[a-f0-9]{64}$/.test(name)).length;
-    const duplicate = await service.createFix(principal, sourceRunId, "fix-command-1", { findingId });
+    const duplicate = await fixesService.createFix(principal, sourceRunId, "fix-command-1", { findingId });
     assert.equal(duplicate.id, created.id); assert.equal(duplicate.created, false);
     assert.equal((await readdir(snapshotRoot)).filter((name) => /^[a-f0-9]{64}$/.test(name)).length, bundleCount);
     assert.equal(calls.filter(({ method, path }) => method === "POST" && path === "/v1/chat/completions").length, 1);

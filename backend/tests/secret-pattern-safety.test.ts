@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { compileCustomSecretPatterns } from "../src/core/secret-patterns.ts";
+import { compileCustomSecretPatterns } from "../src/core/security/secret-patterns.ts";
 
 test("custom secret patterns accept wildcard-style matching without runtime regex compilation", () => {
   const compiled = compileCustomSecretPatterns([

@@ -6,7 +6,7 @@ import { NestFactory } from "@nestjs/core";
 import { json, urlencoded } from "express";
 import { prepareRuntimeStateBackend, readOptionalStringEnv } from "#core";
 import { AppModule } from "./app.module.js";
-import type { RawBodyRequest } from "./common/types/raw-body-request.js";
+import type { RawBodyRequest } from "./http/common/types/raw-body-request.js";
 import { requireOnlinePublicationAuthority, startPublicationRecovery, startRunWorker } from "./agent-runtime/runtime.js";
 
 async function bootstrap(): Promise<void> {

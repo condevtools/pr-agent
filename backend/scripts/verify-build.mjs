@@ -15,7 +15,10 @@ await import("#review");
 await import("#model");
 await access(new URL("../dist/main.js", import.meta.url));
 await access(new URL("../dist/agent-runtime/postgres/migrations/020_release_control.sql", import.meta.url));
-await assert.rejects(access(new URL("../dist/harness/", import.meta.url)), { code: "ENOENT" });
+for (const retired of ["harness", "agents", "modules", "common", "testing",
+  "integrations/shared", "integrations/notify"]) {
+  await assert.rejects(access(new URL(`../dist/${retired}/`, import.meta.url)), { code: "ENOENT" });
+}
 
 // Exercise built Nest composition without enabling Probot, listening on a port,
 // loading .env, connecting to PostgreSQL, or dispatching background jobs.

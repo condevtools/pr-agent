@@ -20,7 +20,7 @@ import { appendRunFact } from "../src/agent-runtime/runs/events.js";
 import { parseRunCursor, RunQueryStore } from "../src/agent-runtime/runs/query-store.js";
 import { RunEventStreamHub } from "../src/http/runs/event-stream.js";
 import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
-import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
+import { AgentRuntimeModule } from "../src/http/runs/agent-runtime.module.js";
 
 interface CapacityProfile {
   name: "quick" | "qualification";

@@ -6,6 +6,7 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { spawnSync } from "node:child_process";
 import test, { after, before } from "node:test";
 
+import { Module } from "@nestjs/common";
 import { NestFactory, type INestApplication } from "@nestjs/core";
 import { Pool, type PoolClient } from "pg";
 
@@ -28,7 +29,11 @@ import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.j
 import { fingerprint, runtimeVersionManifest, type RunVersionManifest } from "../src/agent-runtime/versions.js";
 import { getModelExecutionPolicy, ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";
 import { resolveModelConfiguration } from "../src/model/configuration.js";
-import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
+import { AgentRuntimeModule } from "../src/http/runs/agent-runtime.module.js";
+import { EvolutionModule } from "../src/http/evolution/evolution.module.js";
+
+@Module({ imports: [AgentRuntimeModule, EvolutionModule] })
+class EvolutionReleaseTestModule {}
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -126,7 +131,7 @@ if (!databaseUrl) {
         "evolution:release:rollback", "evolution:release:read"] },
     { subjectId: "release-cross-api", actorType: "user", tenantId, integrationId: otherIntegrationId,
       tokenSha256: createHash("sha256").update(crossApiToken).digest("hex"), permissions: ["runs:read", "runs:trace"] }]);
-    app = await NestFactory.create(AgentRuntimeModule, { logger: false, abortOnError: false });
+    app = await NestFactory.create(EvolutionReleaseTestModule, { logger: false, abortOnError: false });
     await app.listen(0, "127.0.0.1");
     const apiAddress = app.getHttpServer().address();
     if (!apiAddress || typeof apiAddress === "string") throw new Error("release API fixture did not bind");
