@@ -32,15 +32,19 @@ if (!databaseUrl) {
   const datasetIntegrationA = randomUUID(); const datasetIntegrationB = randomUUID(); const datasetIntegrationC = randomUUID();
   const datasetIntegrationD = randomUUID(); const datasetIntegrationE = randomUUID();
   const datasetIntegrationF = randomUUID();
+  const datasetIntegrationG = randomUUID();
   const sourceRunId = randomUUID(); const arbitrationRunId = randomUUID(); const purgedRunId = randomUUID();
   const crossTenantRunId = randomUUID();
   const datasetRunA = randomUUID(); const datasetRunB = randomUUID(); const datasetRunC = randomUUID();
   const datasetRunD = randomUUID(); const datasetRunE = randomUUID();
   const datasetRunF = randomUUID();
+  const datasetRunG = randomUUID();
   const appPassword = randomUUID();
   const artifact = { schemaVersion: 1, summary: "durable review artifact", findings: [],
     sourceCoverage: { status: "complete", reasonCodes: [] } };
   const artifactHash = fingerprint(artifact);
+  const partialArtifact = { ...artifact, sourceCoverage: { status: "partial", reasonCodes: ["provider_truncated"] } };
+  const partialArtifactHash = fingerprint(partialArtifact);
   const emptyLabels: TrustedLabelSetV1 = { schemaVersion: 1, rubricVersion: "review-quality.v1",
     completeness: "complete", expectedFindings: [] };
   const oneFinding: TrustedLabelSetV1 = { ...emptyLabels, expectedFindings: [
@@ -77,6 +81,7 @@ if (!databaseUrl) {
     await seedIntegration(datasetIntegrationD, "dataset/corrected", 94);
     await seedIntegration(datasetIntegrationE, "dataset/purged", 95);
     await seedIntegration(datasetIntegrationF, "dataset/maintenance", 96);
+    await seedIntegration(datasetIntegrationG, "dataset/partial", 97);
     await seedReview(sourceRunId, integrationId);
     await seedReview(arbitrationRunId, integrationId);
     await seedReview(purgedRunId, integrationId);
@@ -87,6 +92,7 @@ if (!databaseUrl) {
     await seedReview(datasetRunD, datasetIntegrationD);
     await seedReview(datasetRunE, datasetIntegrationE);
     await seedReview(datasetRunF, datasetIntegrationF);
+    await seedReview(datasetRunG, datasetIntegrationG, tenantId, partialArtifact);
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET created_at='2025-01-01T00:00:00Z' WHERE id=$1", [datasetRunA]);
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET created_at='2025-08-01T00:00:00Z' WHERE id=$1", [datasetRunB]);
     for (const [runId, integration] of [[datasetRunA, datasetIntegrationA], [datasetRunB, datasetIntegrationB],
@@ -97,6 +103,13 @@ if (!databaseUrl) {
       await feedback.createAnnotation(principal(`seed-a-${runId}`, integration), runId, "seed-a", annotation);
       await feedback.createAnnotation(principal(`seed-b-${runId}`, integration), runId, "seed-b", annotation);
     }
+    await adminPool.query(
+      `INSERT INTO pr_agent_harness.trusted_review_label_sets
+         (id,tenant_id,integration_id,source_run_id,artifact_hash,rubric_version,label_set_hash,label_set_json,
+          version,active,resolution_kind,resolution_json)
+       VALUES ($1,$2,$3,$4,$5,'review-quality.v1',$6,$7::jsonb,1,true,'consensus',$8::jsonb)`,
+      [randomUUID(), tenantId, datasetIntegrationG, datasetRunG, partialArtifactHash, labelSetHash(emptyLabels),
+        JSON.stringify(emptyLabels), JSON.stringify({ annotationIds: [randomUUID(), randomUUID()] })]);
     await adminPool.query(
       `INSERT INTO pr_agent_harness.feedback_observations
          (tenant_id,integration_id,source_run_id,artifact_hash,command_key,request_hash,actor_type,actor_id,observation_json)
@@ -264,6 +277,15 @@ if (!databaseUrl) {
     const fixtureRead = await datasets.readFixture({ ...curator,
       permissions: [...curator.permissions, "evaluations:holdout"] }, dataset.id, caseId);
     assert.equal(fixtureRead.fixtureHash, fixture.fixtureHash);
+  });
+
+  test("succeeded review Runs with partial source coverage are ineligible for evaluation datasets", async () => {
+    const curator = datasetPrincipal("partial-source-curator", datasetIntegrationG, ["evaluations:create"]);
+    const dataset = await datasets.create(curator, { name: "partial-source-rejected",
+      developmentBefore: "2025-06-01T00:00:00Z", validationBefore: "2025-12-01T00:00:00Z" });
+
+    await assert.rejects(datasets.loadCaseSource(curator, dataset.id, datasetRunG, await trustedLabelId(datasetRunG)),
+      (error: unknown) => error instanceof RunControlError && error.code === "SOURCE_INVALID" && error.status === 409);
   });
 
   test("dataset freeze rejects repository-lineage or near-duplicate leakage across chronological splits", async () => {
@@ -436,7 +458,8 @@ if (!databaseUrl) {
          'active',1,1,'harness_async',1,'active','{}'::jsonb)`, [id, tenant, repository, providerRepositoryId]);
   }
 
-  async function seedReview(runId: string, integration: string, tenant = tenantId): Promise<void> {
+  async function seedReview(runId: string, integration: string, tenant = tenantId,
+    reviewArtifact: Record<string, unknown> = artifact): Promise<void> {
     const binding = (await adminPool.query<{ origin: string; repository: string; provider_repository_id: string }>(
       "SELECT origin,repository,provider_repository_id FROM pr_agent_harness.integration_bindings WHERE tenant_id=$1 AND id=$2",
       [tenant, integration])).rows[0]!;
@@ -471,7 +494,8 @@ if (!databaseUrl) {
       `INSERT INTO pr_agent_harness.review_artifacts
          (id,tenant_id,integration_id,run_id,workflow_id,publication_mode,head_sha,content_hash,artifact_json)
        VALUES ($1,$2,$3,$4,'review.deep.v1','shadow',$5,$6,$7::jsonb)`,
-      [fingerprint(`artifact:${runId}`), tenant, integration, runId, "b".repeat(40), artifactHash, JSON.stringify(artifact)]);
+      [fingerprint(`artifact:${runId}`), tenant, integration, runId, "b".repeat(40),
+        fingerprint(reviewArtifact), JSON.stringify(reviewArtifact)]);
   }
 
   function datasetPrincipal(subjectId: string, integration: string,

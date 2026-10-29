@@ -153,7 +153,7 @@ export class ModelBudgetStore {
         throw new ModelBudgetExceededError("run");
       }
       const reservedCost = estimateMaximumCost(input.intent, input.policy.rates);
-      if (input.lease.input.workflow === "review.deep.v1") {
+      if (input.lease.input.workflow === "review.deep.v1" || input.lease.input.workflow === "eval.replay.v1") {
         const partitions = deepBudgetSchema.parse(input.lease.runtimeConfig.deepBudget);
         const step = await client.query<{ step_key: string }>(
           `SELECT step_key FROM pr_agent_harness.agent_steps WHERE tenant_id=$1 AND run_id=$2 AND id=$3`,

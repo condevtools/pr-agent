@@ -1,4 +1,4 @@
-import type { DeepReviewSource, DeepWorkflowPolicy } from "../agents/contracts.js";
+import type { DeepReviewArtifact, DeepReviewSource, DeepWorkflowPolicy } from "../agents/contracts.js";
 import { createDeepWorkflowPolicy } from "../agents/policy.js";
 import { deepReviewWorkflow } from "../agents/deep-workflow.js";
 import { createStructuredModel } from "../review/structured-model.js";
@@ -7,7 +7,7 @@ import { RepositoryReadToolRegistry, type RepositoryReadAdapter } from "../integ
 import { DeepReviewStore } from "./deep-review-store.js";
 import { deepBudgetSchema } from "./deep-budget.js";
 import type { RunLease } from "./run-contracts.js";
-import { currentReviewRunContext, DeepReviewAnalysisFailedError } from "./review-run-context.js";
+import { currentReviewRunContext, DeepReviewAnalysisFailedError, type ReviewRunExecutionContext } from "./review-run-context.js";
 import { getHarnessServices } from "./runtime.js";
 
 export function frozenDeepWorkflowPolicy(lease: Pick<RunLease, "runtimeConfig">): DeepWorkflowPolicy {
@@ -30,6 +30,19 @@ export async function executeDeepReviewRun(
 ): Promise<void> {
   const context = currentReviewRunContext();
   if (!context || context.lease.input.workflow !== "review.deep.v1") throw new Error("Deep review requires its durable Run context");
+  const artifact = await executeDeepReviewWithContext(collected, adapter, context);
+  if (artifact.analysisStatus === "failed") throw new DeepReviewAnalysisFailedError();
+}
+
+/** Production and fixture replay share source construction, model, tools, critic and gate. */
+export async function executeDeepReviewWithContext(
+  collected: { input: PullRequestReviewInput; files: DiffFileContext[]; coverage?: DeepReviewSource["coverage"] },
+  adapter: RepositoryReadAdapter,
+  context: ReviewRunExecutionContext,
+): Promise<DeepReviewArtifact> {
+  if (!["review.deep.v1", "eval.replay.v1"].includes(String(context.lease.input.workflow))) {
+    throw new Error("Deep executor requires a review or evaluation Run");
+  }
   const { lease } = context;
   const identity = { tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
     platform: collected.input.platform, repository: collected.input.repository, baseSha: lease.baseSha, headSha: lease.headSha };
@@ -38,11 +51,10 @@ export async function executeDeepReviewRun(
       status: file.status, changedLines: addedLineNumbers(file.patch) })),
     coverage: collected.coverage ?? { status: "partial", reasonCodes: ["collection_coverage_unknown"] } };
   const store = new DeepReviewStore((await getHarnessServices()).db);
-  const artifact = await deepReviewWorkflow.execute(source, { lease, step: context.step, signal: context.signal,
+  return deepReviewWorkflow.execute(source, { lease, step: context.step, signal: context.signal,
     model: createStructuredModel(), store,
     tools: new RepositoryReadToolRegistry({ identity, changedPaths: collected.files.map((file) => file.newPath), adapter }),
   }, frozenDeepWorkflowPolicy(lease));
-  if (artifact.analysisStatus === "failed") throw new DeepReviewAnalysisFailedError();
 }
 
 /** Context lines are not changed lines; only '+' lines within a parsed hunk qualify. */

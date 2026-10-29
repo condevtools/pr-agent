@@ -14,6 +14,7 @@ export class EvolutionDatasetMaintenanceStore {
     return this.db.transaction(request.tenantId, async (client) => {
       const actor = await admin(client);
       await lock(client, request.tenantId);
+      await assertUnreferenced(client, request);
       const result = await client.query(
         `UPDATE pr_agent_harness.eval_datasets SET status='retired',updated_at=clock_timestamp()
          WHERE tenant_id=$1 AND id=$2 AND version=$3 AND status='frozen' RETURNING id`,
@@ -29,6 +30,7 @@ export class EvolutionDatasetMaintenanceStore {
     return this.db.transaction(request.tenantId, async (client) => {
       const actor = await admin(client);
       await lock(client, request.tenantId);
+      await assertUnreferenced(client, request);
       const dataset = await client.query<{ status: string; content_purged_at: Date | null }>(
         "SELECT status,content_purged_at FROM pr_agent_harness.eval_datasets WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
         [request.tenantId, request.datasetId]);
@@ -61,6 +63,14 @@ export class EvolutionDatasetMaintenanceStore {
 
 async function lock(client: PoolClient, tenantId: string): Promise<void> {
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,1830))", [tenantId]);
+}
+async function assertUnreferenced(client: PoolClient, request: { tenantId: string; datasetId: string }): Promise<void> {
+  const references = await client.query<{ referenced: boolean }>(`SELECT
+    EXISTS(SELECT 1 FROM pr_agent_harness.evolution_proposal_sources WHERE tenant_id=$1 AND dataset_id=$2)
+    OR EXISTS(SELECT 1 FROM pr_agent_harness.evolution_candidates WHERE tenant_id=$1 AND dataset_id=$2)
+    OR EXISTS(SELECT 1 FROM pr_agent_harness.eval_runs WHERE tenant_id=$1 AND dataset_id=$2) AS referenced`,
+  [request.tenantId, request.datasetId]);
+  if (references.rows[0]?.referenced) throw new Error("Dataset has durable proposal or evaluation references");
 }
 async function admin(client: PoolClient): Promise<string> {
   const result = await client.query<{ allowed: boolean; actor: string }>(

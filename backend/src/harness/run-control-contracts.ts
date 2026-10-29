@@ -3,7 +3,7 @@ import { z } from "zod";
 export const RUN_PERMISSIONS = ["runs:create", "runs:read", "runs:trace", "runs:cancel",
   "runs:resume", "runs:retry", "runs:recover", "runs:rerun", "fixes:create", "fixes:approve", "fixes:revoke",
   "feedback:create", "annotations:create", "annotations:arbitrate",
-  "evaluations:create", "evaluations:read", "evaluations:holdout"] as const;
+  "evaluations:create", "evaluations:read", "evaluations:holdout", "evolution:propose"] as const;
 export type RunPermission = typeof RUN_PERMISSIONS[number];
 export interface RunPrincipal {
   subjectId: string;

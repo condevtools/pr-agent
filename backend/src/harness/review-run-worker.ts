@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { FixProposalFailedError } from "./fix-proposal-run.js";
+import { EvolutionProposalFailedError } from "../evolution/proposal-run.js";
 
 import type { PublicationBinding } from "./authority.js";
 import { createBudgetedModelExecutionContext, ModelBudgetExceededError, type ModelBudgetStore, type ModelExecutionPolicy } from "./model-budget-store.js";
@@ -143,7 +144,8 @@ export class ReviewRunWorker {
     const assertActive = async () => {
       if (!active || controller.signal.aborted) throw new RunLeaseLostError(lease.runId);
       await store.withLease(lease, async (client) => {
-        if (lease.input.workflow === "review.deep.v1" || String(lease.input.workflow).startsWith("fix.")) {
+        if (lease.input.workflow === "review.deep.v1" || lease.input.workflow === "eval.replay.v1"
+            || lease.input.workflow === "evolution.propose.v1" || String(lease.input.workflow).startsWith("fix.")) {
           const authority = await client.query<{ allowed: boolean }>(
             "SELECT pr_agent_harness.lock_resumable_review_execution_authority($1,$2,$3,$4) AS allowed",
             [lease.tenantId, lease.integrationId, lease.authorityGeneration, lease.executionModeGeneration],
@@ -231,7 +233,9 @@ export class ReviewRunWorker {
       if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
       await store.transition(lease, { to: "succeeded", outcomeCode: lease.input.workflow === "review.deep.v1"
         ? "deep_review_artifact_completed" : lease.input.workflow === "fix.propose.v1"
-          ? "fix_proposal_completed" : lease.input.workflow === "fix.publish.v1" ? "fix_publication_completed" : "review_completed" });
+          ? "fix_proposal_completed" : lease.input.workflow === "fix.publish.v1" ? "fix_publication_completed"
+            : lease.input.workflow === "evolution.propose.v1" ? "evolution_proposal_completed"
+              : lease.input.workflow === "eval.replay.v1" ? "evaluation_replay_completed" : "review_completed" });
     } catch (error) {
       if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
       if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
@@ -251,6 +255,7 @@ export class ReviewRunWorker {
         error instanceof ReviewRunRevisionChangedError ||
         error instanceof DeepReviewAnalysisFailedError ||
         error instanceof FixProposalFailedError ||
+        error instanceof EvolutionProposalFailedError ||
         error instanceof ModelBudgetExceededError ||
         error instanceof RunCheckpointCompatibilityError ||
         lease.jobAttempt >= REVIEW_RUNTIME_CONFIG.maxJobAttempts

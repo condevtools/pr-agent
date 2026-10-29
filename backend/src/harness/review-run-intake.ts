@@ -7,6 +7,7 @@ import { getHarnessServices } from "./runtime.js";
 import { currentReviewRunContext } from "./review-run-context.js";
 import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./review-run-input.js";
 import { REVIEW_RUNTIME_CONFIG, reviewVersionManifest } from "./versions.js";
+import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../agents/text-components.js";
 
 export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {
   if (!binding || currentReviewRunContext()) return false;
@@ -40,7 +41,8 @@ export async function buildReviewRunCreationInput(
   }
   const { provider, model } = resolveReviewModelConfiguration();
   const policy = getModelExecutionPolicy(provider, model);
-  const manifest = await reviewVersionManifest(policy);
+  const baseManifest = await reviewVersionManifest(policy);
+  const manifest = parsed.workflow === "review.deep.v1" ? withReviewTextVersions(baseManifest, BASELINE_REVIEW_TEXT) : baseManifest;
   return {
     tenantId: binding.tenantId, integrationId: binding.id,
     actorType: identity?.actorType ?? "service", actorId: identity?.actorId ?? `integration:${binding.id}`,
@@ -52,7 +54,7 @@ export async function buildReviewRunCreationInput(
     ...manifest, input: parsed, authorityGeneration: binding.generation,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
     runtimeConfig: { ...REVIEW_RUNTIME_CONFIG, modelPolicy: policy,
-      ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits) } : {}) },
+      ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits), reviewText: BASELINE_REVIEW_TEXT } : {}) },
     limits: { maxRunMs: REVIEW_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: REVIEW_RUNTIME_CONFIG.maxJobAttempts,
       maxStepAttempts: REVIEW_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
     admission: (client, runId) => reserveRunBudgetInTransaction(client, { tenantId: binding.tenantId, runId, policy }),

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { canonicalJson, fingerprint } from "../harness/versions.js";
 import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../harness/run-contracts.js";
+import { composeReviewSystemPrompt, frozenReviewText } from "./text-components.js";
 import type {
   DeepReviewRole,
   DeepReviewSource,
@@ -120,15 +121,16 @@ export async function runDeepReviewRole(input: {
       signal.throwIfAborted();
       attemptedTurns = turn;
       const prompt = rolePrompt(input.role, input.source, evidence, input.context.tools.catalog(input.role));
+      const systemPrompt = composeReviewSystemPrompt(roleSystemPrompt(input.role), frozenReviewText(input.context.lease.runtimeConfig));
       const turnResult = await input.context.step(
         `deep.role.${input.role}.turn.${turn}`,
         "model",
-        fingerprint({ role: input.role, turn, prompt, limits: input.limits }),
+        fingerprint({ role: input.role, turn, prompt, systemPrompt, limits: input.limits }),
         () => input.context.model.generate({
           schemaName: `deep_${input.role}_turn`,
           jsonSchema: deepRoleTurnJsonSchema as unknown as Record<string, unknown>,
           schema: deepRoleTurnResponseSchema,
-          systemPrompt: roleSystemPrompt(input.role),
+          systemPrompt,
           prompt,
           role: input.role,
           turn,

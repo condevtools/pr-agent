@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { canonicalJson, fingerprint } from "../harness/versions.js";
+import { composeReviewSystemPrompt, frozenReviewText } from "./text-components.js";
 import type {
   CriticDecision,
   DeepWorkflowContext,
@@ -56,16 +57,18 @@ export async function runDeepReviewCritic(input: {
     : AbortSignal.timeout(input.policy.criticLimits.maxWallTimeMs);
   const prompt = canonicalJson({ candidates, coverage: input.coverage,
     instruction: "Return one decision per candidate ID. You may not add, rewrite, or relocate candidates." });
+  const systemPrompt = composeReviewSystemPrompt("You are a restricted review critic. Decide only on supplied candidate IDs. " +
+    "Reject duplicates and request more evidence when support is insufficient. Return strict JSON only.",
+  frozenReviewText(input.context.lease.runtimeConfig));
   const result = await input.context.step(
     "deep.critic",
     "model",
-    fingerprint({ candidates, coverage: input.coverage, limits: input.policy.criticLimits }),
+    fingerprint({ candidates, coverage: input.coverage, systemPrompt, limits: input.policy.criticLimits }),
     () => input.context.model.generate({
       schemaName: "deep_review_critic",
       jsonSchema: deepCriticJsonSchema as unknown as Record<string, unknown>,
       schema: deepCriticResponseSchema,
-      systemPrompt: "You are a restricted review critic. Decide only on supplied candidate IDs. " +
-        "Reject duplicates and request more evidence when support is insufficient. Return strict JSON only.",
+      systemPrompt,
       prompt,
       role: "critic",
       turn: 1,

@@ -120,6 +120,27 @@ try {
         GRANT UPDATE (status,version,manifest_hash,case_count,dev_count,validation_count,holdout_count,frozen_at,updated_at)
           ON pr_agent_harness.eval_datasets TO pr_agent_app;
         GRANT UPDATE (split,ordinal) ON pr_agent_harness.eval_cases TO pr_agent_app;
+        REVOKE INSERT, UPDATE, DELETE ON pr_agent_harness.evolution_proposal_sources,
+          pr_agent_harness.evolution_candidates,
+          pr_agent_harness.eval_runs,
+          pr_agent_harness.eval_results FROM pr_agent_app;
+        GRANT SELECT ON pr_agent_harness.evolution_proposal_sources,
+          pr_agent_harness.evolution_candidates,
+          pr_agent_harness.eval_runs,
+          pr_agent_harness.eval_results TO pr_agent_app;
+        GRANT INSERT (tenant_id,proposal_run_id,dataset_id,dataset_version,dataset_manifest_hash,baseline_prompt_hash,baseline_tool_hash,source_hash,source_json,created_by_actor_type,created_by_actor_id)
+          ON pr_agent_harness.evolution_proposal_sources TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,proposal_run_id,dataset_id,dataset_version,dataset_manifest_hash,candidate_json,candidate_hash,baseline_prompt_hash,baseline_tool_hash,model_config_hash,source_hash,provenance_json,created_by_actor_type,created_by_actor_id)
+          ON pr_agent_harness.evolution_candidates TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,dataset_id,candidate_id,curator_actor_type,curator_actor_id,split,command_key,request_hash,repetitions,manifest_hash,baseline_component_hash,candidate_component_hash,model_version_hash,runtime_version_hash,total_result_count,planned_result_count,deadline_at,scheduling_policy_json,scheduling_policy_hash)
+          ON pr_agent_harness.eval_runs TO pr_agent_app;
+        GRANT INSERT (tenant_id,eval_run_id,dataset_id,case_id,integration_id,variant,repetition,seed_hash,fixture_hash,label_set_id,label_set_hash,component_hash,expected_model_hash,expected_runtime_hash,expected_workflow_hash,expected_prompt_hash,expected_tool_hash,expected_policy_hash,expected_verifier_hash)
+          ON pr_agent_harness.eval_results TO pr_agent_app;
+        GRANT UPDATE (status,version,completed_result_count,failed_result_count,lease_owner,lease_epoch,
+          lease_expires_at,heartbeat_at,available_at,error_code,metrics_json,metrics_hash,updated_at,completed_at)
+          ON pr_agent_harness.eval_runs TO pr_agent_app;
+        GRANT UPDATE (child_run_id,status,artifact_hash,score_json,score_hash,usage_json,latency_ms,error_code,updated_at,completed_at)
+          ON pr_agent_harness.eval_results TO pr_agent_app;
     `);
     let verifier = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_verifier'");
     const verifierPassword = process.env.HARNESS_VERIFIER_PASSWORD;

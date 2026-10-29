@@ -1,4 +1,7 @@
 import { executeFixPublicationRun } from "../fix/publish-workflow.js";
+import { executeEvolutionProposalRun } from "../evolution/proposal-run.js";
+import { executeReplayRun, EvaluationCoordinator } from "../evolution/replay-run.js";
+import { EvaluationStore } from "../evolution/replay-store.js";
 import { createFixPublicationAdapter } from "../fix/fix-publication-adapter.js";
 import { Pool, type PoolConfig } from "pg";
 import { createProbot } from "probot";
@@ -17,6 +20,7 @@ import { verifyGitHubCredentialIdentity } from "./github-credential-identity.js"
 import { RunExecutionStore } from "./run-execution-store.js";
 import { getModelExecutionPolicy, ModelBudgetStore } from "./model-budget-store.js";
 import { ReviewRunWorker } from "./review-run-worker.js";
+import type { RunLease } from "./run-contracts.js";
 import { executeReviewRun } from "./review-workflow.js";
 import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
 import { reviewVersionManifest } from "./versions.js";
@@ -209,6 +213,7 @@ export async function startReviewRunWorker(): Promise<void> {
   const store = new RunExecutionStore(services.db);
   const budget = new ModelBudgetStore(services.db);
   const outcomes = new PublicationOutcomeCoordinator({ db: services.db, batchStore: services.batchStore });
+  const evaluations = new EvaluationCoordinator(new EvaluationStore(services.db));
   const outcomeHandler = new PublicationOutcomeHandler({
     store, budget, batchStore: services.batchStore, batchCoordinator: services.batchCoordinator,
     control: new PublicationControlStore(services.db),
@@ -218,18 +223,30 @@ export async function startReviewRunWorker(): Promise<void> {
     },
   });
   runWorker = new ReviewRunWorker({
-    store, budget, outcomeHandler, coordinateOutcomes: (binding) => outcomes.tick(binding),
+    store, budget, outcomeHandler, coordinateOutcomes: async (binding) => {
+      const results = await Promise.allSettled([outcomes.tick(binding), evaluations.tick(binding)]);
+      for (const result of results) if (result.status === "rejected") {
+        process.emitWarning(JSON.stringify({ component: "harness-coordinator",
+          errorType: result.reason instanceof Error ? result.reason.name : "unknown" }));
+      }
+    },
     bindings: () => services.authority.listRecoverable(),
     runtimeHash: async () => {
       const { provider, model } = resolveReviewModelConfiguration();
       return (await reviewVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash;
     },
-    execute: (lease,binding) => lease.input.workflow === "fix.publish.v1"
-      ? executeFixPublicationRun(lease,binding) : executeReviewRun(lease,binding),
+    execute: executeHarnessRun,
     onError: (error, runId) => process.emitWarning(JSON.stringify({ component: "review-run-worker", runId,
       errorType: error instanceof Error ? error.name : "unknown" })),
   });
   runWorker.start();
+}
+
+export function executeHarnessRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
+  if (lease.input.workflow === "fix.publish.v1") return executeFixPublicationRun(lease, binding);
+  if (lease.input.workflow === "evolution.propose.v1") return executeEvolutionProposalRun(lease);
+  if (lease.input.workflow === "eval.replay.v1") return executeReplayRun(lease, binding);
+  return executeReviewRun(lease, binding);
 }
 
 export async function stopReviewRunWorker(): Promise<void> {

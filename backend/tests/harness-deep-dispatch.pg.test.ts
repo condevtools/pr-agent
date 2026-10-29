@@ -297,7 +297,7 @@ if (!databaseUrl) {
 function pricing(): string {
   return JSON.stringify({ version: "deep-dispatch-v1", currency: "USD", periodKey: "deep-dispatch-tests",
     tenantLimits: { inputTokens: 1_000_000, outputTokens: 1_000_000, costMicros: 0 },
-    runLimits: { inputTokens: 30_000, outputTokens: 12_000, costMicros: 0 },
+    runLimits: { inputTokens: 40_000, outputTokens: 12_000, costMicros: 0 },
     models: { "openai-compatible:deep-dispatch-model": { rates: { inputMicrosPerMillion: 0,
       cachedInputMicrosPerMillion: 0, cacheWriteInputMicrosPerMillion: 0, outputMicrosPerMillion: 0,
       thoughtOutputMicrosPerMillion: 0, toolInputMicrosPerMillion: 0 }, maxOutputTokens: 4_096,

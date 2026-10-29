@@ -1,6 +1,6 @@
 # 受控 Evolution
 
-Evolution 将真实 review 的反馈变成可追溯评测数据，再对受限文本候选作离线比较。数据库队列复用现有 PostgreSQL Harness；无需 Redis/Kafka。当前 P3a 交付反馈与数据底座，P3b/P3c 分别交付候选回放和受控发布。工程验收不能替代真实模型质量验收。
+Evolution 将真实 review 的反馈变成可追溯评测数据，再对受限文本候选作离线比较。数据库队列复用现有 PostgreSQL Harness；无需 Redis/Kafka。P3a 交付反馈与数据底座，P3b 交付候选回放；P3c 继续交付受控发布。工程验收不能替代真实模型质量验收。
 
 ## P3a：反馈、标注与隔离数据集
 
@@ -21,3 +21,15 @@ Evolution 将真实 review 的反馈变成可追溯评测数据，再对受限�
 ## 验证边界
 
 真实 Docker PostgreSQL 测试使用 CLI 授予权限的 `pr_agent_app`（NOSUPERUSER/NOBYPASSRLS），验证 RLS、同租户错误 integration、幂等、独立仲裁、更正、三段隔离、并发冻结、内容清理和最小权限。单元测试验证 fixture 路径/敏感文件/标签边界。这里只证明工程行为；当前没有提供独立真实质量数据集，Evolution 有效性仍为 NOT_VERIFIED。
+
+## P3b：受限提案与生产路径回放
+
+`POST /evolution/proposals` 使用 `{datasetId}` 和 `Idempotency-Key`，要求 `evolution:propose`。服务端冻结 curator 所有数据集的 development 标签摘要、基线文本、数据版本和内容哈希；生成器没有工具，也没有 validation/holdout 输入。`evolution.propose.v1` 使用真实 Run 租约、持久 Step、模型预算与幂等结果。模型只能返回严格的 `{schemaVersion:1,prompt_text,tool_description_text}`，未知字段拒绝。每个文本限 32768 字符。候选身份、来源、状态、基线和模型配置由服务端决定。
+
+`POST /evolution/evaluations` 使用 `{datasetId,candidateId,split}` 和幂等键，要求 `evaluations:create`；holdout 额外要求 `evaluations:holdout`。每个 split 最多 500 cases，调度策略固定为每 integration 全局最多四个活动子 Run；截止时间按工作量计算且至少七天。PG 协调器对 split 内每个 case 建立 baseline/candidate 各三次无固定 seed 的独立 `eval.replay.v1` 子 Run。任务身份哈希不是模型 seed。版本、样本、fixture、标签、验证器与候选内容均固定；恢复复用同一子 Run，不挑选最好的一次。
+
+回放与线上 deep review 共用 `executeDeepReviewWithContext`、结构化模型、只读工具 Registry、两个评审角色、Critic 和证据 gate。角色与 Critic 的实际 system prompt 包含固定 envelope 和被冻结的候选文本；最终文本进入 Step 输入哈希。模型和工具权限、拓扑、预算、schema、handler 不由候选改变。仅成功的提案 Run 所产生候选可读取或评测；部署组件不匹配会形成明确失败矩阵，不会无限占用租约。回放工具只从不可变 fixture 读文件及 CI，不访问真实 provider，也不发布评论或代码。
+
+只有子 Run 终态后，评分器才读取独立标签。超时会取消未完成子 Run 并保存最终计数、指标哈希及已观察/尚未确定的费用。失败与取消保留在样本分母，记录逐次得分、方差、成本、延迟和高严重度误报/漏报；缺失用量、失败或可观测模型版本漂移会阻止可比性判断。模型未暴露的供应商内部版本变化无法据此证明不存在。
+
+当前候选保持 `research_draft`，完成测试或 synthetic 回放都不代表实际质量改善。数据集存在提案或评测引用时，退休/清理会拒绝操作以保护复现证据。真实质量门槛与发布审批在 P3c 接入；本阶段没有自动上线入口。

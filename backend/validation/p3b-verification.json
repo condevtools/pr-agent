@@ -1,0 +1,42 @@
+{
+  "stage": "P3b",
+  "status": "engineering_verified",
+  "scope": "strict development-only Evolution proposals and production-path baseline/candidate replay",
+  "unit": {
+    "command": "npm --prefix backend test",
+    "passed": 334,
+    "conditionalSkipped": 29,
+    "failed": 0
+  },
+  "postgres": {
+    "environment": "Docker PostgreSQL 17; actual CLI application role",
+    "suites": 27,
+    "passed": 171,
+    "failed": 0
+  },
+  "targetedReplay": {
+    "passed": 7,
+    "failed": 0
+  },
+  "checks": [
+    "TypeScript check",
+    "backend build",
+    "git diff --check",
+    "compiled Docker Compose migration + strict candidate schema + minimum column grants",
+    "bounded cleanup: removed duplicate schema test; retained all forbidden-field/boundary assertions"
+  ],
+  "dockerImage": "sha256:b66a9bd387a39df130390cab4128d01ce9d334c20d06091142e712596e363f11",
+  "independentReview": {
+    "codeReview": "APPROVE",
+    "architecture": "CLEAR"
+  },
+  "quality": "NOT_VERIFIED: no independent real production dataset supplied; candidate stays research_draft",
+  "remainingStages": [
+    "P3c"
+  ],
+  "limitations": [
+    "Provider-internal model changes not exposed in provider response cannot be detected",
+    "Outstanding supplier costs at deadline remain pendingExternalCost and make results incomparable",
+    "No live provider writes or release activation"
+  ]
+}

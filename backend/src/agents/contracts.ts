@@ -137,7 +137,7 @@ export interface StructuredModelRequest<T> {
   schema: { parse(value: unknown): T };
   systemPrompt: string;
   prompt: string;
-  role: DeepReviewRole | "critic" | "fix";
+  role: DeepReviewRole | "critic" | "fix" | "evolution";
   turn: number;
   maxInputBytes: number;
   maxOutputTokens: number;
