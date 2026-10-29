@@ -20,8 +20,8 @@ import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
 import { closeAgentRuntime, publicationRuntimeForBinding } from "../src/agent-runtime/runtime.js";
 import { executeReviewRun } from "../src/review/run.js";
-import { runGitHubReview } from "../src/integrations/github/github-review.js";
-import { createRestBackedOctokit } from "../src/integrations/github/github-rest-client.js";
+import { runGitHubReview } from "../src/review/platforms/github/workflow.js";
+import { createRestBackedOctokit } from "../src/integrations/github/api/http-client.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 

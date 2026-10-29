@@ -8,10 +8,10 @@ import { HealthService } from "../src/http/system/health.service.js";
 import { SystemModule } from "../src/http/system/system.module.js";
 import { HttpErrorFilter } from "../src/http/common/filters/http-error.filter.js";
 import { BadWebhookRequestError } from "../src/core/errors/errors.js";
-import { GithubWebhookController } from "../src/http/webhooks/github/github.webhook.controller.js";
-import { GithubWebhookService } from "../src/http/webhooks/github/github.webhook.service.js";
-import { GitlabWebhookController } from "../src/http/webhooks/gitlab/gitlab.webhook.controller.js";
-import { GitlabWebhookService } from "../src/http/webhooks/gitlab/gitlab.webhook.service.js";
+import { GithubWebhookController } from "../src/http/webhooks/github/github-webhook.controller.js";
+import { GithubWebhookService } from "../src/http/webhooks/github/github-webhook.service.js";
+import { GitlabWebhookController } from "../src/http/webhooks/gitlab/gitlab-webhook.controller.js";
+import { GitlabWebhookService } from "../src/http/webhooks/gitlab/gitlab-webhook.service.js";
 import { clearMetricState } from "./support/metrics-test-api.ts";
 
 interface MockResponse {

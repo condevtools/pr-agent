@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { publishGitHubIssueCommentDurably } from "../src/integrations/github/github-publication.js";
-import { publishGitLabNoteDurably } from "../src/integrations/gitlab/gitlab-publication.js";
+import { publishGitHubIssueCommentDurably } from "../src/integrations/github/publication/adapter.js";
+import { publishGitLabNoteDurably } from "../src/integrations/gitlab/publication/adapter.js";
 
 const previousMode = process.env.HARNESS_PUBLICATION_MODE;
 

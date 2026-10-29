@@ -1,8 +1,10 @@
-import { collectGitHubPullRequestContext, runGitHubReview } from "../integrations/github/github-review.js";
-import { createRestBackedOctokit } from "../integrations/github/github-rest-client.js";
-import { collectGitLabMergeRequestContext, runGitLabReview } from "../integrations/gitlab/gitlab-review.js";
-import { GitHubRepositoryReadAdapter } from "../integrations/github/github-repository-read-tools.js";
-import { GitLabRepositoryReadAdapter } from "../integrations/gitlab/gitlab-repository-read-tools.js";
+import { collectGitHubPullRequestContext } from "../integrations/github/repository/context.js";
+import { runGitHubReview } from "./platforms/github/workflow.js";
+import { createRestBackedOctokit } from "../integrations/github/api/http-client.js";
+import { collectGitLabMergeRequestContext } from "../integrations/gitlab/repository/context.js";
+import { runGitLabReview } from "./platforms/gitlab/workflow.js";
+import { GitHubRepositoryReadAdapter } from "../integrations/github/repository/read-adapter.js";
+import { GitLabRepositoryReadAdapter } from "../integrations/gitlab/repository/read-adapter.js";
 import { currentRunExecutionContext, durableReviewCollection } from "../agent-runtime/execution/run-context.js";
 import { executeDeepReviewRun } from "./deep/run.js";
 import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";

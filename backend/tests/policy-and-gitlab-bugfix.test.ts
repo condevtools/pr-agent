@@ -5,12 +5,10 @@ import {
   parseRepoPolicyConfig,
   parseYamlBoolean,
   resolveGitHubReviewBehaviorPolicy,
-} from "../src/integrations/github/github-policy.ts";
-import {
-  buildMergeRequestPayloadFromNote,
-  inferMergeRequestLabels,
-  mapGitLabStatusToConclusion,
-} from "../src/integrations/gitlab/gitlab-review.ts";
+} from "../src/issues/policy/github/workflow.ts";
+import { buildMergeRequestPayloadFromNote } from "../src/integrations/gitlab/webhooks/events.js";
+import { inferMergeRequestLabels } from "../src/review/platforms/gitlab/publication.js";
+import { mapGitLabStatusToConclusion } from "../src/integrations/gitlab/repository/ci-checks.js";
 import type { PullRequestReviewResult } from "../src/review/contracts.ts";
 
 const lowRiskResult: PullRequestReviewResult = {

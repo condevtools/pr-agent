@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Query, Req, Res, UseFilters } from "@nestjs/common";
 import type { Request, Response } from "express";
 
-import { RunApiErrorFilter } from "./runs.error-filter.js";
+import { RunApiErrorFilter } from "../common/filters/run-api-error.filter.js";
 import { RunsService } from "./runs.service.js";
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { RunApiContextService } from "../common/run-api-context.service.js";

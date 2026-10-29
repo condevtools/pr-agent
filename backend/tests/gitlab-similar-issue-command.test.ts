@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runGitLabWebhook } from "../src/integrations/gitlab/gitlab-review.ts";
+import { runGitLabWebhook } from "../src/integrations/gitlab/webhooks/adapter.js";
 
 test("gitlab /similar_issue command posts ranked similar issues", async () => {
   const originalFetch = globalThis.fetch;

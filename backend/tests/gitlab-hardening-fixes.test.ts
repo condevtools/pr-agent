@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runGitHubReview } from "../src/integrations/github/github-review.ts";
-import { handlePlainGitHubWebhook } from "../src/integrations/github/github-webhook.ts";
-import {
-  mergeGitLabChangelogContent,
-  parseGitLabReviewPolicyConfig,
-  runGitLabReview,
-  runGitLabWebhook,
-  tryAddGitLabMergeRequestLabels,
-} from "../src/integrations/gitlab/gitlab-review.ts";
+import { runGitHubReview } from "../src/review/platforms/github/workflow.js";
+import { handlePlainGitHubWebhook } from "../src/integrations/github/webhooks/handler.ts";
+import { mergeGitLabChangelogContent } from "../src/commands/platforms/gitlab/changelog.js";
+import { parseGitLabReviewPolicyConfig } from "../src/review/policy/gitlab.js";
+import { runGitLabReview } from "../src/review/platforms/gitlab/workflow.js";
+import { runGitLabWebhook } from "../src/integrations/gitlab/webhooks/adapter.js";
+import { tryAddGitLabMergeRequestLabels } from "../src/review/platforms/gitlab/publication.js";
 
 test("gitlab policy parser accepts quoted mode/boolean values", () => {
   const policy = parseGitLabReviewPolicyConfig(

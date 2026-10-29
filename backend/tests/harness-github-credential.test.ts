@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { verifyGitHubCredentialIdentity, type GitHubAppIdentity } from "../src/integrations/github/auth/credential-identity.js";
-import type { MinimalGitHubOctokit } from "../src/integrations/github/github-review-types.js";
+import type { MinimalGitHubOctokit } from "../src/integrations/github/api/types.js";
 
 function client() {
   const reads: string[] = [];

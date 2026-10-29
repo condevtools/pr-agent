@@ -3,8 +3,8 @@ import type { PublicationBinding } from "../../agent-runtime/authority/publicati
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
 import { publicationRuntimeForBinding } from "../../agent-runtime/runtime.js";
-import { createRestBackedOctokit } from "../../integrations/github/github-rest-client.js";
-import { gitLabApiRequest } from "../../integrations/gitlab/gitlab-http.js";
+import { createRestBackedOctokit } from "../../integrations/github/api/http-client.js";
+import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
 
 export type ReviewInputRequest = Pick<ReviewRunInput, "workflow" | "mode" | "options"> & { number: number };
 

@@ -29,7 +29,7 @@
 
 ## 与 PR-Agent 的联系和主要区别
 
-PR-Agent 原有核心是平台集成驱动的单次结构化审查：[ai-reviewer.ts](./src/review/standard/reviewer.ts) 负责 provider、schema 和全局并发限制；GitHub/GitLab collector、policy、CI、secret scan、报告与评论发布已有完整调用链。EvoAgent 的重点更多落在审查角色协作、工具探索和离线演化实验。二者都围绕代码 review，但可迁移的主要是执行模式和证据方法，不是直接复制 Python 服务。
+PR-Agent 原有核心是平台集成驱动的单次结构化审查：[standard/reviewer.ts](./src/review/standard/reviewer.ts) 负责标准审查与结果 schema，共享 provider、配置和并发控制已归入 [model/](./src/model/)；GitHub/GitLab collector、policy、CI、secret scan、报告与评论发布已有完整调用链。EvoAgent 的重点更多落在审查角色协作、工具探索和离线演化实验。二者都围绕代码 review，但可迁移的主要是执行模式和证据方法，不是直接复制 Python 服务。
 
 | 方面 | EvoAgent 源码表现 | PR-Agent 的选择 |
 | --- | --- | --- |

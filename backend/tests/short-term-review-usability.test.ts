@@ -1,23 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  readGitHubFeedbackSignals,
-  appendGitHubFilesTruncatedWarning,
-  maybeAppendGitHubFilesTruncatedWarning,
-  buildManagedCommandCommentKey,
-  buildGitHubChangelogQuestion,
-  isLikelyPlaceholder,
-  buildGitHubDescribeQuestion,
-  mergeChangelogContent,
-  postGitHubCommandComment,
-  publishGitHubNoDiffStatus,
-  recordGitHubFeedbackSignal,
-  resolveGitHubPatchCharLimits,
-  runGitHubReview,
-  shouldSkipGitHubReviewForDraft,
-  upsertGitHubManagedIssueComment,
-} from "../src/integrations/github/github-review.ts";
+import { readGitHubFeedbackSignals, recordGitHubFeedbackSignal } from "../src/review/platforms/github/state.js";
+import { appendGitHubFilesTruncatedWarning, maybeAppendGitHubFilesTruncatedWarning } from "../src/review/platforms/github/publication.js";
+import { buildManagedCommandCommentKey } from "../src/review/rendering/managed-comments.js";
+import { buildGitHubChangelogQuestion, buildGitHubDescribeQuestion } from "../src/commands/platforms/github/runner.js";
+import { isLikelyPlaceholder } from "../src/repository/content-safety/secret-scan.js";
+import { mergeChangelogContent } from "../src/commands/presentation/changelog.js";
+import { postGitHubCommandComment, publishGitHubNoDiffStatus, upsertGitHubManagedIssueComment } from "../src/integrations/github/publication/comments.js";
+import { resolveGitHubPatchCharLimits } from "../src/integrations/github/repository/context.js";
+import { runGitHubReview, shouldSkipGitHubReviewForDraft } from "../src/review/platforms/github/workflow.js";
 import {
   createRestBackedOctokit,
   handleGitHubIssueCommentCommand,
@@ -25,25 +17,21 @@ import {
   isGitHubBotCommentUser,
   isGitHubCommandRateLimited,
   isWebhookSignatureValid,
-} from "../src/integrations/github/github-webhook.ts";
+} from "../src/integrations/github/webhooks/handler.ts";
 import {
   GitlabWebhookService,
   shouldRequireGitLabWebhookSecret,
-} from "../src/http/webhooks/gitlab/gitlab.webhook.service.ts";
+} from "../src/http/webhooks/gitlab/gitlab-webhook.service.ts";
 import {
   isGitLabWebhookTokenValid,
-} from "../src/integrations/gitlab/gitlab-webhook-security.ts";
-import {
-  buildGitLabChangelogQuestion,
-  buildGitLabDescribeQuestion,
-  isGitLabBotUserName,
-  runGitLabWebhook,
-  runGitLabReview,
-  resolveGitLabPatchCharLimits,
-  shouldSkipGitLabReviewForDraft,
-  upsertGitLabManagedComment,
-} from "../src/integrations/gitlab/gitlab-review.ts";
-import { buildManagedCommandCommentKey } from "../src/review/rendering/managed-comments.ts";
+} from "../src/integrations/gitlab/webhooks/security.ts";
+import { buildGitLabChangelogQuestion, buildGitLabDescribeQuestion } from "../src/commands/platforms/gitlab/questions.js";
+import { isGitLabBotUserName } from "../src/integrations/gitlab/webhooks/events.js";
+import { runGitLabWebhook } from "../src/integrations/gitlab/webhooks/adapter.js";
+import { runGitLabReview, shouldSkipGitLabReviewForDraft } from "../src/review/platforms/gitlab/workflow.js";
+import { resolveGitLabPatchCharLimits } from "../src/integrations/gitlab/repository/context.js";
+import { upsertGitLabManagedComment } from "../src/review/platforms/gitlab/publication.js";
+import { buildManagedCommandCommentKey } from "../src/review/rendering/managed-comments.js";
 import {
   createOpenAIClientCache,
   openAIClientCacheKey,

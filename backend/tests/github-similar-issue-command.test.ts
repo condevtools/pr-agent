@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleGitHubIssueCommentCommand } from "../src/integrations/github/github-webhook.ts";
+import { handleGitHubIssueCommentCommand } from "../src/integrations/github/webhooks/handler.ts";
 
 test("github /similar_issue command posts ranked similar issues", async () => {
   let postedBody = "";

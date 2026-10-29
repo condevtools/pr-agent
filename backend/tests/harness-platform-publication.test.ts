@@ -11,10 +11,10 @@ import {
   type PublicationOperation,
   type PublicationStore,
 } from "../src/agent-runtime/publication/publication.js";
-import { createRestBackedOctokit } from "../src/integrations/github/github-rest-client.js";
-import { publishGitHubIssueCommentDurably } from "../src/integrations/github/github-publication.js";
-import type { GitHubReviewContext } from "../src/integrations/github/github-review-types.js";
-import { publishGitLabNoteDurably } from "../src/integrations/gitlab/gitlab-publication.js";
+import { createRestBackedOctokit } from "../src/integrations/github/api/http-client.js";
+import { publishGitHubIssueCommentDurably } from "../src/integrations/github/publication/adapter.js";
+import type { GitHubReviewContext } from "../src/review/platforms/github/contracts.js";
+import { publishGitLabNoteDurably } from "../src/integrations/gitlab/publication/adapter.js";
 import { buildManagedCommentMarker } from "../src/review/rendering/managed-comments.js";
 
 const githubScope = {

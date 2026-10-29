@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { runGitLabReview } from "../src/integrations/gitlab/gitlab-review.js";
+import { runGitLabReview } from "../src/review/platforms/gitlab/workflow.js";
 import { ReviewRunRevisionChangedError, withRunExecutionContext } from "../src/agent-runtime/execution/run-context.js";
 import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 

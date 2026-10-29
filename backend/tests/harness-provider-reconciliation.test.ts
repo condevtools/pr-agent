@@ -8,12 +8,10 @@ import {
   PublicationLookupIndeterminateError,
   type PublicationOperation,
 } from "../src/agent-runtime/publication/publication.js";
-import {
-  createGitHubPublicationAdapter,
-  type GitHubPublicationBinding,
-} from "../src/integrations/github/github-publication.js";
-import type { MinimalGitHubOctokit } from "../src/integrations/github/github-review-types.js";
-import { runGitHubReview } from "../src/integrations/github/github-review.js";
+import { createGitHubPublicationAdapter } from "../src/integrations/github/publication/adapter.js";
+import { type GitHubPublicationBinding } from "../src/integrations/github/publication/contracts.js";
+import type { MinimalGitHubOctokit } from "../src/integrations/github/api/types.js";
+import { runGitHubReview } from "../src/review/platforms/github/workflow.js";
 import { withRunExecutionContext } from "../src/agent-runtime/execution/run-context.js";
 
 const binding: GitHubPublicationBinding = {

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { GitHubRepositoryReadAdapter } from "../src/integrations/github/github-repository-read-tools.js";
-import { GitLabRepositoryReadAdapter } from "../src/integrations/gitlab/gitlab-repository-read-tools.js";
+import { GitHubRepositoryReadAdapter } from "../src/integrations/github/repository/read-adapter.js";
+import { GitLabRepositoryReadAdapter } from "../src/integrations/gitlab/repository/read-adapter.js";
 import { REPOSITORY_READ_LIMITS } from "../src/repository/read-limits.js";
 import { RepositoryReadToolRegistry } from "../src/review/deep/tools/registry.js";
 import { type RepositoryReadAdapter } from "../src/repository/contracts.js";

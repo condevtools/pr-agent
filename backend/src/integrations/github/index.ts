@@ -3,19 +3,19 @@ export {
   resolveGitHubReviewBehaviorPolicy,
   runGitHubIssuePolicyCheck,
   runGitHubPullRequestPolicyCheck,
-} from "./github-policy.js";
+} from "../../issues/policy/github/workflow.js";
 export {
-  recordGitHubFeedbackSignal,
   runGitHubReview,
-  type LoggerLike,
-} from "./github-review.js";
+} from "../../review/platforms/github/workflow.js";
+export { recordGitHubFeedbackSignal } from "../../review/platforms/github/state.js";
+export type { LoggerLike } from "../../review/platforms/github/contracts.js";
 export {
   handleGitHubIssueCommentCommand,
   handleGitHubWebhookEvent,
   handlePlainGitHubWebhook,
-} from "./github-webhook.js";
+} from "./webhooks/handler.js";
 export {
   runGitHubIssuePolicyWorkflow,
   runGitHubPullRequestLifecycleWorkflow,
-} from "./github-lifecycle.js";
-export { runGitHubIssueAutoTriageWorkflow } from "./github-issue-triage.js";
+} from "../../review/platforms/github/lifecycle.js";
+export { runGitHubIssueAutoTriageWorkflow } from "../../issues/triage/github.js";

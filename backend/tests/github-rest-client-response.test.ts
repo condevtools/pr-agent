@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createRestBackedOctokit } from "../src/integrations/github/github-webhook.ts";
+import { createRestBackedOctokit } from "../src/integrations/github/webhooks/handler.ts";
 
 test("rest octokit throws when JSON response is unexpectedly empty", async () => {
   const originalFetch = globalThis.fetch;

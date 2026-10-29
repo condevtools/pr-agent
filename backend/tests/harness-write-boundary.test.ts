@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { guardGitHubOctokit } from "../src/integrations/github/github-rest-client.js";
-import { guardGitHubCommandContext } from "../src/integrations/github/github-issue-comment-command.js";
-import { gitLabApiRequest } from "../src/integrations/gitlab/gitlab-http.js";
+import { guardGitHubOctokit } from "../src/integrations/github/api/http-client.js";
+import { guardGitHubCommandContext } from "../src/commands/platforms/github/handler.js";
+import { gitLabApiRequest } from "../src/integrations/gitlab/api/http-client.js";
 import {
   buildPublicationIdentity,
   PendingPublicationError,

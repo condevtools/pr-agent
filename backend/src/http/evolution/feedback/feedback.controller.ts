@@ -1,7 +1,7 @@
 import { Body, Controller, Headers, HttpCode, Inject, Param, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
 
-import { RunApiErrorFilter } from "../../runs/runs.error-filter.js";
+import { RunApiErrorFilter } from "../../common/filters/run-api-error.filter.js";
 import { EvolutionFeedbackService } from "./feedback.service.js";
 
 @Controller("evolution/runs")

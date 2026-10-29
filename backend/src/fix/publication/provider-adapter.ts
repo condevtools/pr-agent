@@ -6,7 +6,7 @@ import {
   type PublicationAdapter, type PublicationOperation, type PublicationPayload, type PublicationRemoteResult,
 } from "../../agent-runtime/publication/publication.js";
 import { assertPublicationWriteAllowed } from "../../agent-runtime/authority/write-boundary.js";
-import type { GitHubCredentialIdentityVerifier } from "../../integrations/github/github-publication.js";
+import type { GitHubCredentialIdentityVerifier } from "../../integrations/github/publication/contracts.js";
 
 interface Change { path: string; action: "create" | "update"; contentBase64: string; contentSha256: string }
 interface FixTarget {

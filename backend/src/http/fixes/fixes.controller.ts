@@ -2,7 +2,7 @@ import { Body, Controller, Headers, HttpCode, Inject, Param, Post, Req, UseFilte
 import type { Request } from "express";
 
 import { RunApiContextService } from "../common/run-api-context.service.js";
-import { RunApiErrorFilter } from "../runs/runs.error-filter.js";
+import { RunApiErrorFilter } from "../common/filters/run-api-error.filter.js";
 import { FixesService } from "./fixes.service.js";
 
 @Controller("runs")

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { clearDuplicateRequestState } from "./support/runtime-state-test-api.ts";
-import { runGitLabReview, runGitLabWebhook } from "../src/integrations/gitlab/gitlab-review.ts";
+import { runGitLabReview } from "../src/review/platforms/gitlab/workflow.js";
+import { runGitLabWebhook } from "../src/integrations/gitlab/webhooks/adapter.js";
 
 function buildDraftMergeRequestPayload() {
   return {

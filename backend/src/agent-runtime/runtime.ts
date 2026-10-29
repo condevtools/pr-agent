@@ -11,9 +11,9 @@ import { normalizeIntegrationTarget, type IntegrationPlatform } from "./postgres
 import { PgPublicationStore, PublicationService, type PublicationScope, type PublicationOperation, type PublicationAdapter } from "./publication/publication.js";
 import { PublicationAuthorityStore, validateCredentialRef, type PublicationBinding } from "./authority/publication-authority.js";
 import { PublicationBatchCoordinator, PublicationBatchStore } from "./publication/batches.js";
-import { createRestBackedOctokit } from "../integrations/github/github-rest-client.js";
-import { createGitHubPublicationAdapter } from "../integrations/github/github-publication.js";
-import { createGitLabPublicationAdapter } from "../integrations/gitlab/gitlab-publication.js";
+import { createRestBackedOctokit } from "../integrations/github/api/http-client.js";
+import { createGitHubPublicationAdapter } from "../integrations/github/publication/adapter.js";
+import { createGitLabPublicationAdapter } from "../integrations/gitlab/publication/adapter.js";
 import { createPublicationRecoveryLoop, type PublicationRecoveryLoop } from "./publication/recovery.js";
 import { isDurablePublicationEnabled } from "./publication/mode.js";
 import { verifyGitHubCredentialIdentity } from "../integrations/github/auth/credential-identity.js";

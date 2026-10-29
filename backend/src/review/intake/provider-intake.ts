@@ -1,6 +1,6 @@
-import type { GitHubReviewRunParams } from "../../integrations/github/github-review-types.js";
-import type { GitLabReviewRunParams } from "../../integrations/gitlab/gitlab-review.js";
-import { gitLabApiRequest } from "../../integrations/gitlab/gitlab-http.js";
+import type { GitHubReviewRunParams } from "../platforms/github/contracts.js";
+import type { GitLabReviewRunParams } from "../platforms/gitlab/workflow.js";
+import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { enqueueReviewRun } from "./run-intake.js";
 import type { ReviewRunInput } from "./run-input.js";

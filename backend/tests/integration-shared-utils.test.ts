@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeChangelogContent } from "../src/commands/presentation/changelog.ts";
+import { mergeChangelogContent } from "../src/commands/presentation/changelog.js";
 import {
   buildAddDocRule,
   buildChecksQuestion,
@@ -15,10 +15,8 @@ import {
   parseYamlBooleanMaybe,
   stripYamlQuotes,
 } from "../src/core/config/yaml.ts";
-import {
-  findPotentialSecrets,
-  isLikelyPlaceholder,
-} from "../src/repository/content-safety/secret-scan.ts";
+import { findPotentialSecrets } from "../src/repository/content-safety/secret-scan.ts";
+import { isLikelyPlaceholder } from "../src/repository/content-safety/secret-scan.js";
 import { inferReviewLabels } from "../src/review/presentation/auto-labels.ts";
 import { buildSecretWarningComment } from "../src/review/rendering/secret-warning.ts";
 import {

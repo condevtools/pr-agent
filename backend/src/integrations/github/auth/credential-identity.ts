@@ -1,4 +1,4 @@
-import type { MinimalGitHubOctokit } from "../github-review-types.js";
+import type { MinimalGitHubOctokit } from "../api/types.js";
 
 export interface GitHubCredentialIdentity {
   actorId: number;

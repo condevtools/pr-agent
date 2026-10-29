@@ -3,8 +3,8 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { GithubWebhookController } from "../src/http/webhooks/github/github.webhook.controller.ts";
-import { GitlabWebhookController } from "../src/http/webhooks/gitlab/gitlab.webhook.controller.ts";
+import { GithubWebhookController } from "../src/http/webhooks/github/github-webhook.controller.ts";
+import { GitlabWebhookController } from "../src/http/webhooks/gitlab/gitlab-webhook.controller.ts";
 import {
   flushWebhookStoreWrites,
   listStoredWebhookEvents,

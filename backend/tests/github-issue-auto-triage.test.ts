@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleGitHubWebhookEvent } from "../src/integrations/github/github-webhook.ts";
+import { handleGitHubWebhookEvent } from "../src/integrations/github/webhooks/handler.ts";
 import { clearDuplicateRequestState } from "./support/runtime-state-test-api.ts";
 
 const logger = {

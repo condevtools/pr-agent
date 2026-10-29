@@ -201,63 +201,30 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    subgraph NestJS 模块
-        APP[AppModule]
-        GH[GithubModule]
-        GL[GitlabModule]
-        GHA[GithubAppModule]
-    end
-
-    subgraph 集成层
-        GHR[github-review]
-        GHW[github-webhook]
-        GHP[github-policy]
-        GHC[github-content]
-        GLR[gitlab-review]
-        NTF[notification]
-    end
-
-    subgraph 核心层
-        REV[ai-reviewer]
-        PAT[patch parser]
-        RPT[report-renderer]
-        POL[review-policy]
-        DDP[dedupe]
-        HTTP[http client]
-        STA[runtime-state]
-        SEC[secret-patterns]
-        CACHE[cache]
-    end
-
-    APP --> GH
-    APP --> GL
-    APP --> GHA
-
-    GH --> GHR
-    GH --> GHW
-    GHA --> GHR
-
-    GHR --> GHP
-    GHR --> GHC
-    GHR --> REV
-    GHR --> RPT
-    GHR --> NTF
-
-    GLR --> REV
-    GLR --> RPT
-    GLR --> NTF
-    GL --> GLR
-
-    REV --> PAT
-    REV --> POL
-    REV --> HTTP
-
-    GHR --> DDP
-    GLR --> DDP
-    DDP --> STA
-    GHR --> SEC
-    GLR --> SEC
-    GHP --> CACHE
+    APP[AppModule] --> HTTP[http: capability APIs]
+    APP --> BOOT[bootstrap: Probot and lifecycle]
+    HTTP --> RUN[agent-runtime]
+    HTTP --> FIX[fix]
+    HTTP --> EVO[evolution]
+    BOOT --> REV[review: standard and deep]
+    BOOT --> CMD[commands]
+    RUN --> REV
+    RUN --> FIX
+    RUN --> EVO
+    RUN --> PG[PostgreSQL]
+    REV --> MODEL[model]
+    REV --> REPO[repository]
+    REV --> INT[integrations]
+    CMD --> REV
+    CMD --> MODEL
+    CMD --> INT
+    FIX --> MODEL
+    FIX --> REPO
+    EVO --> MODEL
+    EVO --> REV
+    MODEL --> CORE[core]
+    REPO --> CORE
+    INT --> CORE
 ```
 
 ### 详细请求流
@@ -283,7 +250,7 @@ flowchart LR
         A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
     end
 
-    subgraph GHW["原生 GitHub Webhook (backend/src/integrations/github/github-webhook.ts)"]
+    subgraph GHW["原生 GitHub Webhook (backend/src/integrations/github/webhooks/handler.ts)"]
         B1["handlePlainGitHubWebhook"]
         B2["verifyWebhookSignature + payload schema"]
         B3["pull_request / issues / issue_comment / review_thread dispatch"]
@@ -291,7 +258,7 @@ flowchart LR
         B5["handleGitHubIssueCommentCommand"]
     end
 
-    subgraph GLW["GitLab Webhook (backend/src/integrations/gitlab/gitlab-review.ts)"]
+    subgraph GLW["GitLab Webhook (backend/src/integrations/gitlab/webhooks/adapter.ts)"]
         C1["runGitLabWebhook"]
         C2["verify token + payload schema"]
         C3["handleGitLabMergeRequestWebhook"]
@@ -828,7 +795,7 @@ PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
-- GitHub App 启用条件（见 `backend/src/bootstrap/github-app/github-app.bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
+- GitHub App 启用条件（见 `backend/src/bootstrap/github-app/github-app-bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
 - `docker-compose.yml` 默认挂载私钥路径为 `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`。如果本地缺少 `secrets/` 目录或 PEM 文件，`docker compose up` 会失败。
 - 建议本地预先创建：`mkdir -p secrets data`。`data` 目录通常可由 Docker 自动创建，但手动创建更可控。
 

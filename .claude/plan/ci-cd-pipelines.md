@@ -363,7 +363,7 @@ Usage:
 
 ### Step 5: Add `runGitHubCiReview()` Function
 
-**File**: `backend/src/integrations/github/github-review.ts` (修改)
+**File**: `backend/src/review/platforms/github/workflow.ts` (修改)
 
 **Description**: 新增 CI 专用入口函数，封装 Octokit 创建 + 策略加载 + review 调用
 
@@ -398,7 +398,7 @@ export async function runGitHubCiReview(params: GitHubCiReviewRunParams): Promis
 
 ### Step 6: Add `runGitLabCiReview()` Function
 
-**File**: `backend/src/integrations/gitlab/gitlab-review.ts` (修改)
+**File**: `backend/src/review/platforms/gitlab/workflow.ts` (修改)
 
 **Description**: 新增 GitLab CI 专用入口函数
 
@@ -577,9 +577,9 @@ ai_code_review:
 | `.github/workflows/release.yml` | Create | 项目自身 CD workflow (Docker build + deploy) |
 | `.gitlab-ci.yml` | Create | 项目自身 GitLab CI pipeline |
 | `backend/src/cli.ts` | **Create** | CLI 入口点（github-action / gitlab-ci 模式） |
-| `backend/src/integrations/github/github-review.ts` | **Modify** | 新增 `runGitHubCiReview()` + helper 函数 |
+| `backend/src/review/platforms/github/workflow.ts` | **Modify** | 新增 `runGitHubCiReview()` + helper 函数 |
 | `backend/src/integrations/github/index.ts` | **Modify** | 导出 `runGitHubCiReview` |
-| `backend/src/integrations/gitlab/gitlab-review.ts` | **Modify** | 新增 `runGitLabCiReview()` + helper 函数 |
+| `backend/src/review/platforms/gitlab/workflow.ts` | **Modify** | 新增 `runGitLabCiReview()` + helper 函数 |
 | `backend/src/integrations/gitlab/index.ts` | **Modify** | 导出 `runGitLabCiReview` |
 | `action.yml` | **Create** | GitHub Action 定义（供其他项目使用） |
 | `templates/gitlab-ci-review.yml` | **Create** | GitLab CI Template（供其他项目使用） |

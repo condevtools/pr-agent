@@ -39,7 +39,7 @@ flowchart LR
         E5["/health /metrics /webhook/events"]
     end
 
-    subgraph GHA["GitHub App Event Routing (src/app.ts)"]
+    subgraph GHA["GitHub App Event Routing (src/bootstrap/probot-app.ts)"]
         A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
         A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
         A3["resolveGitHubPullRequestAutoReviewPolicy"]
@@ -48,7 +48,7 @@ flowchart LR
         A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
     end
 
-    subgraph GHW["Plain GitHub Webhook (src/integrations/github/github-webhook.ts)"]
+    subgraph GHW["Plain GitHub Webhook (src/integrations/github/webhooks/handler.ts)"]
         B1["handlePlainGitHubWebhook"]
         B2["verifyWebhookSignature + payload schema"]
         B3["pull_request / issues / issue_comment / review_thread dispatch"]
@@ -56,7 +56,7 @@ flowchart LR
         B5["handleGitHubIssueCommentCommand"]
     end
 
-    subgraph GLW["GitLab Webhook (src/integrations/gitlab/gitlab-review.ts)"]
+    subgraph GLW["GitLab Webhook (src/integrations/gitlab/webhooks/adapter.ts)"]
         C1["runGitLabWebhook"]
         C2["verify token + payload schema"]
         C3["handleGitLabMergeRequestWebhook"]

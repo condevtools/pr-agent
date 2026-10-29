@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decodeGitHubFileContent } from "../src/integrations/github/github-content.ts";
+import { decodeGitHubFileContent } from "../src/integrations/github/repository/content.ts";
 
 test("decodeGitHubFileContent decodes base64 payload with line breaks", () => {
   const encoded = "aGVsbG8K\nd29ybGQ=";
