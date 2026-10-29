@@ -297,7 +297,8 @@ if (!databaseUrl) {
 function pricing(): string {
   return JSON.stringify({ version: "deep-dispatch-v1", currency: "USD", periodKey: "deep-dispatch-tests",
     tenantLimits: { inputTokens: 1_000_000, outputTokens: 1_000_000, costMicros: 0 },
-    runLimits: { inputTokens: 40_000, outputTokens: 12_000, costMicros: 0 },
+    // The 30% security partition must admit two strict-schema wire requests (~14.1k conservative bytes).
+    runLimits: { inputTokens: 48_000, outputTokens: 12_000, costMicros: 0 },
     models: { "openai-compatible:deep-dispatch-model": { rates: { inputMicrosPerMillion: 0,
       cachedInputMicrosPerMillion: 0, cacheWriteInputMicrosPerMillion: 0, outputMicrosPerMillion: 0,
       thoughtOutputMicrosPerMillion: 0, toolInputMicrosPerMillion: 0 }, maxOutputTokens: 4_096,

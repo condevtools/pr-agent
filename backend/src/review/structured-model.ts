@@ -55,10 +55,13 @@ async function generateStructured<T>(
   clientCache: OpenAIClientCache,
   request: StructuredModelRequest<T>,
 ): Promise<T> {
+  const effectiveRequest = configuration.provider === "openai-compatible"
+    ? { ...request, systemPrompt: compatibleStructuredSystemPrompt(request) }
+    : request;
   const inputBytes = Buffer.byteLength(JSON.stringify({
-    systemPrompt: request.systemPrompt,
-    prompt: request.prompt,
-    schema: request.jsonSchema,
+    systemPrompt: effectiveRequest.systemPrompt,
+    prompt: effectiveRequest.prompt,
+    schema: effectiveRequest.jsonSchema,
   }));
   if (inputBytes > request.maxInputBytes) {
     throw new Error("Structured model input exceeds the role turn limit");
@@ -81,7 +84,7 @@ async function generateStructured<T>(
         maxOutputTokens: request.maxOutputTokens,
         signal: request.signal,
       })
-      : await callOpenAIStructured(configuration, clientCache, request);
+      : await callOpenAIStructured(configuration, clientCache, effectiveRequest);
   return request.schema.parse(parsed);
 }
 
@@ -142,9 +145,7 @@ async function requestOpenAI<T>(
     temperature: 0.2,
     messages: [
       { role: "system", content: structured.systemPrompt },
-      { role: "user", content: format === "json_object"
-        ? `${structured.prompt}\n\nReturn only JSON matching the requested schema.`
-        : structured.prompt },
+      { role: "user", content: structured.prompt },
     ],
     response_format: responseFormat,
     [tokenParameter]: maxOutputTokens,
@@ -176,6 +177,11 @@ async function requestOpenAI<T>(
     },
   );
   return parseJsonFromModelText(extractModelText(response.choices?.[0]?.message?.content));
+}
+
+function compatibleStructuredSystemPrompt<T>(request: StructuredModelRequest<T>): string {
+  return `${request.systemPrompt}\n\nThe response must be only one JSON value that validates against this exact JSON Schema. `
+    + `Do not rename fields, add fields, or use tool-call wrappers.\n${JSON.stringify(request.jsonSchema)}`;
 }
 
 function normalizeUsage(usage: {

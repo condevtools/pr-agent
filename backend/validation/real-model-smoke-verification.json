@@ -1,0 +1,43 @@
+{
+  "scope": "OpenAI-compatible structured-output compatibility with the configured real gateway",
+  "status": "compatibility_verified",
+  "configuredModel": {
+    "provider": "openai-compatible",
+    "model": "claude-sonnet-5.5"
+  },
+  "modelIdentity": "Gateway-reported identifier; underlying vendor/model identity is not independently attested",
+  "beforeFix": {
+    "cases": 3,
+    "complete": 1,
+    "failure": "HTTP-success role responses used request_tool/tool/arguments instead of strict tool/request shape",
+    "physicalCalls": 9
+  },
+  "afterFix": {
+    "cases": 3,
+    "complete": 3,
+    "expectedDefectLocationsDetected": 2,
+    "cleanControlsWithoutFindings": 1,
+    "severityMismatch": "Pagination defect was high rather than the fixture medium",
+    "physicalCalls": 13,
+    "inputTokens": 111746,
+    "outputTokens": 1625
+  },
+  "checks": {
+    "unitPassed": 347,
+    "conditionalSkipped": 30,
+    "postgresPassed": 198,
+    "postgresSuites": 28,
+    "postgresFailed": 0,
+    "typescript": "passed",
+    "build": "passed",
+    "independentCodeReview": "APPROVE"
+  },
+  "limitations": [
+    "Three predeclared synthetic cases, one pass; not an independent real-PR quality evaluation",
+    "Shared production roles/tools/critic/gate executed using in-memory persistence; no durable PostgreSQL real-model Run",
+    "No genuine quality qualification, no release activation or repository writes",
+    "HARNESS_MODEL_PRICING_JSON absent; durable model execution remains blocked",
+    "Gateway-reported input usage exceeded local admission estimates; costs are not independently verified"
+  ],
+  "quality": "NOT_VERIFIED"
+}

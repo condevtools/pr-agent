@@ -94,6 +94,10 @@ test("OpenAI strict schemas require nullable optional fields and normalize null 
       location: { path: "src/a.ts", side: "new", startLine: 1, endLine: 1 },
       evidenceIds: ["evidence"], crossFileEvidenceIds: [] }] });
     assert.deepEqual(critic, { decisions: [{ candidateId: "candidate", decision: "accept", reasonCode: "supported" }] });
+    assert.deepEqual(requests[0]!.messages, [{ role: "system", content: "system" },
+      { role: "user", content: "prompt" }]);
+    assert.deepEqual(requests[1]!.messages, [{ role: "system", content: "system" },
+      { role: "user", content: "prompt" }]);
     const roleSchema = requests[0]!.response_format.json_schema;
     assert.equal(roleSchema.strict, true);
     assert.equal(roleSchema.schema.type, "object");
@@ -112,6 +116,85 @@ test("OpenAI strict schemas require nullable optional fields and normalize null 
     assertStrictObjectFields(requests[1]!.response_format.json_schema.schema);
   } finally {
     restoreEnv("OPENAI_API_KEY", originalKey);
+  }
+});
+
+test("OpenAI-compatible sends the exact schema in the system prompt for initial and fallback requests", async () => {
+  const originalCompatibleKey = process.env.OPENAI_COMPATIBLE_API_KEY;
+  const originalBaseUrl = process.env.OPENAI_BASE_URL;
+  const requests: Array<Record<string, any>> = [];
+  process.env.OPENAI_COMPATIBLE_API_KEY = "test-key";
+  process.env.OPENAI_BASE_URL = "https://compatible.invalid/v1";
+  const schema = { type: "object", properties: { ok: { type: "boolean" } },
+    required: ["ok"], additionalProperties: false };
+  const clientCache = { get: () => ({ chat: { completions: { create: async (body: Record<string, unknown>) => {
+    requests.push(body);
+    if (requests.length === 1) throw Object.assign(new Error("schema unsupported"), { status: 400 });
+    return { id: "response", model: "compatible-fixture", choices: [{ message: { content: "{\"ok\":true}" } }] };
+  } } } }) } as unknown as OpenAIClientCache;
+  try {
+    const result = await createStructuredModel({ configuration: { provider: "openai-compatible", model: "fixture" },
+      clientCache, concurrencyLimiter: createAiConcurrencyLimiter() }).generate({
+      schemaName: "compatible", jsonSchema: schema, schema: z.object({ ok: z.boolean() }).strict(),
+      systemPrompt: "trusted system", prompt: "unchanged user prompt", role: "security", turn: 1,
+      maxInputBytes: 10_000, maxOutputTokens: 100 });
+    assert.deepEqual(result, { ok: true });
+    assert.equal(requests.length, 2);
+    for (const request of requests) {
+      assert.equal(request.messages[0].role, "system");
+      assert.match(request.messages[0].content, /only one JSON value/);
+      assert.ok(request.messages[0].content.includes(JSON.stringify(schema)));
+      assert.deepEqual(request.messages[1], { role: "user", content: "unchanged user prompt" });
+    }
+    assert.equal(requests[0]!.response_format.type, "json_schema");
+    assert.deepEqual(requests[0]!.response_format.json_schema.schema, schema);
+    assert.equal(requests[1]!.response_format.type, "json_object");
+  } finally {
+    restoreEnv("OPENAI_COMPATIBLE_API_KEY", originalCompatibleKey);
+    restoreEnv("OPENAI_BASE_URL", originalBaseUrl);
+  }
+});
+
+test("OpenAI-compatible rejects invalid wrapper responses after schema prompting", async () => {
+  const originalCompatibleKey = process.env.OPENAI_COMPATIBLE_API_KEY;
+  const originalBaseUrl = process.env.OPENAI_BASE_URL;
+  process.env.OPENAI_COMPATIBLE_API_KEY = "test-key";
+  process.env.OPENAI_BASE_URL = "https://compatible.invalid/v1";
+  const clientCache = { get: () => ({ chat: { completions: { create: async () => ({ id: "response", model: "fixture",
+    choices: [{ message: { content: JSON.stringify({ action: "request_tool", tool: "read_file_range",
+      arguments: { path: "src/a.ts" } }) } }] }) } } }) } as unknown as OpenAIClientCache;
+  try {
+    const model = createStructuredModel({ configuration: { provider: "openai-compatible", model: "fixture" },
+      clientCache, concurrencyLimiter: createAiConcurrencyLimiter() });
+    await assert.rejects(model.generate({ schemaName: "role",
+      jsonSchema: deepRoleTurnJsonSchema as unknown as Record<string, unknown>, schema: deepRoleTurnResponseSchema,
+      systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
+      maxInputBytes: 100_000, maxOutputTokens: 100 }), z.ZodError);
+  } finally {
+    restoreEnv("OPENAI_COMPATIBLE_API_KEY", originalCompatibleKey);
+    restoreEnv("OPENAI_BASE_URL", originalBaseUrl);
+  }
+});
+
+test("OpenAI-compatible bounds the augmented schema system prompt before provider I/O", async () => {
+  const originalCompatibleKey = process.env.OPENAI_COMPATIBLE_API_KEY;
+  const originalBaseUrl = process.env.OPENAI_BASE_URL;
+  let calls = 0;
+  process.env.OPENAI_COMPATIBLE_API_KEY = "test-key";
+  process.env.OPENAI_BASE_URL = "https://compatible.invalid/v1";
+  const clientCache = { get: () => ({ chat: { completions: { create: async () => {
+    calls += 1; throw new Error("must not run");
+  } } } }) } as unknown as OpenAIClientCache;
+  try {
+    const model = createStructuredModel({ configuration: { provider: "openai-compatible", model: "fixture" },
+      clientCache, concurrencyLimiter: createAiConcurrencyLimiter() });
+    await assert.rejects(model.generate({ schemaName: "bounded", jsonSchema: { type: "object" },
+      schema: z.object({}).strict(), systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
+      maxInputBytes: 100, maxOutputTokens: 10 }), /input exceeds the role turn limit/);
+    assert.equal(calls, 0);
+  } finally {
+    restoreEnv("OPENAI_COMPATIBLE_API_KEY", originalCompatibleKey);
+    restoreEnv("OPENAI_BASE_URL", originalBaseUrl);
   }
 });
 
