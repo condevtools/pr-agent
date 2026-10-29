@@ -34,6 +34,15 @@ try {
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(
           uuid, uuid, text, text, text, bigint) TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO pr_agent_app;
+        GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
+          pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO pr_agent_app;
+        GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.agent_steps,
+          pr_agent_harness.step_attempts, pr_agent_harness.tool_calls,
+          pr_agent_harness.model_calls, pr_agent_harness.tenant_budget_accounts,
+          pr_agent_harness.run_budget_envelopes, pr_agent_harness.model_budget_reservations TO pr_agent_app;
+        GRANT SELECT, INSERT ON pr_agent_harness.checkpoints,
+          pr_agent_harness.run_publication_batches, pr_agent_harness.dead_letter_jobs,
+          pr_agent_harness.usage_records, pr_agent_harness.model_pricing_snapshots TO pr_agent_app;
     `);
     console.log("Harness migrations applied and runtime grants configured");
   } else if (command === "bind") {

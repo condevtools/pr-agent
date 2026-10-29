@@ -5,3 +5,8 @@ npm-debug.log
 dist
 .DS_Store
 README.md
+.git
+.codex
+.omx
+secrets
+data

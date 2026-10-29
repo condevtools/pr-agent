@@ -4,6 +4,8 @@ import type { PoolClient } from "pg";
 
 import { HarnessDatabase } from "./postgres/database.js";
 import { normalizeIntegrationTarget } from "./postgres/run-store.js";
+import { assertRunLease } from "./run-execution-store.js";
+import type { RunLease } from "./run-contracts.js";
 import { withPublicationWriteAuthority } from "./write-boundary.js";
 
 export type PublicationPlatform = "github" | "gitlab";
@@ -41,6 +43,7 @@ export interface PublicationRequest {
   scope: PublicationScope;
   slot: string;
   payload: Record<string, unknown>;
+  executionLease?: RunLease;
 }
 
 export interface PublicationOperation {
@@ -98,6 +101,7 @@ export interface PreparedOperationInput {
   payload: PublicationPayload;
   scope: PublicationScope;
   slot: string;
+  executionLease?: RunLease;
 }
 
 export type PreparedPublication =
@@ -437,7 +441,45 @@ export class PgPublicationStore implements PublicationStore {
 
   async prepareAndClaim(input: PreparedOperationInput): Promise<PreparedPublication> {
     return this.db.transaction(input.scope.tenantId, async (client) => {
-      await preparePublicationInTransaction(client, input);
+      const initial = await selectOperation(client, input.scope.tenantId, input.businessOperationId);
+      const initialLinks = await linkedRunIds(client, input.scope.tenantId, input.businessOperationId);
+      let runLeaseLocked = false;
+      if ((initial === undefined || initial.status === "prepared") && input.executionLease) {
+        validateExecutionLease(input, input.executionLease);
+        await assertRunLease(client, input.executionLease, { lock: "update" });
+        runLeaseLocked = true;
+      }
+      if (initial?.status === "prepared" && initialLinks.length > 0) {
+        assertLeaseMatchesLinkedRun(input, initialLinks);
+      }
+
+      const operationBeforeClaim = await preparePublicationInTransaction(client, input);
+      if (operationBeforeClaim.status === "succeeded") {
+        return { action: "reuse", operation: operationBeforeClaim };
+      }
+      if (operationBeforeClaim.status !== "prepared" && isUnresolved(operationBeforeClaim.status)) {
+        return { action: "reconcile", operation: operationBeforeClaim };
+      }
+      if (operationBeforeClaim.status === "failed_definite"
+          || operationBeforeClaim.status === "cancelled") {
+        throw terminalFailure(operationBeforeClaim);
+      }
+      if (operationBeforeClaim.status !== "prepared") {
+        throw new PublicationSlotConflictError(
+          operationBeforeClaim.businessOperationId,
+          operationBeforeClaim.status,
+        );
+      }
+      const finalLinks = await linkedRunIds(client, input.scope.tenantId, input.businessOperationId);
+      if (finalLinks.length > 0) {
+        assertLeaseMatchesLinkedRun(input, finalLinks);
+        if (!runLeaseLocked) {
+          throw new Error("Run-linked publication dispatch was not fenced before operation locking");
+        }
+      }
+      if (runLeaseLocked) {
+        await assertRunLease(client, input.executionLease!, { lock: "update" });
+      }
 
       const claimed = await client.query<PublicationRow>(
         `
@@ -807,7 +849,43 @@ export function buildPublicationIdentity(request: PublicationRequest): PreparedO
     payload,
     scope,
     slot,
+    executionLease: request.executionLease,
   };
+}
+
+function validateExecutionLease(input: PreparedOperationInput, lease: RunLease): void {
+  if (lease.tenantId !== input.scope.tenantId
+      || lease.integrationId !== input.scope.integrationId
+      || lease.authorityGeneration !== input.scope.authorityGeneration
+      || lease.headSha !== input.scope.revision) {
+    throw new Error("publication execution lease does not match the frozen operation scope");
+  }
+}
+
+function assertLeaseMatchesLinkedRun(input: PreparedOperationInput, runIds: readonly string[]): void {
+  const lease = input.executionLease;
+  if (!lease) throw new Error("Run-linked publication dispatch requires an active Run lease");
+  validateExecutionLease(input, lease);
+  if (!runIds.includes(lease.runId)) {
+    throw new Error("publication execution lease is not linked to this operation");
+  }
+}
+
+async function linkedRunIds(
+  client: PoolClient,
+  tenantId: string,
+  businessOperationId: string,
+): Promise<string[]> {
+  const result = await client.query<{ run_id: string }>(
+    `SELECT DISTINCT rpb.run_id
+     FROM pr_agent_harness.publication_batch_operations pbo
+     JOIN pr_agent_harness.run_publication_batches rpb
+       ON rpb.tenant_id=pbo.tenant_id AND rpb.batch_id=pbo.batch_id
+     WHERE pbo.tenant_id=$1 AND pbo.business_operation_id=$2
+     ORDER BY rpb.run_id`,
+    [tenantId, businessOperationId],
+  );
+  return result.rows.map(({ run_id }) => run_id);
 }
 
 function normalizeScope(scope: PublicationScope): PublicationScope {

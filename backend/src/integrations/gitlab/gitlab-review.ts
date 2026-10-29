@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { assertReviewRunActive, assertReviewRunRevision, currentReviewRunLease, durableReviewAnalysis, durableReviewCollection } from "../../harness/review-run-context.js";
+import { shouldQueueReview } from "../../harness/review-run-intake.js";
+import { enqueueGitLabReview } from "../../harness/provider-review-intake.js";
 import {
   BadWebhookRequestError,
   clearDuplicateRecord,
@@ -423,7 +426,9 @@ interface GitLabCollectedContext extends GitLabCommentTarget {
   mrUrl: string;
 }
 
-interface GitLabReviewRunParams {
+export interface GitLabReviewRunParams {
+  sourceKey?: string;
+  sourceHash?: string;
   payload: GitLabMrWebhookBody;
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
@@ -862,7 +867,7 @@ export async function runGitLabWebhook(params: {
 
 export async function runGitLabReview(
   params: GitLabReviewRunParams,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; runId?: string }> {
   const {
     payload,
     headers,
@@ -904,8 +909,14 @@ export async function runGitLabReview(
     throw new Error("GitLab review resolved a non-GitLab publication binding");
   }
   let activePublicationRuntime = resolvedPublicationRuntime as GitLabPublicationRuntime | undefined;
-  const durableSourceKey = headers["x-gitlab-event-uuid"] ?? `gitlab:canonical:${stableGitLabEventHash(payload)}`;
-  const durableSourceHash = stableGitLabEventHash({ payload, mode, trigger });
+  const durableSourceKey = params.sourceKey ?? headers["x-gitlab-event-uuid"] ?? `gitlab:canonical:${stableGitLabEventHash(payload)}`;
+  const durableSourceHash = params.sourceHash ?? stableGitLabEventHash({ payload, mode, trigger });
+  if (shouldQueueReview(activePublicationRuntime?.binding)) {
+    if (!activePublicationRuntime?.resolveCredential) throw new Error("Server publication credential resolver is required");
+    const runId = await enqueueGitLabReview(params, activePublicationRuntime.binding!,
+      { key: durableSourceKey, hash: durableSourceHash }, mode, await activePublicationRuntime.resolveCredential());
+    return { ok: true, message: "durable GitLab review queued", runId };
+  }
   if (activePublicationRuntime?.batchStore && activePublicationRuntime.batchCoordinator && activePublicationRuntime.createAdapter) {
     const existing = await activePublicationRuntime.batchStore.findBySource(
       { ...activePublicationRuntime.scope, target: String(reviewTarget.mrId), revision: "source-lookup" },
@@ -913,7 +924,8 @@ export async function runGitLabReview(
       durableSourceHash,
     );
     if (existing) {
-      assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter));
+      await assertReviewRunActive();
+      assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter, currentReviewRunLease()));
       return { ok: true, message: "existing durable publication batch resumed" };
     }
   }
@@ -961,15 +973,16 @@ export async function runGitLabReview(
 
   try {
     const feedbackSignals = loadGitLabFeedbackSignals(payload.project.id);
-    const collected = await collectGitLabMergeRequestContext({
+    const collected = await durableReviewCollection("gitlab.collect_context.v1", () => collectGitLabMergeRequestContext({
       payload,
       gitlabToken,
       baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
-      incrementalBaseSha,
+      incrementalBaseSha: currentReviewRunLease() ? undefined : incrementalBaseSha,
       customRules,
       includeCiChecks,
       feedbackSignals,
-    });
+    }));
+    assertReviewRunRevision(collected.diffRefs.baseSha, collected.diffRefs.headSha);
     const batch = await prepareGitLabPublicationBatch({
       runtime: activePublicationRuntime,
       mrId: collected.mrId,
@@ -1026,7 +1039,7 @@ export async function runGitLabReview(
       return { ok: true, message: "no textual diff to review" };
     }
 
-    const result = await analyzePullRequest(collected.input);
+    const result = await durableReviewAnalysis(collected.input, () => analyzePullRequest(collected.input));
     if (mode === "comment") {
       await publishGitLabLineComments(
         gitlabToken,
@@ -1282,7 +1295,8 @@ async function prepareGitLabPublicationBatch(params: {
   const scope = { ...runtime.scope, target: String(params.mrId), revision: params.revision };
   const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
   if (existing) {
-    assertGitLabBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter));
+    await assertReviewRunActive();
+    assertGitLabBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter, currentReviewRunLease()));
     return { runtime, resumed: true, finish: async () => undefined };
   }
   const operations: Array<{ slot: string; payload: Record<string, unknown> }> = [];
@@ -1292,8 +1306,9 @@ async function prepareGitLabPublicationBatch(params: {
     resumed: false,
     finish: async () => {
       if (operations.length === 0) throw new Error("durable GitLab review produced no frozen publication operations");
-      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations });
-      assertGitLabBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!));
+      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations, runLease: currentReviewRunLease() });
+      await assertReviewRunActive();
+      assertGitLabBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!, currentReviewRunLease()));
     },
   };
 }
@@ -2301,6 +2316,18 @@ async function collectGitLabMergeRequestContext(params: {
   }
 
   const changesResponse = (await response.json()) as GitLabChangesResponse;
+  if (!changesResponse.diff_refs || !Array.isArray(changesResponse.changes)) {
+    throw new Error("GitLab changes response omitted diff refs or the frozen change list");
+  }
+  const durableLease = currentReviewRunLease();
+  if (durableLease) {
+    // GitLab returns diff refs and changes in one response, so validate the
+    // immutable Run revision before interpreting any returned patch.
+    assertReviewRunRevision(
+      changesResponse.diff_refs.base_sha,
+      changesResponse.diff_refs.head_sha,
+    );
+  }
   let sourceChanges = changesResponse.changes;
   if (
     incrementalBaseSha &&
@@ -2341,7 +2368,7 @@ async function collectGitLabMergeRequestContext(params: {
     baseUrl,
     projectId,
     gitlabToken,
-    ref: payload.object_attributes.target_branch,
+    ref: durableLease?.baseSha ?? payload.object_attributes.target_branch,
   });
   const ciChecks = includeCiChecks
     ? await loadGitLabHeadChecks({

@@ -13,12 +13,16 @@ export interface PublicationBinding {
   generation: number;
   version: number;
   state: "blocked" | "active" | "draining";
+  reviewExecutionMode?: "legacy_sync" | "harness_async";
+  executionModeGeneration?: number;
 }
 
 interface BindingRow {
   id: string; tenant_id: string; platform: IntegrationPlatform; origin: string; repository: string;
   provider_repository_id: string | null; provider_actor_id: string | null; credential_ref: string | null;
   publication_generation: string; authority_version: string; publication_state: PublicationBinding["state"];
+  review_execution_mode?: "legacy_sync" | "harness_async";
+  execution_mode_generation?: string;
 }
 
 /** Administrative enrollment and cutover; runtime credentials have SELECT permission only. */
@@ -164,5 +168,7 @@ function mapBinding(row: BindingRow): PublicationBinding {
     id: row.id, tenantId: row.tenant_id, platform: row.platform, origin: row.origin, repository: row.repository,
     providerRepositoryId, providerActorId, credentialRef: row.credential_ref ?? "",
     generation: Number(row.publication_generation), version: Number(row.authority_version), state: row.publication_state,
+    reviewExecutionMode: row.review_execution_mode ?? "legacy_sync",
+    executionModeGeneration: Number(row.execution_mode_generation ?? 0),
   };
 }

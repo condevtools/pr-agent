@@ -2,7 +2,7 @@ import { Injectable, Logger, OnApplicationShutdown } from "@nestjs/common";
 
 import { beginHttpShutdown } from "#core";
 import { beginAiShutdown, drainAiRequests } from "#review";
-import { closeHarnessRuntime, stopHarnessRecovery } from "../../harness/runtime.js";
+import { closeHarnessRuntime, stopHarnessRecovery, stopReviewRunWorker } from "../../harness/runtime.js";
 
 @Injectable()
 export class ShutdownCoordinatorService implements OnApplicationShutdown {
@@ -10,6 +10,7 @@ export class ShutdownCoordinatorService implements OnApplicationShutdown {
 
   async onApplicationShutdown(signal?: string): Promise<void> {
     beginHttpShutdown();
+    await stopReviewRunWorker();
     await stopHarnessRecovery();
     beginAiShutdown();
     const drained = await drainAiRequests();

@@ -1,6 +1,9 @@
 import type { PoolClient } from "pg";
 
 import { HarnessDatabase } from "./postgres/database.js";
+import { assertRunLease, linkBatchAndCheckpoint } from "./run-execution-store.js";
+import type { RunLease } from "./run-contracts.js";
+import { fingerprint } from "./versions.js";
 import {
   buildPublicationIdentity,
   InactiveIntegrationBindingError,
@@ -37,6 +40,7 @@ export interface FrozenPublicationBatch {
 }
 
 export interface FreezePublicationBatchInput {
+  runLease?: RunLease;
   scope: PublicationScope;
   sourceKey: string;
   sourceHash: string;
@@ -98,6 +102,13 @@ export class PublicationBatchStore {
     const scope = identities[0]!.scope;
 
     return this.db.transaction(scope.tenantId, async (client) => {
+      if (input.runLease) {
+        if (scope.tenantId !== input.runLease.tenantId || scope.integrationId !== input.runLease.integrationId
+            || scope.revision !== input.runLease.headSha || scope.authorityGeneration !== input.runLease.authorityGeneration) {
+          throw new Error("publication batch does not belong to the executing Run");
+        }
+        await assertRunLease(client, input.runLease, { lock: "update" });
+      }
       await lockActiveAuthority(client, scope);
       const inserted = await client.query<{ id: string }>(
         `
@@ -127,6 +138,7 @@ export class PublicationBatchStore {
         if (!existing || existing.sourceHash !== sourceHash || !sameScope(existing.scope, scope)) {
           throw new PublicationBatchSourceConflictError(sourceKey, existing?.id ?? "unknown");
         }
+        if (input.runLease) await checkpointFrozenBatch(client, input.runLease, existing.id);
         return existing;
       }
 
@@ -154,6 +166,7 @@ export class PublicationBatchStore {
         );
       }
       await sealBatch(client, scope.tenantId, batchId);
+      if (input.runLease) await checkpointFrozenBatch(client, input.runLease, batchId);
       const frozen = await selectBatch(client, scope.tenantId, batchId);
       if (!frozen) throw new Error("frozen publication batch disappeared");
       return frozen;
@@ -191,6 +204,11 @@ export class PublicationBatchStore {
           WHERE tenant_id = $1 AND integration_id = $2
             AND status IN ('pending', 'waiting_reconciliation')
             AND seal_state = 'sealed'
+            AND NOT EXISTS (
+              SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
+              WHERE rpb.tenant_id=publication_batches.tenant_id
+                AND rpb.batch_id=publication_batches.id
+            )
           ORDER BY updated_at ASC, id ASC
           LIMIT $3
         `,
@@ -258,6 +276,19 @@ export class PublicationBatchStore {
   }
 }
 
+async function checkpointFrozenBatch(client: PoolClient, lease: RunLease, batchId: string): Promise<void> {
+  const row = await client.query<{ operation_set_hash: string }>(
+    "SELECT operation_set_hash FROM pr_agent_harness.publication_batches WHERE tenant_id=$1 AND id=$2 AND seal_state='sealed'",
+    [lease.tenantId, batchId],
+  );
+  const operationSetHash = row.rows[0]?.operation_set_hash;
+  if (!operationSetHash) throw new Error("frozen publication operation set is unavailable");
+  const state = { stage: "publication_frozen", batchId, operationSetHash };
+  await linkBatchAndCheckpoint(client, lease, {
+    batchId, operationSetHash, schemaVersion: 1, state, stateHash: fingerprint(state),
+  });
+}
+
 export class PublicationBatchCoordinator {
   constructor(
     private readonly store: PublicationBatchStore,
@@ -268,6 +299,7 @@ export class PublicationBatchCoordinator {
     tenantId: string,
     batchId: string,
     adapterFactory: PublicationAdapterFactory,
+    executionLease?: RunLease,
   ): Promise<FrozenPublicationBatch> {
     const batch = await this.store.load(tenantId, batchId);
     if (!batch) throw new PublicationBatchNotFoundError(batchId);
@@ -283,7 +315,7 @@ export class PublicationBatchCoordinator {
       if (operation.status === "failed_definite" || operation.status === "cancelled") break;
       try {
         const adapter = await adapterFactory(operation);
-        await this.service.publish(frozen.request, adapter);
+        await this.service.publish({ ...frozen.request, executionLease }, adapter);
       } catch (error) {
         if (
           error instanceof PendingPublicationError ||

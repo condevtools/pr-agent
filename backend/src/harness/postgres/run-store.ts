@@ -39,6 +39,13 @@ export interface CreateRunInput {
   policyVersionHash: string;
   runtimeVersionHash: string;
   input: Record<string, unknown>;
+  authorityGeneration?: number;
+  runtimeConfig?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
+  deadlineAt?: string;
+  parentRunId?: string;
+  executionModeGeneration?: number;
+  admission?: (client: PoolClient, runId: string) => Promise<void>;
 }
 
 export interface CreatedRun {
@@ -101,6 +108,7 @@ export class HarnessRunStore {
 
   async createRun(input: CreateRunInput): Promise<CreatedRun> {
     validateCreateRunInput(input);
+    const execution = normalizeRunExecutionConfig(input);
     return this.db.transaction(input.tenantId, async (client) => {
       const binding = await client.query(
         `
@@ -112,6 +120,41 @@ export class HarnessRunStore {
       );
       if (binding.rowCount !== 1) {
         throw new Error("active integration binding not found for tenant");
+      }
+      if (input.executionModeGeneration !== undefined) {
+        const duplicate = await client.query<{ integration_id: string; request_hash: string }>(
+          `SELECT integration_id,request_hash
+           FROM pr_agent_harness.agent_runs
+           WHERE tenant_id=$1 AND create_scope=$2 AND create_key=$3`,
+          [input.tenantId, input.createScope, input.createKey],
+        );
+        if (duplicate.rows[0]) {
+          if (duplicate.rows[0].integration_id !== input.integrationId
+              || duplicate.rows[0].request_hash !== input.requestHash) {
+            throw new RunCreateConflictError();
+          }
+          const resumable = await client.query<{ allowed: boolean }>(
+            `SELECT pr_agent_harness.lock_resumable_review_execution_authority(
+               $1::uuid,$2::uuid,$3::bigint,$4::bigint
+             ) AS allowed`,
+            [input.tenantId, input.integrationId, input.authorityGeneration ?? 0,
+              input.executionModeGeneration],
+          );
+          if (!resumable.rows[0]?.allowed) {
+            throw new Error("asynchronous review execution authority no longer matches the Run");
+          }
+        } else {
+          const authority = await client.query<{ allowed: boolean }>(
+            `SELECT pr_agent_harness.lock_active_review_execution_authority(
+               $1::uuid,$2::uuid,$3::bigint,$4::bigint
+             ) AS allowed`,
+            [input.tenantId, input.integrationId, input.authorityGeneration ?? 0,
+              input.executionModeGeneration],
+          );
+          if (!authority.rows[0]?.allowed) {
+            throw new Error("active asynchronous review execution authority not found");
+          }
+        }
       }
 
       const inserted = await client.query<{
@@ -126,10 +169,18 @@ export class HarnessRunStore {
             create_scope, create_key, request_hash, run_type, base_sha, head_sha,
             workflow_version_hash, prompt_version_hash, model_version_hash,
             tool_version_hash, policy_version_hash, runtime_version_hash, input_json,
-            next_event_seq
+            authority_generation, execution_mode_generation,
+            runtime_config_json, limits_json, deadline_at,
+            parent_run_id, next_event_seq
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17::jsonb, 2
+            $11, $12, $13, $14, $15, $16, $17::jsonb,
+            $18, $19, $20::jsonb, $21::jsonb,
+            CASE WHEN $22::double precision IS NOT NULL
+              THEN now() + ($22::double precision * interval '1 millisecond')
+              ELSE COALESCE($23::timestamptz, now() + interval '15 minutes')
+            END,
+            $24, 2
           )
           ON CONFLICT (tenant_id, create_scope, create_key) DO NOTHING
           RETURNING id, tenant_id, status, version
@@ -152,6 +203,13 @@ export class HarnessRunStore {
           input.policyVersionHash,
           input.runtimeVersionHash,
           JSON.stringify(input.input),
+          input.authorityGeneration ?? 0,
+          input.executionModeGeneration ?? 0,
+          JSON.stringify(execution.runtimeConfig),
+          JSON.stringify(execution.limits),
+          execution.maxRunMs,
+          input.deadlineAt ?? null,
+          input.parentRunId ?? null,
         ],
       );
 
@@ -184,6 +242,7 @@ export class HarnessRunStore {
 
       let jobId: string;
       if (created) {
+        await input.admission?.(client, run.id);
         await client.query(
           `
             INSERT INTO pr_agent_harness.run_events
@@ -199,8 +258,10 @@ export class HarnessRunStore {
           ],
         );
         const job = await client.query<{ id: string }>(
-          `INSERT INTO pr_agent_harness.job_queue (tenant_id, run_id, job_kind) VALUES ($1, $2, 'start') RETURNING id`,
-          [input.tenantId, run.id],
+          `INSERT INTO pr_agent_harness.job_queue
+             (tenant_id,run_id,job_kind,max_attempts)
+           VALUES ($1,$2,'start',$3) RETURNING id`,
+          [input.tenantId, run.id, execution.maxJobAttempts],
         );
         jobId = requiredRow(job.rows[0], "created run job").id;
         await client.query(
@@ -315,6 +376,70 @@ function validateCreateRunInput(input: CreateRunInput): void {
   if (required.some((value) => !value.trim())) {
     throw new Error("run identity and revision fields must be non-empty");
   }
+  for (const [name, value] of [
+    ["authority generation", input.authorityGeneration],
+    ["execution mode generation", input.executionModeGeneration],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new Error(`${name} must be a non-negative safe integer`);
+    }
+  }
+  if (input.executionModeGeneration !== undefined
+      && (input.executionModeGeneration === 0 || !input.authorityGeneration)) {
+    throw new Error("asynchronous Run creation requires positive authority generations");
+  }
+  if (input.deadlineAt !== undefined && Number.isNaN(Date.parse(input.deadlineAt))) {
+    throw new Error("run deadline must be an ISO-compatible timestamp");
+  }
+  if (input.executionModeGeneration !== undefined && input.deadlineAt !== undefined) {
+    throw new Error("asynchronous Run deadlines must use runtimeConfig.maxRunMs");
+  }
+}
+
+function normalizeRunExecutionConfig(input: CreateRunInput): {
+  runtimeConfig: Record<string, unknown>;
+  limits: Record<string, unknown>;
+  maxRunMs: number | null;
+  maxJobAttempts: number;
+} {
+  const runtimeConfig = {
+    pollMs: 1_000,
+    leaseTtlMs: 60_000,
+    heartbeatMs: 15_000,
+    sweeperMs: 5_000,
+    maxRunMs: 15 * 60_000,
+    maxJobAttempts: 3,
+    ...input.runtimeConfig,
+  };
+  const limits = { maxStepAttempts: 3, ...input.limits };
+  const maxRunMs = input.deadlineAt === undefined
+    ? positiveConfigInteger(runtimeConfig.maxRunMs, "runtimeConfig.maxRunMs")
+    : null;
+  const runtimeAttempts = optionalConfigInteger(
+    input.runtimeConfig?.maxJobAttempts,
+    "runtimeConfig.maxJobAttempts",
+  );
+  const limitAttempts = optionalConfigInteger(input.limits?.maxJobAttempts, "limits.maxJobAttempts");
+  if (runtimeAttempts !== undefined && limitAttempts !== undefined
+      && runtimeAttempts !== limitAttempts) {
+    throw new Error("runtimeConfig.maxJobAttempts and limits.maxJobAttempts must match");
+  }
+  const maxJobAttempts = runtimeAttempts ?? limitAttempts ?? 3;
+  runtimeConfig.maxJobAttempts = maxJobAttempts;
+  limits.maxStepAttempts = positiveConfigInteger(limits.maxStepAttempts, "limits.maxStepAttempts");
+  return { runtimeConfig, limits, maxRunMs, maxJobAttempts };
+}
+
+function optionalConfigInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  return positiveConfigInteger(value, name);
+}
+
+function positiveConfigInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  return value;
 }
 
 function requiredRow<T>(row: T | undefined, description: string): T {

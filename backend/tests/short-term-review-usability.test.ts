@@ -1400,7 +1400,7 @@ test("github pull files pagination marks truncated at 20 full pages and appends 
     assert.equal(truncated, true);
 
     const body = maybeAppendGitHubFilesTruncatedWarning("## report", truncated);
-    assert.match(body, /2000/);
+    assert.match(body, /API/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1806,8 +1806,8 @@ test("localizeText falls back safely for extended locales", () => {
 
 test("github truncated warning supports english locale", () => {
   const body = appendGitHubFilesTruncatedWarning("## report", "en");
-  assert.match(body, /File listing reached the hard limit/i);
-  assert.match(body, /2000 files/i);
+  assert.match(body, /File listing reached the API retrieval limit/i);
+  assert.match(body, /may not cover all changed files/i);
 });
 
 test("issue comment markdown localizes table headers and risk label in english", () => {

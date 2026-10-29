@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { assertReviewRunActive, assertReviewRunRevision, currentReviewRunLease, durableReviewAnalysis, durableReviewCollection } from "../../harness/review-run-context.js";
+import { shouldQueueReview } from "../../harness/review-run-intake.js";
+import { enqueueGitHubReview } from "../../harness/provider-review-intake.js";
 import {
   clearDuplicateRecord,
   ensureError,
@@ -130,8 +133,8 @@ const GITHUB_INCREMENTAL_STATE_SCOPE = "github-incremental-head";
 const GITHUB_FEEDBACK_SIGNAL_SCOPE = "github-feedback-signals";
 const GITHUB_GUIDELINE_CACHE_SCOPE = "github-process-guidelines";
 const GITHUB_PULL_FILES_TRUNCATED_WARNING = {
-  zh: "⚠️ 文件列表拉取达到上限（最多 20 页 * 100 = 2000 个文件），当前评审结果可能未覆盖全部变更。",
-  en: "⚠️ File listing reached the hard limit (20 pages * 100 = 2000 files); this review may not cover all changed files.",
+  zh: "⚠️ 文件列表达到 API 的读取上限，当前评审结果可能未覆盖全部变更。",
+  en: "⚠️ File listing reached the API retrieval limit; this review may not cover all changed files.",
 } as const;
 
 export function resolveGitHubPatchCharLimits(): {
@@ -318,6 +321,12 @@ export async function runGitHubReview(
   let activePublicationRuntime = resolvedPublicationRuntime as GitHubPublicationRuntime | undefined;
   const durableSourceKey = sourceKey;
   const durableSourceHash = sourceHash;
+  if (shouldQueueReview(activePublicationRuntime?.binding)) {
+    const runId = await enqueueGitHubReview(params, activePublicationRuntime.binding!);
+    params.onQueued?.(runId);
+    context.log.info({ runId }, "Durable GitHub review queued");
+    return;
+  }
   if (activePublicationRuntime?.batchStore && activePublicationRuntime.batchCoordinator && activePublicationRuntime.createAdapter) {
     if (!durableSourceKey || !durableSourceHash) throw new Error("durable GitHub review requires an authenticated source key and hash");
     const existing = await activePublicationRuntime.batchStore.findBySource(
@@ -326,7 +335,8 @@ export async function runGitHubReview(
       durableSourceHash,
     );
     if (existing) {
-      assertGitHubBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter));
+      await assertReviewRunActive();
+      assertGitHubBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter, currentReviewRunLease()));
       return;
     }
   }
@@ -410,17 +420,18 @@ export async function runGitHubReview(
   }
 
   try {
-    const collected = await collectGitHubPullRequestContext({
+    const collected = await durableReviewCollection("github.collect_context.v1", () => collectGitHubPullRequestContext({
       octokit: context.octokit,
       owner,
       repo,
       pullNumber,
-      incrementalBaseSha,
+      incrementalBaseSha: currentReviewRunLease() ? undefined : incrementalBaseSha,
       customRules,
       includeCiChecks,
       feedbackSignals,
       pullSummary: preloadedPullSummary,
-    });
+    }));
+    assertReviewRunRevision(collected.baseSha, collected.headSha);
     const batch = await prepareGitHubPublicationBatch({
       runtime: activePublicationRuntime,
       pullNumber,
@@ -466,7 +477,7 @@ export async function runGitHubReview(
       return;
     }
 
-    const reviewResult = await analyzePullRequest(collected.input);
+    const reviewResult = await durableReviewAnalysis(collected.input, () => analyzePullRequest(collected.input));
 
     if (mode === "comment") {
       const posted = await publishGitHubLineComments(
@@ -800,7 +811,8 @@ async function prepareGitHubPublicationBatch(params: {
   const scope = { ...runtime.scope, target: String(params.pullNumber), revision: params.revision };
   const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
   if (existing) {
-    assertGitHubBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter));
+    await assertReviewRunActive();
+    assertGitHubBatchSucceeded(await runtime.batchCoordinator.execute(scope.tenantId, existing.id, runtime.createAdapter, currentReviewRunLease()));
     return { runtime, resumed: true, finish: async () => undefined };
   }
   const operations: Array<{ slot: string; payload: Record<string, unknown> }> = [];
@@ -810,8 +822,9 @@ async function prepareGitHubPublicationBatch(params: {
     resumed: false,
     finish: async () => {
       if (operations.length === 0) throw new Error("durable GitHub review produced no frozen publication operations");
-      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations });
-      assertGitHubBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!));
+      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations, runLease: currentReviewRunLease() });
+      await assertReviewRunActive();
+      assertGitHubBatchSucceeded(await runtime.batchCoordinator!.execute(scope.tenantId, frozen.id, runtime.createAdapter!, currentReviewRunLease()));
     },
   };
 }
@@ -958,9 +971,32 @@ async function collectGitHubPullRequestContext(params: {
         pull_number: pullNumber,
       })
     ).data;
+  const durableLease = currentReviewRunLease();
+  if (durableLease) {
+    // The PR metadata is a freshness check only. All durable reads below are
+    // pinned to the immutable revision accepted at Run intake.
+    assertReviewRunRevision(pr.base.sha, pr.head.sha);
+  }
   let files: GitHubPullFile[];
   let filesTruncated = false;
-  if (incrementalBaseSha && incrementalBaseSha !== pr.head.sha) {
+  if (durableLease) {
+    if (!octokit.repos.compareCommits) {
+      throw new Error("Durable GitHub review requires compareCommits support");
+    }
+    const compared = await octokit.repos.compareCommits({
+      owner,
+      repo,
+      base: durableLease.baseSha,
+      head: durableLease.headSha,
+    });
+    if (!Array.isArray(compared.data.files)) {
+      throw new Error("GitHub compare response omitted the frozen file list");
+    }
+    files = compared.data.files;
+    // GitHub documents a hard maximum of 300 files for the entire comparison.
+    // Exactly 300 is therefore conservatively treated as potentially truncated.
+    filesTruncated = files.length >= 300;
+  } else if (incrementalBaseSha && incrementalBaseSha !== pr.head.sha) {
     const incrementalResult = await loadIncrementalPullFiles({
       octokit,
       owner,
@@ -1002,16 +1038,18 @@ async function collectGitHubPullRequestContext(params: {
     shouldIncludeFile: (newPath) => isReviewTargetFile(newPath, "github"),
   });
 
+  const usesFrozenComparison = Boolean(durableLease) ||
+    Boolean(incrementalBaseSha && incrementalBaseSha !== pr.head.sha);
   const promptAdditions =
-    incrementalBaseSha && incrementalBaseSha !== pr.head.sha
+    usesFrozenComparison
       ? changedFiles.reduce((sum, item) => sum + Math.max(0, item.additions), 0)
       : pr.additions;
   const promptDeletions =
-    incrementalBaseSha && incrementalBaseSha !== pr.head.sha
+    usesFrozenComparison
       ? changedFiles.reduce((sum, item) => sum + Math.max(0, item.deletions), 0)
       : pr.deletions;
   const changedFilesCount =
-    incrementalBaseSha && incrementalBaseSha !== pr.head.sha
+    usesFrozenComparison
       ? changedFiles.length
       : pr.changed_files;
 
@@ -1019,14 +1057,14 @@ async function collectGitHubPullRequestContext(params: {
     octokit,
     owner,
     repo,
-    ref: pr.base.ref,
+    ref: durableLease?.baseSha ?? pr.base.ref,
   });
   const ciChecks = includeCiChecks
     ? await loadHeadCheckRuns({
         octokit,
         owner,
         repo,
-        headSha: pr.head.sha,
+        headSha: durableLease?.headSha ?? pr.head.sha,
       })
     : [];
 

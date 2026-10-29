@@ -209,7 +209,7 @@ export async function handleGitHubWebhookEvent(params: {
 
 async function handlePullRequestEvent(
   params: PlainGitHubWebhookEventHandlerParams,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; runId?: string }> {
   const payload = parsePayload(
     pullRequestWebhookPayloadSchema,
     params.payload,
@@ -229,6 +229,7 @@ async function handlePullRequestEvent(
     repository: `${owner}/${repo}`,
   });
   if (durableRuntime && (action === "opened" || action === "edited" || action === "synchronize" || (action === "closed" && payload.pull_request?.merged))) {
+    let queuedRunId: string | undefined;
     const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
       context,
       baseRef: payload.pull_request.base?.ref ?? payload.repository.default_branch,
@@ -241,6 +242,7 @@ async function handlePullRequestEvent(
       publicationRuntime: durableRuntime as never,
       sourceKey: params.deliveryId ? `github:delivery:${params.deliveryId}` : undefined,
       sourceHash: params.sourceHash,
+      onQueued: (runId) => { queuedRunId = runId; },
       customRules: reviewBehavior.customRules,
       includeCiChecks: reviewBehavior.includeCiChecks,
       enableSecretScan: reviewBehavior.secretScanEnabled,
@@ -248,7 +250,8 @@ async function handlePullRequestEvent(
       enableAutoLabel: reviewBehavior.autoLabelEnabled,
       throwOnError: true,
     });
-    return { ok: true, message: "durable pull_request review triggered" };
+    return { ok: true, message: queuedRunId ? "durable pull_request review queued" : "durable pull_request review triggered",
+      ...(queuedRunId ? { runId: queuedRunId } : {}) };
   }
   if (action === "closed" && payload.pull_request?.merged) {
     const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({

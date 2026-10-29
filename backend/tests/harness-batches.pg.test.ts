@@ -11,6 +11,7 @@ import {
   PublicationBatchStore,
 } from "../src/harness/publication-batches.js";
 import {
+  buildPublicationIdentity,
   PgPublicationStore,
   PublicationDefiniteFailureError,
   PublicationService,
@@ -22,6 +23,8 @@ import {
 import { HarnessDatabase } from "../src/harness/postgres/database.js";
 import { migrateHarness } from "../src/harness/postgres/migrations.js";
 import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
+import { RunExecutionStore } from "../src/harness/run-execution-store.js";
+import type { RunLease } from "../src/harness/run-contracts.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -54,6 +57,8 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots, pr_agent_harness.publication_batches TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, DELETE ON pr_agent_harness.publication_batch_operations TO ${roleName}`);
+    await adminPool.query(`GRANT SELECT,UPDATE ON pr_agent_harness.agent_runs,pr_agent_harness.job_queue TO ${roleName}`);
+    await adminPool.query(`GRANT SELECT,INSERT ON pr_agent_harness.checkpoints,pr_agent_harness.run_publication_batches,pr_agent_harness.run_events TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;
@@ -199,6 +204,98 @@ if (!databaseUrl) {
       (await batchStore.listRecoverable(scope.tenantId, scope.integrationId, 10)).length,
       0,
     );
+  });
+
+  test("Run-linked prepared dispatch requires its live lease and P0a recovery excludes the batch", async () => {
+    const fixture = await createRunLinkedBatch("run-fenced");
+    const coordinator = new PublicationBatchCoordinator(
+      batchStore,
+      new PublicationService(operationStore),
+    );
+    let dispatches = 0;
+    const adapters = async (): Promise<PublicationAdapter> => ({
+      dispatch: async () => ({ id: `remote-${++dispatches}` }),
+      find: async () => null,
+    });
+    assert.deepEqual(
+      await batchStore.listRecoverable(
+        fixture.scope.tenantId,
+        fixture.scope.integrationId,
+        10,
+      ),
+      [],
+    );
+    await assert.rejects(
+      coordinator.execute(fixture.scope.tenantId, fixture.batch.id, adapters),
+      /requires an active Run lease/,
+    );
+    assert.equal(dispatches, 0);
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs
+       SET lease_expires_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND id=$2`,
+      [fixture.lease.tenantId, fixture.lease.runId],
+    );
+    await assert.rejects(
+      coordinator.execute(fixture.scope.tenantId, fixture.batch.id, adapters, fixture.lease),
+      { name: "RunLeaseLostError" },
+    );
+    assert.equal(dispatches, 0);
+
+    const cancelled = await createRunLinkedBatch("run-cancelled");
+    assert.equal(
+      buildPublicationIdentity(cancelled.batch.operations[0]!.request).businessOperationId,
+      buildPublicationIdentity({
+        ...cancelled.batch.operations[0]!.request,
+        executionLease: cancelled.lease,
+      }).businessOperationId,
+    );
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs SET cancel_requested_at=now()
+       WHERE tenant_id=$1 AND id=$2`,
+      [cancelled.lease.tenantId, cancelled.lease.runId],
+    );
+    await assert.rejects(
+      coordinator.execute(cancelled.scope.tenantId, cancelled.batch.id, adapters, cancelled.lease),
+      { name: "RunLeaseLostError" },
+    );
+    assert.equal(dispatches, 0);
+  });
+
+  test("Run-linked unknown publication still reconciles without reviving the Run", async () => {
+    const fixture = await createRunLinkedBatch("run-reconcile");
+    const operationId = fixture.batch.operations[0]!.businessOperationId;
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET status='unknown',attempt_count=1,dispatched_at=now(),
+           last_error_code='response_lost',version=version+1
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.scope.tenantId, operationId],
+    );
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs
+       SET cancel_requested_at=now(),status='cancelled',lease_owner=NULL,
+           lease_expires_at=NULL,finished_at=now(),version=version+1
+       WHERE tenant_id=$1 AND id=$2`,
+      [fixture.lease.tenantId, fixture.lease.runId],
+    );
+    let dispatches = 0;
+    const result = await new PublicationBatchCoordinator(
+      batchStore,
+      new PublicationService(operationStore),
+    ).execute(fixture.scope.tenantId, fixture.batch.id, async () => ({
+      dispatch: async () => ({ id: `forbidden-${++dispatches}` }),
+      find: async () => ({ id: "reconciled-remote" }),
+    }));
+    assert.equal(result.status, "succeeded");
+    assert.equal(dispatches, 0);
+    assert.equal((await operationStore.get(fixture.scope.tenantId, operationId))?.remoteId,
+      "reconciled-remote");
+    const run = await adminPool.query<{ status: string }>(
+      "SELECT status FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
+      [fixture.lease.tenantId, fixture.lease.runId],
+    );
+    assert.equal(run.rows[0]?.status, "cancelled");
   });
 
   test("draining blocks a new freeze but preserves tenant-scoped load and resolution", async () => {
@@ -517,6 +614,58 @@ if (!databaseUrl) {
         authorityGeneration: 1,
       },
     };
+  }
+
+  async function createRunLinkedBatch(suffix: string): Promise<{
+    scope: PublicationRequest["scope"];
+    lease: RunLease;
+    batch: Awaited<ReturnType<PublicationBatchStore["freeze"]>>;
+  }> {
+    const { scope } = await createScope(suffix);
+    await adminPool.query(
+      `UPDATE pr_agent_harness.integration_bindings
+       SET review_execution_mode='harness_async',execution_mode_generation=1
+       WHERE tenant_id=$1 AND id=$2`,
+      [scope.tenantId, scope.integrationId],
+    );
+    const version = hash(`version:${suffix}`);
+    const run = await controlRunStore.createRun({
+      tenantId: scope.tenantId,
+      integrationId: scope.integrationId,
+      actorType: "service",
+      actorId: "batch-test",
+      createScope: "test:run-linked-batch:v1",
+      createKey: suffix,
+      requestHash: hash(`request:${suffix}`),
+      runType: "review",
+      baseSha: "base-sha",
+      headSha: scope.revision,
+      workflowVersionHash: version,
+      promptVersionHash: version,
+      modelVersionHash: version,
+      toolVersionHash: version,
+      policyVersionHash: version,
+      runtimeVersionHash: version,
+      input: { suffix },
+      authorityGeneration: scope.authorityGeneration,
+      executionModeGeneration: 1,
+      runtimeConfig: { maxRunMs: 60_000 },
+    });
+    const lease = await new RunExecutionStore(new HarnessDatabase(adminPool)).claim({
+      tenantId: scope.tenantId,
+      integrationId: scope.integrationId,
+      authorityGeneration: scope.authorityGeneration!,
+      executionModeGeneration: 1,
+    }, `batch-worker-${suffix}`, version);
+    assert.ok(lease);
+    const batch = await batchStore.freeze({
+      runLease: lease,
+      scope,
+      sourceKey: `webhook:${suffix}`,
+      sourceHash: hash(`source:${suffix}`),
+      operations: [{ slot: "summary", payload: { body: suffix } }],
+    });
+    return { scope, lease, batch };
   }
 }
 

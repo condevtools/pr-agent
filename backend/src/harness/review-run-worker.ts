@@ -1,0 +1,243 @@
+import { randomUUID } from "node:crypto";
+
+import type { PublicationBinding } from "./authority.js";
+import { createBudgetedModelExecutionContext, ModelBudgetExceededError, type ModelBudgetStore, type ModelExecutionPolicy } from "./model-budget-store.js";
+import { withModelExecutionContext } from "./model-execution-context.js";
+import { PendingPublicationError, PublicationDefiniteFailureError, StalePublicationError } from "./publication.js";
+import { RunCheckpointCompatibilityError, RunLeaseLostError, type RunLease } from "./run-contracts.js";
+import type { RunExecutionStore } from "./run-execution-store.js";
+import { ReviewRunRevisionChangedError, withReviewRunContext, type ReviewRunExecutionContext } from "./review-run-context.js";
+import { fingerprint, REVIEW_RUNTIME_CONFIG } from "./versions.js";
+
+interface WorkerDependencies {
+  store: RunExecutionStore;
+  budget: ModelBudgetStore;
+  bindings(): Promise<PublicationBinding[]>;
+  runtimeHash(binding: PublicationBinding): Promise<string>;
+  execute(lease: RunLease, binding: PublicationBinding): Promise<void>;
+  onError(error: unknown, runId?: string): void;
+}
+
+export class ReviewRunWorker {
+  private readonly owner = `review-worker-${randomUUID()}`;
+  private readonly active = new Map<string, { task: Promise<void>; controller: AbortController }>();
+  private timer?: NodeJS.Timeout;
+  private sweeper?: NodeJS.Timeout;
+  private polling = false;
+  private sweeping = false;
+  private stopped = false;
+
+  constructor(private readonly dependencies: WorkerDependencies, private readonly concurrency = 4) {
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+      throw new Error("Invalid Run worker concurrency");
+    }
+  }
+
+  start(): void {
+    if (this.timer) return;
+    this.stopped = false;
+    const poll = () => {
+      void this.tick().catch((error: unknown) => this.dependencies.onError(error));
+    };
+    const sweep = () => {
+      void this.sweep().catch((error: unknown) => this.dependencies.onError(error));
+    };
+    poll();
+    sweep();
+    this.timer = setInterval(poll, REVIEW_RUNTIME_CONFIG.pollMs);
+    this.sweeper = setInterval(sweep, REVIEW_RUNTIME_CONFIG.sweepMs);
+    this.timer.unref();
+    this.sweeper.unref();
+  }
+
+  async tick(): Promise<void> {
+    if (this.polling || this.stopped) return;
+    this.polling = true;
+    try {
+      for (const binding of await this.dependencies.bindings()) {
+        if (this.stopped || this.active.size >= this.concurrency) break;
+        if (binding.reviewExecutionMode !== "harness_async") continue;
+        const runtimeHash = await this.dependencies.runtimeHash(binding);
+        while (!this.stopped && this.active.size < this.concurrency) {
+          const lease = await this.dependencies.store.claim(claimBinding(binding), this.owner, runtimeHash);
+          if (!lease) break;
+          const controller = new AbortController();
+          const task = this.execute(lease, binding, controller)
+            .catch((error: unknown) => this.dependencies.onError(error, lease.runId))
+            .finally(() => {
+              if (this.active.get(lease.runId)?.controller === controller) {
+                this.active.delete(lease.runId);
+              }
+            });
+          this.active.set(lease.runId, { task, controller });
+        }
+      }
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  async sweep(): Promise<void> {
+    if (this.sweeping || this.stopped) return;
+    this.sweeping = true;
+    try {
+      for (const binding of await this.dependencies.bindings()) {
+        if (binding.reviewExecutionMode === "harness_async") {
+          await this.dependencies.store.sweep(claimBinding(binding));
+        }
+        await this.dependencies.budget.closeTerminalBudgets(binding.tenantId);
+      }
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  async drain(): Promise<void> {
+    await Promise.all([...this.active.values()].map(({ task }) => task));
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    clearInterval(this.timer);
+    clearInterval(this.sweeper);
+    this.timer = undefined;
+    this.sweeper = undefined;
+    for (const { controller } of this.active.values()) {
+      controller.abort(new Error("Run worker stopped"));
+    }
+    // In-flight database claims finish before closing the shared pool.
+    while (this.polling || this.sweeping) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    for (const { controller } of this.active.values()) {
+      controller.abort(new Error("Run worker stopped"));
+    }
+    await this.drain();
+  }
+
+  private async execute(lease: RunLease, binding: PublicationBinding, controller: AbortController): Promise<void> {
+    const store = this.dependencies.store;
+    let active = true;
+    let heartbeating = false;
+    const heartbeat = setInterval(() => {
+      if (heartbeating || !active || controller.signal.aborted) return;
+      heartbeating = true;
+      void store.heartbeat(lease).catch((error: unknown) => {
+        controller.abort(error);
+        this.dependencies.onError(error, lease.runId);
+      }).finally(() => {
+        heartbeating = false;
+      });
+    }, REVIEW_RUNTIME_CONFIG.heartbeatMs);
+    heartbeat.unref();
+
+    const assertActive = async () => {
+      if (!active || controller.signal.aborted) throw new RunLeaseLostError(lease.runId);
+      await store.withLease(lease, async () => undefined);
+    };
+    const context: ReviewRunExecutionContext = {
+      lease,
+      assertActive,
+      step: async <T>(
+        key: string,
+        kind: "tool" | "model",
+        inputHash: string,
+        action: () => Promise<T>,
+      ): Promise<T> => {
+        await assertActive();
+        const step = await store.beginStep(lease, {
+          stepKey: key,
+          kind,
+          inputHash,
+          ...(kind === "tool"
+            ? { tool: { name: key, kind: "provider_read" as const, requestHash: inputHash } }
+            : {}),
+        });
+        if (step.reused) {
+          if (!step.output || fingerprint(step.output) !== step.outputHash || !("value" in step.output)) {
+            throw new RunCheckpointCompatibilityError(lease.runId);
+          }
+          return step.output.value as T;
+        }
+        const policy = lease.runtimeConfig.modelPolicy as ModelExecutionPolicy;
+        const result = kind === "model"
+          ? await withModelExecutionContext(
+            {
+              ...createBudgetedModelExecutionContext({
+                store: this.dependencies.budget,
+                lease,
+                stepId: step.id,
+                stepAttemptId: step.attemptId,
+                policy,
+              }),
+              signal: controller.signal,
+            },
+            action,
+          )
+          : await action();
+        await assertActive();
+        const output = JSON.parse(JSON.stringify({ value: result })) as Record<string, unknown>;
+        if (Buffer.byteLength(JSON.stringify(output)) > REVIEW_RUNTIME_CONFIG.maxCheckpointBytes) {
+          throw new Error("Run checkpoint exceeds its frozen size limit");
+        }
+        const state = { stage: key, stepId: step.id, outputHash: fingerprint(output) };
+        await store.completeStep(lease, {
+          stepId: step.id,
+          attemptId: step.attemptId,
+          output,
+          outputHash: fingerprint(output),
+          checkpoint: { schemaVersion: 1, state, stateHash: fingerprint(state) },
+        });
+        return result;
+      },
+    };
+    try {
+      await store.latestCheckpoint(lease, { schemaVersion: 1, runtimeVersionHash: lease.runtimeVersionHash });
+      await withReviewRunContext(context, () => this.dependencies.execute(lease, binding));
+      await assertActive();
+      await this.dependencies.budget.closeRunBudget(lease);
+      await store.transition(lease, { to: "succeeded", outcomeCode: "review_completed" });
+    } catch (error) {
+      if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
+      if (error instanceof PendingPublicationError) {
+        await store.transition(lease, { to: "waiting_for_reconciliation", reasonCode: "publication_pending" });
+      } else if (
+        error instanceof PublicationDefiniteFailureError ||
+        error instanceof StalePublicationError ||
+        error instanceof ReviewRunRevisionChangedError ||
+        error instanceof ModelBudgetExceededError ||
+        error instanceof RunCheckpointCompatibilityError ||
+        lease.jobAttempt >= REVIEW_RUNTIME_CONFIG.maxJobAttempts
+      ) {
+        await this.dependencies.budget.closeRunBudget(lease);
+        await store.transition(lease, {
+          to: "failed",
+          reasonCode: error instanceof Error ? error.name : "review_failed",
+        });
+      } else {
+        await store.transition(lease, {
+          to: "retry_wait",
+          reasonCode: error instanceof Error ? error.name : "review_retry",
+          retryDelayMs: 1_000,
+        });
+      }
+      this.dependencies.onError(error, lease.runId);
+    } finally {
+      active = false;
+      controller.abort();
+      clearInterval(heartbeat);
+      while (heartbeating) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  }
+}
+
+function claimBinding(binding: PublicationBinding) {
+  return {
+    tenantId: binding.tenantId,
+    integrationId: binding.id,
+    authorityGeneration: binding.generation,
+    executionModeGeneration: binding.executionModeGeneration ?? 0,
+  };
+}

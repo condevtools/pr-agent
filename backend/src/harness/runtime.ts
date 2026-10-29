@@ -12,6 +12,12 @@ import { createGitLabPublicationAdapter } from "../integrations/gitlab/gitlab-pu
 import { createPublicationRecoveryLoop, type PublicationRecoveryLoop } from "./recovery.js";
 import { isDurablePublicationEnabled } from "./publication-mode.js";
 import { verifyGitHubCredentialIdentity } from "./github-credential-identity.js";
+import { RunExecutionStore } from "./run-execution-store.js";
+import { getModelExecutionPolicy, ModelBudgetStore } from "./model-budget-store.js";
+import { ReviewRunWorker } from "./review-run-worker.js";
+import { executeSingleReviewRun } from "./review-workflow.js";
+import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
+import { reviewVersionManifest } from "./versions.js";
 export { isDurablePublicationEnabled, requireOnlinePublicationAuthority } from "./publication-mode.js";
 
 export interface PublicationRuntime {
@@ -27,6 +33,7 @@ export interface PublicationRuntime {
 let runtime: { pool: Pool; db: HarnessDatabase; service: PublicationService;
   operationStore: PgPublicationStore; authority: PublicationAuthorityStore;
   batchStore: PublicationBatchStore; batchCoordinator: PublicationBatchCoordinator } | undefined;
+let runWorker: ReviewRunWorker | undefined;
 let roleCheck: Promise<void> | undefined;
 let credentialApp: ReturnType<typeof createProbot> | undefined;
 let credentialAppOrigin: string | undefined;
@@ -185,7 +192,31 @@ export async function stopHarnessRecovery(): Promise<void> {
   await previous?.stop();
 }
 
+export async function startReviewRunWorker(): Promise<void> {
+  if (!isDurablePublicationEnabled() || runWorker) return;
+  const services = await getHarnessServices();
+  runWorker = new ReviewRunWorker({
+    store: new RunExecutionStore(services.db), budget: new ModelBudgetStore(services.db),
+    bindings: () => services.authority.listRecoverable(),
+    runtimeHash: async () => {
+      const { provider, model } = resolveReviewModelConfiguration();
+      return (await reviewVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash;
+    },
+    execute: executeSingleReviewRun,
+    onError: (error, runId) => process.emitWarning(JSON.stringify({ component: "review-run-worker", runId,
+      errorType: error instanceof Error ? error.name : "unknown" })),
+  });
+  runWorker.start();
+}
+
+export async function stopReviewRunWorker(): Promise<void> {
+  const previous = runWorker;
+  runWorker = undefined;
+  await previous?.stop();
+}
+
 export async function closeHarnessRuntime(): Promise<void> {
+  await stopReviewRunWorker();
   await stopHarnessRecovery();
   const previous = runtime;
   runtime = undefined;

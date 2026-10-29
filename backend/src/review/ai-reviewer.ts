@@ -51,6 +51,17 @@ import {
   type AiConcurrencyLimiter,
   type AiConcurrencyStats,
 } from "./ai-concurrency.js";
+import {
+  currentModelExecutionContext,
+  currentModelAbortSignal,
+  currentModelOutputLimit,
+  currentOpenAiTokenParameter,
+  estimateInputTokenUpperBound,
+  executeModelRequest,
+  modelRequestHash,
+  type ModelProvider,
+  type NormalizedModelUsage,
+} from "../harness/model-execution-context.js";
 export {
   buildAskPrompt,
   buildAskPromptWithOptions,
@@ -341,6 +352,14 @@ function resolveModel(provider: AIProvider): string {
   return readStringEnv("GEMINI_MODEL", "gemini-2.0-flash");
 }
 
+export function resolveReviewModelConfiguration(): {
+  provider: ModelProvider;
+  model: string;
+} {
+  const provider = resolveProvider();
+  return { provider, model: resolveModel(provider) };
+}
+
 function resolveOpenAIApiKey(provider: AIProvider): string | undefined {
   return provider === "openai-compatible"
     ? (readOptionalStringEnv("OPENAI_COMPATIBLE_API_KEY") ?? readOptionalStringEnv("OPENAI_API_KEY"))
@@ -366,7 +385,9 @@ function resolveOpenAIClientForProvider(params: {
     throw new Error("Missing OPENAI_BASE_URL for AI_PROVIDER=openai-compatible");
   }
 
-  const maxRetries = readNumberEnv("AI_HTTP_RETRIES", 2);
+  const maxRetries = currentModelExecutionContext()
+    ? 0
+    : readNumberEnv("AI_HTTP_RETRIES", 2);
   return params.runtime.clientCache.get({
     apiKey,
     baseURL,
@@ -377,11 +398,16 @@ function resolveOpenAIClientForProvider(params: {
 
 async function requestOpenAICompletionText(params: {
   client: OpenAI;
+  provider: "openai" | "openai-compatible";
   model: string;
   systemPrompt: string;
   prompt: string;
   responseFormat?: unknown;
 }): Promise<string> {
+  const maxOutputTokens = currentModelOutputLimit(Math.max(
+    1,
+    readNumberEnv("OPENAI_MAX_COMPLETION_TOKENS", 8_192),
+  ));
   const request: Record<string, unknown> = {
     model: params.model,
     temperature: 0.2,
@@ -396,16 +422,68 @@ async function requestOpenAICompletionText(params: {
       },
     ],
   };
+  const tokenParameter = currentOpenAiTokenParameter(params.model.startsWith("o") ||
+    readOptionalStringEnv("OPENAI_COMPATIBLE_TOKEN_PARAMETER") !== "max_tokens"
+    ? "max_completion_tokens"
+    : "max_tokens");
+  request[tokenParameter] = maxOutputTokens;
   if (typeof params.responseFormat !== "undefined") {
     request.response_format = params.responseFormat;
   }
-  const completion = await params.client.chat.completions.create(
-    request as never,
+  const completion = await executeModelRequest(
     {
-      signal: getHttpShutdownSignal(),
+      provider: params.provider,
+      model: params.model,
+      requestKind: typeof params.responseFormat === "undefined"
+        ? "chat-completion-raw"
+        : "chat-completion-structured",
+      requestHash: modelRequestHash(request),
+      inputTokenUpperBound: estimateInputTokenUpperBound(
+        params.systemPrompt,
+        params.prompt,
+        params.responseFormat,
+      ),
+      maxOutputTokens,
+      metadata: { tokenParameter },
+    },
+    async () => {
+      const modelSignal = currentModelAbortSignal();
+      const shutdownSignal = getHttpShutdownSignal();
+      const response = await params.client.chat.completions.create(
+        request as never,
+        { signal: modelSignal ? AbortSignal.any([shutdownSignal, modelSignal]) : shutdownSignal },
+      );
+      return {
+        value: response,
+        rawResponse: response,
+        usage: normalizeOpenAIUsage(response.usage),
+        providerRequestId: response.id,
+        modelVersion: response.model,
+      };
     },
   );
   return extractModelText(completion.choices?.[0]?.message?.content);
+}
+
+function normalizeOpenAIUsage(
+  usage: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number | null } | null;
+    completion_tokens_details?: { reasoning_tokens?: number | null } | null;
+  } | undefined,
+): NormalizedModelUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.prompt_tokens,
+    cachedInputTokens: usage.prompt_tokens_details?.cached_tokens ?? undefined,
+    outputTokens: usage.completion_tokens,
+    reasoningOrThoughtTokens:
+      usage.completion_tokens_details?.reasoning_tokens ?? undefined,
+    totalTokens: usage.total_tokens,
+    original: usage as Record<string, unknown>,
+  };
 }
 
 function buildOpenAIJsonOnlyHintPrompt(prompt: string): string {
@@ -446,6 +524,7 @@ async function callOpenAIJsonWithFallback(params: {
   try {
     const text = await requestOpenAICompletionText({
       client,
+      provider: params.provider,
       model: params.model,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
@@ -477,6 +556,7 @@ async function callOpenAIJsonWithFallback(params: {
   try {
     const text = await requestOpenAICompletionText({
       client,
+      provider: params.provider,
       model: params.model,
       systemPrompt: params.systemPrompt,
       prompt: hintPrompt,
@@ -498,6 +578,7 @@ async function callOpenAIJsonWithFallback(params: {
 
   const text = await requestOpenAICompletionText({
     client,
+    provider: params.provider,
     model: params.model,
     systemPrompt: params.systemPrompt,
     prompt: hintPrompt,

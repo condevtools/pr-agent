@@ -1,5 +1,14 @@
 import { fetchWithRetry, readNumberEnv, readOptionalStringEnv } from "#core";
 import { parseJsonFromModelText } from "./ai-provider-json.js";
+import {
+  currentModelExecutionContext,
+  currentModelAbortSignal,
+  currentModelOutputLimit,
+  estimateInputTokenUpperBound,
+  executeModelRequest,
+  modelRequestHash,
+  type NormalizedModelUsage,
+} from "../harness/model-execution-context.js";
 
 const MAX_ERROR_BODY_PREVIEW_CHARS = 300;
 
@@ -24,40 +33,67 @@ export async function callGeminiJson(params: {
     timeoutMs:
       params.timeoutMs ??
       readNumberEnv("AI_HTTP_TIMEOUT_MS", 30_000),
-    retries: readNumberEnv("AI_HTTP_RETRIES", 2),
+    retries: currentModelExecutionContext()
+      ? 0
+      : readNumberEnv("AI_HTTP_RETRIES", 2),
     backoffMs: readNumberEnv("AI_HTTP_RETRY_BACKOFF_MS", 400),
   } as const;
 
-  const sendRequest = async (includeSchema: boolean): Promise<Response> =>
-    fetchWithRetry(
-      endpoint,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: params.systemPrompt }],
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: params.prompt }],
-            },
-          ],
-          generationConfig: buildGeminiGenerationConfig(
-            includeSchema ? params.responseSchema : undefined,
-          ),
-        }),
-      },
-      requestOptions,
+  let physicalAttempt = 0;
+  const sendRequest = async (includeSchema: boolean): Promise<{
+    response: { ok: boolean; status: number };
+    body: string;
+  }> => {
+    physicalAttempt += 1;
+    const generationConfig = buildGeminiGenerationConfig(
+      includeSchema ? params.responseSchema : undefined,
     );
+    const requestBody = {
+      systemInstruction: { parts: [{ text: params.systemPrompt }] },
+      contents: [{ role: "user", parts: [{ text: params.prompt }] }],
+      generationConfig,
+    };
+    return executeModelRequest(
+      {
+        provider: "gemini",
+        model: params.model,
+        requestKind: includeSchema ? "generate-content-schema" : "generate-content-json",
+        requestHash: modelRequestHash(requestBody),
+        inputTokenUpperBound: estimateInputTokenUpperBound(requestBody),
+        maxOutputTokens: generationConfig.maxOutputTokens,
+        metadata: { physicalAttempt },
+      },
+      async () => {
+        const response = await fetchWithRetry(
+          endpoint,
+          {
+            method: "POST",
+            signal: currentModelAbortSignal(),
+            headers: {
+              "content-type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+            body: JSON.stringify(requestBody),
+          },
+          requestOptions,
+        );
+        const body = await response.text();
+        const payload = parseGeminiPayload(body);
+        return {
+          value: { response: { ok: response.ok, status: response.status }, body },
+          rawResponse: { response: { ok: response.ok, status: response.status }, body },
+          usage: normalizeGeminiUsage(payload?.usageMetadata),
+          providerRequestId: payload?.responseId,
+          modelVersion: payload?.modelVersion,
+          httpStatus: response.status,
+        };
+      },
+    );
+  };
 
-  let response = await sendRequest(Boolean(params.responseSchema));
+  let result = await sendRequest(Boolean(params.responseSchema));
+  let { response, body } = result;
   if (!response.ok) {
-    const body = await response.text();
     if (
       params.responseSchema &&
       shouldRetryGeminiWithoutSchema(response.status, body)
@@ -66,7 +102,9 @@ export async function callGeminiJson(params: {
         model: params.model,
         status: response.status,
       });
-      response = await sendRequest(false);
+      result = await sendRequest(false);
+      response = result.response;
+      body = result.body;
     } else {
       throw new Error(
         `Gemini API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
@@ -75,19 +113,13 @@ export async function callGeminiJson(params: {
   }
 
   if (!response.ok) {
-    const body = await response.text();
     throw new Error(
       `Gemini API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
     );
   }
 
-  const payload = (await response.json()) as {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{ text?: string }>;
-      };
-    }>;
-  };
+  const payload = parseGeminiPayload(body);
+  if (!payload) throw new Error("Gemini response is not valid JSON");
 
   const text =
     payload.candidates?.[0]?.content?.parts
@@ -107,12 +139,16 @@ export function buildGeminiGenerationConfig(
 ): {
   temperature: number;
   responseMimeType: string;
+  maxOutputTokens: number;
   responseSchema?: Record<string, unknown>;
 } {
   if (responseSchema) {
     return {
       temperature: 0.2,
       responseMimeType: "application/json",
+      maxOutputTokens: currentModelOutputLimit(
+        Math.max(1, readNumberEnv("GEMINI_MAX_OUTPUT_TOKENS", 8_192)),
+      ),
       responseSchema,
     };
   }
@@ -120,6 +156,47 @@ export function buildGeminiGenerationConfig(
   return {
     temperature: 0.2,
     responseMimeType: "application/json",
+    maxOutputTokens: currentModelOutputLimit(
+      Math.max(1, readNumberEnv("GEMINI_MAX_OUTPUT_TOKENS", 8_192)),
+    ),
+  };
+}
+
+interface GeminiPayload {
+  responseId?: string;
+  modelVersion?: string;
+  usageMetadata?: {
+    promptTokenCount?: number;
+    cachedContentTokenCount?: number;
+    candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
+    toolUsePromptTokenCount?: number;
+    totalTokenCount?: number;
+  };
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+}
+
+function parseGeminiPayload(body: string): GeminiPayload | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as GeminiPayload : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeGeminiUsage(
+  usage: GeminiPayload["usageMetadata"],
+): NormalizedModelUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.promptTokenCount,
+    cachedInputTokens: usage.cachedContentTokenCount,
+    outputTokens: usage.candidatesTokenCount,
+    reasoningOrThoughtTokens: usage.thoughtsTokenCount,
+    toolInputTokens: usage.toolUsePromptTokenCount,
+    totalTokens: usage.totalTokenCount,
+    original: usage as Record<string, unknown>,
   };
 }
 

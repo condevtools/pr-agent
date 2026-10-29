@@ -4,10 +4,27 @@ import {
   readOptionalStringEnv,
 } from "#core";
 import { parseJsonFromModelText } from "./ai-provider-json.js";
+import {
+  currentModelExecutionContext,
+  currentModelAbortSignal,
+  currentModelOutputLimit,
+  estimateInputTokenUpperBound,
+  executeModelRequest,
+  modelRequestHash,
+  type NormalizedModelUsage,
+} from "../harness/model-execution-context.js";
 
 const MAX_ERROR_BODY_PREVIEW_CHARS = 300;
 
 type AnthropicResponsePayload = {
+  id?: string;
+  model?: string;
+  usage?: {
+    input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+    output_tokens?: number;
+  };
   content?: Array<{ type?: string; text?: string; input?: unknown }>;
 };
 
@@ -28,35 +45,66 @@ export async function callAnthropicJson(params: {
     timeoutMs:
       params.timeoutMs ??
       readNumberEnv("AI_HTTP_TIMEOUT_MS", 30_000),
-    retries: readNumberEnv("AI_HTTP_RETRIES", 2),
+    retries: currentModelExecutionContext()
+      ? 0
+      : readNumberEnv("AI_HTTP_RETRIES", 2),
     backoffMs: readNumberEnv("AI_HTTP_RETRY_BACKOFF_MS", 400),
   } as const;
 
-  const sendRequest = async (useTools: boolean): Promise<Response> =>
-    fetchWithRetry(
-      "https://api.anthropic.com/v1/messages",
+  let physicalAttempt = 0;
+  const sendRequest = async (useTools: boolean): Promise<{
+    response: { ok: boolean; status: number };
+    body: string;
+  }> => {
+    physicalAttempt += 1;
+    const requestBody = buildAnthropicRequestBody({
+      model: params.model,
+      systemPrompt: params.systemPrompt,
+      prompt: params.prompt,
+      responseSchema: useTools ? params.responseSchema : undefined,
+    });
+    return executeModelRequest(
       {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(
-          buildAnthropicRequestBody({
-            model: params.model,
-            systemPrompt: params.systemPrompt,
-            prompt: params.prompt,
-            responseSchema: useTools ? params.responseSchema : undefined,
-          }),
-        ),
+        provider: "anthropic",
+        model: params.model,
+        requestKind: useTools ? "messages-tools" : "messages-plain",
+        requestHash: modelRequestHash(requestBody),
+        inputTokenUpperBound: estimateInputTokenUpperBound(requestBody),
+        maxOutputTokens: Number(requestBody.max_tokens),
+        metadata: { physicalAttempt },
       },
-      requestOptions,
+      async () => {
+        const response = await fetchWithRetry(
+          "https://api.anthropic.com/v1/messages",
+          {
+            method: "POST",
+            signal: currentModelAbortSignal(),
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify(requestBody),
+          },
+          requestOptions,
+        );
+        const body = await response.text();
+        const payload = parseJsonObject(body);
+        return {
+          value: { response: { ok: response.ok, status: response.status }, body },
+          rawResponse: { response: { ok: response.ok, status: response.status }, body },
+          usage: normalizeAnthropicUsage(payload?.usage),
+          providerRequestId: response.headers.get("request-id") ?? payload?.id,
+          modelVersion: payload?.model,
+          httpStatus: response.status,
+        };
+      },
     );
+  };
 
-  let response = await sendRequest(Boolean(params.responseSchema));
+  let result = await sendRequest(Boolean(params.responseSchema));
+  let { response, body } = result;
   if (!response.ok) {
-    const body = await response.text();
     if (
       params.responseSchema &&
       shouldRetryAnthropicWithoutTools(response.status, body)
@@ -65,7 +113,9 @@ export async function callAnthropicJson(params: {
         model: params.model,
         status: response.status,
       });
-      response = await sendRequest(false);
+      result = await sendRequest(false);
+      response = result.response;
+      body = result.body;
     } else {
       throw new Error(
         `Anthropic API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
@@ -74,14 +124,39 @@ export async function callAnthropicJson(params: {
   }
 
   if (!response.ok) {
-    const body = await response.text();
     throw new Error(
       `Anthropic API error (${response.status}): ${body.slice(0, MAX_ERROR_BODY_PREVIEW_CHARS)}`,
     );
   }
 
-  const payload = (await response.json()) as AnthropicResponsePayload;
+  const payload = parseJsonObject(body);
+  if (!payload) throw new Error("Anthropic response is not valid JSON");
   return parseAnthropicJsonPayload(payload);
+}
+
+function parseJsonObject(body: string): AnthropicResponsePayload | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return parsed && typeof parsed === "object"
+      ? parsed as AnthropicResponsePayload
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeAnthropicUsage(
+  usage: AnthropicResponsePayload["usage"],
+): NormalizedModelUsage | undefined {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.input_tokens,
+    cachedInputTokens: usage.cache_read_input_tokens,
+    cacheWriteInputTokens: usage.cache_creation_input_tokens,
+    outputTokens: usage.output_tokens,
+    totalTokens: undefined,
+    original: usage as Record<string, unknown>,
+  };
 }
 
 function buildAnthropicRequestBody(params: {
@@ -92,7 +167,9 @@ function buildAnthropicRequestBody(params: {
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: params.model,
-    max_tokens: Math.max(1, readNumberEnv("ANTHROPIC_MAX_TOKENS", 8_192)),
+    max_tokens: currentModelOutputLimit(
+      Math.max(1, readNumberEnv("ANTHROPIC_MAX_TOKENS", 8_192)),
+    ),
     temperature: 0.2,
     system: params.systemPrompt,
     messages: [{ role: "user", content: params.prompt }],
