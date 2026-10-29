@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 
 import { runGitLabReview } from "../src/integrations/gitlab/gitlab-review.js";
-import { ReviewRunRevisionChangedError, withReviewRunContext } from "../src/harness/review-run-context.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
+import { ReviewRunRevisionChangedError, withRunExecutionContext } from "../src/agent-runtime/execution/run-context.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 
 test("durable GitLab collection rejects changed diff refs before reading guidelines or running the model", async () => {
   const previousFetch = globalThis.fetch;
@@ -25,7 +25,7 @@ test("durable GitLab collection rejects changed diff refs before reading guideli
   let modelSteps = 0;
   try {
     await assert.rejects(
-      withReviewRunContext({
+      withRunExecutionContext({
         lease,
         assertActive: async () => undefined,
         step: async (_key, kind, _inputHash, action) => {

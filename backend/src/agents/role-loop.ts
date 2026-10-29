@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { canonicalJson, fingerprint } from "../harness/versions.js";
-import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../harness/run-contracts.js";
+import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
+import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../agent-runtime/runs/contracts.js";
 import { composeReviewSystemPrompt, frozenReviewText } from "./text-components.js";
 import type {
   DeepReviewRole,

@@ -8,7 +8,7 @@ import type {
   EvidenceRecord,
   ReadonlyToolRequest,
 } from "../../agents/contracts.js";
-import { fingerprint } from "../../harness/versions.js";
+import { fingerprint } from "../../agent-runtime/versions.js";
 
 export const REPOSITORY_READ_LIMITS = Object.freeze({
   maxChangedFiles: 100,

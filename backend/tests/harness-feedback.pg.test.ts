@@ -6,10 +6,10 @@ import { Pool } from "pg";
 
 import { DatasetStore } from "../src/evolution/dataset-store.js";
 import { FeedbackStore } from "../src/evolution/feedback-store.js";
-import { fingerprint } from "../src/harness/versions.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import type { RunPrincipal } from "../src/harness/run-control-contracts.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -26,7 +26,7 @@ else {
   const artifactHash = fingerprint(artifact);
 
   before(async () => {
-    await migrateHarness(admin);
+    await migrateRuntime(admin);
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
     await admin.query(`GRANT SELECT ON pr_agent_harness.integration_bindings,pr_agent_harness.agent_runs,pr_agent_harness.review_artifacts,
@@ -66,7 +66,7 @@ else {
        VALUES ($1,$2,$3,$4,'review.deep.v1','shadow',$5,$6,$7::jsonb)`,
       [artifactId, tenantId, integrationId, runId, "2".repeat(40), artifactHash, JSON.stringify(artifact)]);
     const url = new URL(databaseUrl); url.username = role; url.password = password;
-    app = new Pool({ connectionString: url.toString(), max: 3 }); store = new FeedbackStore(new HarnessDatabase(app));
+    app = new Pool({ connectionString: url.toString(), max: 3 }); store = new FeedbackStore(new RuntimeDatabase(app));
   });
 
   after(async () => { await app?.end(); await admin.query(`DROP OWNED BY ${role}`);
@@ -104,7 +104,7 @@ else {
       "SELECT version,active FROM pr_agent_harness.trusted_review_label_sets WHERE tenant_id=$1 AND source_run_id=$2 ORDER BY version",
       [tenantId, runId]);
     assert.deepEqual(labelHistory.rows, [{ version: "1", active: false }]);
-    const datasetStore = new DatasetStore(new HarnessDatabase(app));
+    const datasetStore = new DatasetStore(new RuntimeDatabase(app));
     const curator = principal("curator", integrationId, ["evaluations:create"]);
     const dataset = await datasetStore.create(curator, { name: "inactive-label-rejection",
       developmentBefore: "2025-01-01T00:00:00.000Z", validationBefore: "2026-01-01T00:00:00.000Z" });

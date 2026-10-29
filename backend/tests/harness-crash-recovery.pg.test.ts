@@ -7,15 +7,15 @@ import test, { before, after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore, type CreateRunInput } from "../src/harness/postgres/run-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore, type CreateRunInput } from "../src/agent-runtime/postgres/run-store.js";
 import { createBudgetedModelExecutionContext, getModelExecutionPolicy, ModelBudgetStore,
-  reserveRunBudgetInTransaction } from "../src/harness/model-budget-store.js";
-import { PublicationAuthorityStore } from "../src/harness/authority.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { RunLeaseLostError, type RunLease, type RunStep } from "../src/harness/run-contracts.js";
-import { RunControlStore } from "../src/harness/run-control-store.js";
+  reserveRunBudgetInTransaction } from "../src/agent-runtime/budget/model-budget-store.js";
+import { PublicationAuthorityStore } from "../src/agent-runtime/authority/publication-authority.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { RunLeaseLostError, type RunLease, type RunStep } from "../src/agent-runtime/runs/contracts.js";
+import { RunControlStore } from "../src/agent-runtime/runs/control-store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -24,7 +24,7 @@ if (!databaseUrl) {
 } else {
   if (!new URL(databaseUrl).pathname.startsWith("/harness_test_")) throw new Error("Disposable database required");
   const adminPool = new Pool({ connectionString: databaseUrl, max: 3 });
-  const adminDb = new HarnessDatabase(adminPool);
+  const adminDb = new RuntimeDatabase(adminPool);
   const role = `crash_${randomUUID().replaceAll("-", "")}`;
   const password = randomUUID();
   const children = new Set<ChildProcess>();
@@ -39,7 +39,7 @@ if (!databaseUrl) {
           thoughtOutputMicrosPerMillion: 1000000, toolInputMicrosPerMillion: 1000000 } } } }),
   });
   let appPool: Pool;
-  let appDb: HarnessDatabase;
+  let appDb: RuntimeDatabase;
   let appUrl: string;
   let store: RunExecutionStore;
   let budget: ModelBudgetStore;
@@ -78,9 +78,9 @@ if (!databaseUrl) {
     assert.equal((await message(child)).phase, "migration_uncommitted");
     assert.equal((await adminPool.query("SELECT to_regnamespace('pr_agent_harness') AS name")).rows[0].name, null);
     await kill(child);
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     const first = await adminPool.query("SELECT migration_name,checksum_sha256 FROM pr_agent_harness.schema_migrations ORDER BY migration_name");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     const second = await adminPool.query("SELECT migration_name,checksum_sha256 FROM pr_agent_harness.schema_migrations ORDER BY migration_name");
     assert.deepEqual(second.rows, first.rows);
     await adminPool.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
@@ -92,7 +92,7 @@ if (!databaseUrl) {
         pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role}`);
     const url = new URL(databaseUrl!); url.username = role; url.password = password; appUrl = url.toString();
     appPool = new Pool({ connectionString: appUrl, max: 4 });
-    appDb = new HarnessDatabase(appPool);
+    appDb = new RuntimeDatabase(appPool);
     store = new RunExecutionStore(appDb, { initialRetryMs: 1, maxRetryMs: 2 });
     budget = new ModelBudgetStore(appDb);
   });
@@ -195,7 +195,7 @@ if (!databaseUrl) {
 
   async function createFixture(key: string) {
     const tenantId = randomUUID(); const integrationId = randomUUID();
-    const runs = new HarnessRunStore(adminDb);
+    const runs = new RunStore(adminDb);
     await runs.registerIntegration({ tenantId, id: integrationId, platform: "github", origin: "https://api.github.com", repository: `crash/${key}` });
     const authority = new PublicationAuthorityStore(adminDb);
     await authority.configure({ tenantId, integrationId, providerRepositoryId: ++providerRepositoryId, providerActorId: 2,
@@ -210,7 +210,7 @@ if (!databaseUrl) {
       workflowVersionHash: version, promptVersionHash: version, modelVersionHash: version, toolVersionHash: version,
       policyVersionHash: policy.hash, runtimeVersionHash: version, input: {}, runtimeConfig: { maxJobAttempts: 3 },
       admission: (client, runId) => reserveRunBudgetInTransaction(client, { tenantId, runId, policy }) };
-    const run = await new HarnessRunStore(appDb).createRun(creation);
+    const run = await new RunStore(appDb).createRun(creation);
     return { binding, runId: run.id, policy, runtimeHash: version, providerUrl, creation };
   }
 

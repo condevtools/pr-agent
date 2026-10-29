@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { gateDeepReviewFindings } from "../src/agents/gate.js";
 import type { DeepReviewSource, EvidenceRecord, FindingCandidate } from "../src/agents/contracts.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const runId = randomUUID();
 const source: DeepReviewSource = {

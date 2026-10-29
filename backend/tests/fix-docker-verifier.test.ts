@@ -11,7 +11,7 @@ import { DockerFixVerifier } from "../src/fix/docker-verifier.js";
 import { loadFixPolicyRegistry } from "../src/fix/fix-policy.js";
 import { expectedSandboxPolicyHash } from "../src/fix/sandbox-policy.js";
 import { writeSnapshotBundle } from "../src/fix/snapshot-bundle.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const imageDigest = process.env.FIX_VERIFIER_SANDBOX_IMAGE_DIGEST;
 

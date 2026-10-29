@@ -19,13 +19,13 @@ import {
   modelRequestHash,
   type ModelProvider,
   type NormalizedModelUsage,
-} from "../harness/model-execution-context.js";
+} from "../model/execution-context.js";
 import type { OpenAIClientCache } from "./ai-client-cache.js";
 import type { AiConcurrencyLimiter } from "./ai-concurrency.js";
 import { callAnthropicJson } from "./ai-provider-anthropic.js";
 import { callGeminiJson } from "./ai-provider-gemini.js";
 import { extractModelText, parseJsonFromModelText } from "./ai-provider-json.js";
-import { getSharedAiReviewerRuntime, resolveReviewModelConfiguration } from "./ai-reviewer.js";
+import { getSharedAiReviewerRuntime, resolveModelConfiguration } from "./ai-reviewer.js";
 
 export interface StructuredModelConfiguration {
   provider: ModelProvider;
@@ -39,7 +39,7 @@ export interface StructuredModelOptions {
 }
 
 export function createStructuredModel(options: StructuredModelOptions = {}): StructuredModel {
-  const configuration = options.configuration ?? resolveReviewModelConfiguration();
+  const configuration = options.configuration ?? resolveModelConfiguration();
   const sharedRuntime = getSharedAiReviewerRuntime();
   const clientCache = options.clientCache ?? sharedRuntime.clientCache;
   const concurrencyLimiter = options.concurrencyLimiter ?? sharedRuntime.concurrencyLimiter;

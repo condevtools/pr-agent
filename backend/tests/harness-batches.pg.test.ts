@@ -9,7 +9,7 @@ import {
   PublicationBatchScopeConflictError,
   PublicationBatchSourceConflictError,
   PublicationBatchStore,
-} from "../src/harness/publication-batches.js";
+} from "../src/agent-runtime/publication/batches.js";
 import {
   buildPublicationIdentity,
   PgPublicationStore,
@@ -19,12 +19,12 @@ import {
   StalePublicationError,
   type PublicationAdapter,
   type PublicationRequest,
-} from "../src/harness/publication.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
+} from "../src/agent-runtime/publication/publication.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -43,13 +43,13 @@ if (!databaseUrl) {
   let pool: Pool;
   let batchStore: PublicationBatchStore;
   let operationStore: PgPublicationStore;
-  let controlRunStore: HarnessRunStore;
-  let appDb: HarnessDatabase;
+  let controlRunStore: RunStore;
+  let appDb: RuntimeDatabase;
   let nextProviderId = 1000;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
@@ -67,10 +67,10 @@ if (!databaseUrl) {
     appUrl.username = roleName;
     appUrl.password = rolePassword;
     pool = new Pool({ connectionString: appUrl.toString(), max: 12 });
-    appDb = new HarnessDatabase(pool);
+    appDb = new RuntimeDatabase(pool);
     batchStore = new PublicationBatchStore(appDb);
     operationStore = new PgPublicationStore(appDb);
-    controlRunStore = new HarnessRunStore(new HarnessDatabase(adminPool));
+    controlRunStore = new RunStore(new RuntimeDatabase(adminPool));
   });
 
   after(async () => {
@@ -675,7 +675,7 @@ if (!databaseUrl) {
       executionModeGeneration: 1,
       runtimeConfig: { maxRunMs: 60_000 },
     });
-    const lease = await new RunExecutionStore(new HarnessDatabase(adminPool)).claim({
+    const lease = await new RunExecutionStore(new RuntimeDatabase(adminPool)).claim({
       tenantId: scope.tenantId,
       integrationId: scope.integrationId,
       authorityGeneration: scope.authorityGeneration!,

@@ -5,7 +5,7 @@ import { computeCanaryMetrics, canPromoteCanary, type CanaryObservation } from "
 import { requestReleaseSchema } from "../src/evolution/release-contracts.js";
 import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "../src/evolution/release-policy.js";
 import { releaseBucket } from "../src/evolution/release-selection.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const candidateId = "11111111-1111-4111-8111-111111111111";
 const qualificationId = "22222222-2222-4222-8222-222222222222";

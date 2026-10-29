@@ -11,10 +11,10 @@ import {
   PublicationDefiniteFailureError,
   PublicationService,
   PublicationSlotConflictError,
-} from "../src/harness/publication.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
+} from "../src/agent-runtime/publication/publication.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -32,11 +32,11 @@ if (!databaseUrl) {
   const rolePassword = randomUUID();
   let pool: Pool;
   let store: PgPublicationStore;
-  let controlRunStore: HarnessRunStore;
+  let controlRunStore: RunStore;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
@@ -47,9 +47,9 @@ if (!databaseUrl) {
     appUrl.username = roleName;
     appUrl.password = rolePassword;
     pool = new Pool({ connectionString: appUrl.toString(), max: 12 });
-    const db = new HarnessDatabase(pool);
+    const db = new RuntimeDatabase(pool);
     store = new PgPublicationStore(db);
-    controlRunStore = new HarnessRunStore(new HarnessDatabase(adminPool));
+    controlRunStore = new RunStore(new RuntimeDatabase(adminPool));
   });
 
   after(async () => {

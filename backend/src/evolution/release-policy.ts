@@ -1,4 +1,4 @@
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import type { EvolutionReleasePolicyV1 } from "./release-contracts.js";
 
 export function evolutionReleasePolicy(environment: NodeJS.ProcessEnv = process.env): EvolutionReleasePolicyV1 {

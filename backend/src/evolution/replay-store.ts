@@ -9,12 +9,12 @@ import { scoreReplayArtifact } from "./replay-scorer.js";
 import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH, REPLAY_VERIFIER_HASH,
   type EvaluationReceipt, type EvaluationSplit, type EvaluationVariant,
   type ReplayRunInput, type ReplayScoreV1 } from "./replay-contracts.js";
-import { HarnessDatabase } from "../harness/postgres/database.js";
-import type { CreateRunInput } from "../harness/postgres/run-store.js";
-import { createRunInTransaction } from "../harness/postgres/run-store.js";
-import type { RunPrincipal } from "../harness/run-control-contracts.js";
-import { requireRunPermission, RunControlError } from "../harness/run-control-contracts.js";
-import { fingerprint, type RunVersionManifest } from "../harness/versions.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import type { CreateRunInput } from "../agent-runtime/postgres/run-store.js";
+import { createRunInTransaction } from "../agent-runtime/postgres/run-store.js";
+import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { requireRunPermission, RunControlError } from "../agent-runtime/runs/control-contracts.js";
+import { fingerprint, type RunVersionManifest } from "../agent-runtime/versions.js";
 
 interface EvalRow {
   id: string; dataset_id: string; candidate_id: string; split: EvaluationSplit;
@@ -34,7 +34,7 @@ export interface PendingReplayResult {
 }
 
 export class EvaluationStore {
-  constructor(private readonly db: HarnessDatabase) {}
+  constructor(private readonly db: RuntimeDatabase) {}
 
   async admit(principal: RunPrincipal, input: { datasetId: string; candidateId: string; split: EvaluationSplit;
     commandKey: string; requestHash: string; baselineComponentHash: string; candidateComponentHash: string;

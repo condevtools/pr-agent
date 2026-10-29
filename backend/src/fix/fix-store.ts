@@ -16,13 +16,13 @@ import type {
   VerificationResult,
 } from "./contracts.js";
 import { isFixDifferentialEligible } from "./verification-gate.js";
-import { HarnessDatabase } from "../harness/postgres/database.js";
-import { assertRunLease } from "../harness/run-execution-store.js";
-import type { RunLease } from "../harness/run-contracts.js";
-import { fingerprint } from "../harness/versions.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import { assertRunLease } from "../agent-runtime/execution/store.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import { verificationResultSchema } from "./fix-input.js";
-import type { RunPrincipal } from "../harness/run-control-contracts.js";
-import { requireRunPermission, runNotFound } from "../harness/run-control-contracts.js";
+import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { requireRunPermission, runNotFound } from "../agent-runtime/runs/control-contracts.js";
 import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
 
 export class FixStoreError extends Error {
@@ -30,7 +30,7 @@ export class FixStoreError extends Error {
 }
 
 export class PgFixStore implements FixStorePort {
-  constructor(private readonly db: HarnessDatabase, private readonly enqueueJob?: EnqueueVerificationJob) {}
+  constructor(private readonly db: RuntimeDatabase, private readonly enqueueJob?: EnqueueVerificationJob) {}
 
   async registerSource(lease: RunLease, source: FixSource): Promise<void> {
     assertSourceLease(lease, source);

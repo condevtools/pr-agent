@@ -8,23 +8,23 @@ import { Pool } from "pg";
 
 import { collectFixSnapshots, lockFixSnapshots } from "../src/fix/snapshot-gc.js";
 import { writeSnapshotBundle } from "../src/fix/snapshot-bundle.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { createRunInTransaction, HarnessRunStore } from "../src/harness/postgres/run-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { createRunInTransaction, RunStore } from "../src/agent-runtime/postgres/run-store.js";
 
 const url = process.env.HARNESS_TEST_DATABASE_URL;
 if (!url) test.skip("Snapshot GC requires disposable Docker PostgreSQL", () => {});
 else test("snapshot retention preserves queued intake references, removes purged content, and never follows symlinks", async () => {
   if (!/^harness_test_/.test(new URL(url).pathname.slice(1))) throw new Error("Disposable database required");
   const pool = new Pool({ connectionString: url });
-  const db = new HarnessDatabase(pool);
+  const db = new RuntimeDatabase(pool);
   const root = await mkdtemp(join(tmpdir(),"fix-gc-"));
   const outside = await mkdtemp(join(tmpdir(),"fix-gc-external-"));
   try {
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     const tenantId = randomUUID(); const integrationId = randomUUID();
     const version = "a".repeat(64);
-    await new HarnessRunStore(db).registerIntegration({ tenantId,id: integrationId,platform: "github",
+    await new RunStore(db).registerIntegration({ tenantId,id: integrationId,platform: "github",
       origin: "https://api.github.test",repository: `gc/${randomUUID()}` });
     const { bundle,run } = await db.transaction(tenantId,async (client) => {
       await lockFixSnapshots(client);

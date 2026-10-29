@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 
-import type { PublicationBinding } from "../src/harness/authority.js";
-import type { PublicationOperation } from "../src/harness/publication.js";
+import type { PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import type { PublicationOperation } from "../src/agent-runtime/publication/publication.js";
 import type { FixProposal, VerificationResult } from "../src/fix/contracts.js";
 import { createFixPublicationAdapter } from "../src/fix/fix-publication-adapter.js";
 import { buildFixPublicationPlan } from "../src/fix/publication-plan.js";

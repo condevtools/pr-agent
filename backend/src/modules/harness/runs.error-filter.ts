@@ -3,13 +3,13 @@ import type { Response } from "express";
 import { ZodError } from "zod";
 
 import { FixStoreError } from "../../fix/fix-store.js";
-import { RunControlError } from "../../harness/run-control-contracts.js";
-import { RunCursorExpiredError } from "../../harness/run-query-store.js";
-import { ModelBudgetExceededError } from "../../harness/model-budget-store.js";
-import { RunCreateConflictError } from "../../harness/postgres/run-store.js";
+import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
+import { RunCursorExpiredError } from "../../agent-runtime/runs/query-store.js";
+import { ModelBudgetExceededError } from "../../agent-runtime/budget/model-budget-store.js";
+import { RunCreateConflictError } from "../../agent-runtime/postgres/run-store.js";
 
 @Catch()
-export class HarnessApiErrorFilter implements ExceptionFilter {
+export class RunApiErrorFilter implements ExceptionFilter {
   catch(error: unknown, host: ArgumentsHost): void {
     const response = host.switchToHttp().getResponse<Response>();
     if (response.headersSent) { response.end(); return; }

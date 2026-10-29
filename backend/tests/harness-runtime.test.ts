@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { harnessPoolConfig, isDurablePublicationEnabled, validatePublicationCredentialOrigin, requireOnlinePublicationAuthority } from "../src/harness/runtime.js";
+import { agentRuntimePoolConfig, isDurablePublicationEnabled, validatePublicationCredentialOrigin, requireOnlinePublicationAuthority } from "../src/agent-runtime/runtime.js";
 
 test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL", () => {
-  assert.throws(() => harnessPoolConfig({ DATABASE_URL: "postgres://unrelated/private" }), /Configure HARNESS/);
-  assert.deepEqual(harnessPoolConfig({
+  assert.throws(() => agentRuntimePoolConfig({ DATABASE_URL: "postgres://unrelated/private" }), /Configure HARNESS/);
+  assert.deepEqual(agentRuntimePoolConfig({
     HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent",
     HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "local-test", HARNESS_PG_PORT: "5432",
   }), {
@@ -13,7 +13,7 @@ test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL"
     max: 8, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000,
     statement_timeout: 15000, lock_timeout: 5000, idle_in_transaction_session_timeout: 15000,
   });
-  assert.throws(() => harnessPoolConfig({
+  assert.throws(() => agentRuntimePoolConfig({
     HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent",
     HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "local-test", HARNESS_PG_PORT: "bad",
   }), /Configure HARNESS/);

@@ -2,7 +2,7 @@ import { Injectable, Logger, OnApplicationShutdown } from "@nestjs/common";
 
 import { beginHttpShutdown } from "#core";
 import { beginAiShutdown, drainAiRequests } from "#review";
-import { closeHarnessRuntime, stopHarnessRecovery, stopReviewRunWorker } from "../../harness/runtime.js";
+import { closeAgentRuntime, stopPublicationRecovery, stopRunWorker } from "../../agent-runtime/runtime.js";
 
 @Injectable()
 export class ShutdownCoordinatorService implements OnApplicationShutdown {
@@ -10,11 +10,11 @@ export class ShutdownCoordinatorService implements OnApplicationShutdown {
 
   async onApplicationShutdown(signal?: string): Promise<void> {
     beginHttpShutdown();
-    await stopReviewRunWorker();
-    await stopHarnessRecovery();
+    await stopRunWorker();
+    await stopPublicationRecovery();
     beginAiShutdown();
     const drained = await drainAiRequests();
-    await closeHarnessRuntime();
+    await closeAgentRuntime();
     if (!drained) {
       this.logger.warn(
         `Application shutdown (${signal ?? "unknown"}): timed out while draining AI requests`,

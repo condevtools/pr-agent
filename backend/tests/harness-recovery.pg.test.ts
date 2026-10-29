@@ -4,8 +4,8 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import type { PublicationBinding } from "../src/harness/authority.js";
-import { PublicationControlStore } from "../src/harness/publication-control.js";
+import type { PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { PublicationControlStore } from "../src/agent-runtime/publication/control.js";
 import {
   buildPublicationIdentity,
   PendingPublicationError,
@@ -13,14 +13,14 @@ import {
   preparePublicationInTransaction,
   PublicationService,
   type PublicationRequest,
-} from "../src/harness/publication.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
+} from "../src/agent-runtime/publication/publication.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
 import {
   firstRecoverablePreparedOperation,
   PgPublicationRecoverySchedule,
-} from "../src/harness/recovery.js";
+} from "../src/agent-runtime/publication/recovery.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -38,18 +38,18 @@ if (!databaseUrl) {
   const rolePassword = randomUUID();
   let poolA: Pool;
   let poolB: Pool;
-  let dbA: HarnessDatabase;
+  let dbA: RuntimeDatabase;
   let storeA: PgPublicationStore;
   let serviceA: PublicationService;
   let scheduleA: PgPublicationRecoverySchedule;
   let scheduleB: PgPublicationRecoverySchedule;
-  let runStore: HarnessRunStore;
+  let runStore: RunStore;
   let controlStore: PublicationControlStore;
   let nextProviderId = 70_000;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(
       `CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`,
     );
@@ -72,7 +72,7 @@ if (!databaseUrl) {
     appUrl.password = rolePassword;
     poolA = new Pool({ connectionString: appUrl.toString(), max: 2 });
     poolB = new Pool({ connectionString: appUrl.toString(), max: 2 });
-    dbA = new HarnessDatabase(poolA);
+    dbA = new RuntimeDatabase(poolA);
     storeA = new PgPublicationStore(dbA);
     serviceA = new PublicationService(storeA);
     scheduleA = new PgPublicationRecoverySchedule(dbA, {
@@ -81,14 +81,14 @@ if (!databaseUrl) {
       maxBackoffMs: 50_000,
       maxAttempts: 5,
     });
-    scheduleB = new PgPublicationRecoverySchedule(new HarnessDatabase(poolB), {
+    scheduleB = new PgPublicationRecoverySchedule(new RuntimeDatabase(poolB), {
       claimTtlMs: 30_000,
       initialBackoffMs: 1_000,
       maxBackoffMs: 50_000,
       maxAttempts: 5,
     });
-    const adminDb = new HarnessDatabase(adminPool);
-    runStore = new HarnessRunStore(adminDb);
+    const adminDb = new RuntimeDatabase(adminPool);
+    runStore = new RunStore(adminDb);
     controlStore = new PublicationControlStore(adminDb);
   });
 

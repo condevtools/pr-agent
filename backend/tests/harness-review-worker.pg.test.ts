@@ -5,21 +5,21 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { PublicationAuthorityStore, type PublicationBinding } from "../src/harness/authority.js";
-import { ModelBudgetStore, getModelExecutionPolicy, reserveRunBudgetInTransaction, type ModelExecutionPolicy } from "../src/harness/model-budget-store.js";
-import { executeModelRequest } from "../src/harness/model-execution-context.js";
-import { PublicationBatchCoordinator, PublicationBatchStore } from "../src/harness/publication-batches.js";
-import { PendingPublicationError, PgPublicationStore, PublicationService, type PublicationAdapter } from "../src/harness/publication.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { assertReviewRunRevision, durableReviewAnalysis, durableReviewCollection } from "../src/harness/review-run-context.js";
-import { enqueueReviewRun } from "../src/harness/review-run-intake.js";
-import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { closeHarnessRuntime, publicationRuntimeForBinding } from "../src/harness/runtime.js";
-import { executeReviewRun } from "../src/harness/review-workflow.js";
+import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { ModelBudgetStore, getModelExecutionPolicy, reserveRunBudgetInTransaction, type ModelExecutionPolicy } from "../src/agent-runtime/budget/model-budget-store.js";
+import { executeModelRequest } from "../src/model/execution-context.js";
+import { PublicationBatchCoordinator, PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
+import { PendingPublicationError, PgPublicationStore, PublicationService, type PublicationAdapter } from "../src/agent-runtime/publication/publication.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { assertReviewRunRevision, durableReviewAnalysis, durableReviewCollection } from "../src/agent-runtime/execution/run-context.js";
+import { enqueueReviewRun } from "../src/review/intake/run-intake.js";
+import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { closeAgentRuntime, publicationRuntimeForBinding } from "../src/agent-runtime/runtime.js";
+import { executeReviewRun } from "../src/review/run.js";
 import { runGitHubReview } from "../src/integrations/github/github-review.js";
 import { createRestBackedOctokit } from "../src/integrations/github/github-rest-client.js";
 
@@ -44,8 +44,8 @@ if (!databaseUrl) {
   const version = hash("review-worker-runtime-v1");
   const policy = buildZeroPricePolicy();
   let appPool: Pool;
-  let appDb: HarnessDatabase;
-  let runStore: HarnessRunStore;
+  let appDb: RuntimeDatabase;
+  let runStore: RunStore;
   let executionStore: RunExecutionStore;
   let budgetStore: ModelBudgetStore;
   let batchStore: PublicationBatchStore;
@@ -102,7 +102,7 @@ if (!databaseUrl) {
     if (!address || typeof address === "string") throw new Error("Local fixture server did not bind a TCP port");
     origin = `http://127.0.0.1:${address.port}`;
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`
       GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName};
@@ -154,15 +154,15 @@ if (!databaseUrl) {
     process.env.OPENAI_BASE_URL = `${origin}/v1`;
     process.env.OPENAI_COMPATIBLE_API_KEY = "local-openai-key";
     process.env.HARNESS_MODEL_PRICING_JSON = productionPricingJson();
-    appDb = new HarnessDatabase(appPool);
-    runStore = new HarnessRunStore(appDb);
+    appDb = new RuntimeDatabase(appPool);
+    runStore = new RunStore(appDb);
     executionStore = new RunExecutionStore(appDb, { leaseTtlMs: 60_000, initialRetryMs: 10, maxRetryMs: 100 });
     budgetStore = new ModelBudgetStore(appDb);
     batchStore = new PublicationBatchStore(appDb);
     coordinator = new PublicationBatchCoordinator(batchStore, new PublicationService(new PgPublicationStore(appDb)));
 
-    const adminDb = new HarnessDatabase(adminPool);
-    const adminRuns = new HarnessRunStore(adminDb);
+    const adminDb = new RuntimeDatabase(adminPool);
+    const adminRuns = new RunStore(adminDb);
     const authority = new PublicationAuthorityStore(adminDb);
     await adminRuns.registerIntegration({ tenantId, id: integrationId, platform: "github", origin, repository });
     await authority.configure({ tenantId, integrationId, providerRepositoryId, providerActorId: 4343,
@@ -179,7 +179,7 @@ if (!databaseUrl) {
   });
 
   after(async () => {
-    await closeHarnessRuntime();
+    await closeAgentRuntime();
     await appPool?.end();
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
     await adminPool.query(`DROP ROLE IF EXISTS ${roleName}`);
@@ -396,7 +396,7 @@ if (!databaseUrl) {
       [tenantId, queued.id],
     ));
     const errors: unknown[] = [];
-    const worker = new ReviewRunWorker({
+    const worker = new RunWorker({
       store: executionStore, budget: budgetStore, bindings: async () => [binding],
       runtimeHash: async () => pinned.rows[0]!.runtime_version_hash,
       execute: executeReviewRun, onError: (error) => { errors.push(error); },
@@ -472,7 +472,7 @@ if (!databaseUrl) {
     const beforeCalls = httpCalls.length;
     mockPullHeadSha = "head-moved-after-intake";
     try {
-      const worker = new ReviewRunWorker({
+      const worker = new RunWorker({
         store: executionStore, budget: budgetStore, bindings: async () => [binding],
         runtimeHash: async () => pinned.rows[0]!.runtime_version_hash,
         execute: executeReviewRun, onError: () => undefined,
@@ -493,10 +493,10 @@ if (!databaseUrl) {
   });
 
   function makeWorker(
-    execute: ConstructorParameters<typeof ReviewRunWorker>[0]["execute"],
+    execute: ConstructorParameters<typeof RunWorker>[0]["execute"],
     errors: unknown[] = [],
-  ): ReviewRunWorker {
-    return new ReviewRunWorker({
+  ): RunWorker {
+    return new RunWorker({
       store: executionStore,
       budget: budgetStore,
       bindings: async () => [binding],

@@ -1,4 +1,4 @@
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import type {
   CriticDecision,
   DeepReviewSource,

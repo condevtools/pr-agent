@@ -15,4 +15,4 @@ import { ReleasesService } from "../evolution/releases.service.js";
 
 @Module({ controllers: [RunsController, EvolutionFeedbackController, DatasetsController, EvolutionProposalsController, EvaluationsController, ReleasesController],
   providers: [RunsService, EvolutionFeedbackService, DatasetsService, EvolutionProposalsService, EvaluationsService, ReleasesService] })
-export class HarnessModule {}
+export class AgentRuntimeModule {}

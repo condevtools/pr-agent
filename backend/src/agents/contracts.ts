@@ -1,4 +1,4 @@
-import type { RunLease } from "../harness/run-contracts.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import type { PullRequestReviewInput, RiskLevel } from "../review/review-types.js";
 
 export type DeepReviewRole = "security" | "correctness";

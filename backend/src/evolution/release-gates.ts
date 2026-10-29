@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { BASELINE_REVIEW_TEXT, reviewTextHashes, withReviewTextVersions } from "../agents/text-components.js";
-import { fingerprint, type RunVersionManifest } from "../harness/versions.js";
+import { fingerprint, type RunVersionManifest } from "../agent-runtime/versions.js";
 import { evolutionCandidateSchema } from "./candidate-contracts.js";
 import { REPLAY_VERIFIER_HASH } from "./replay-contracts.js";
 import type { EvolutionReleasePolicyV1, OfflineQualificationEvidenceV1 } from "./release-contracts.js";

@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 
-import type { PublicationBinding } from "../src/harness/authority.js";
-import type { ModelBudgetStore } from "../src/harness/model-budget-store.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import type { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
+import type { PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import type { ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import type { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
 
 test("an old attempt finishing its heartbeat cannot remove the replacement task from drain tracking", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
@@ -30,7 +30,7 @@ test("an old attempt finishing its heartbeat cannot remove the replacement task 
     heartbeat: async () => { await firstHeartbeat.promise; return lease; },
     transition: async (_lease: RunLease, input: { to: string }) => { if (input.to === "retry_wait") ready = true; },
   } as unknown as RunExecutionStore;
-  const worker = new ReviewRunWorker({
+  const worker = new RunWorker({
     store, budget: { closeRunBudget: async () => "closed" } as unknown as ModelBudgetStore,
     bindings: async () => [{ reviewExecutionMode: "harness_async" } as PublicationBinding],
     runtimeHash: async () => "runtime",

@@ -1,9 +1,9 @@
 import type { PoolClient } from "pg";
 
-import { HarnessDatabase } from "../harness/postgres/database.js";
-import { requireRunPermission, RunControlError, type RunPrincipal } from "../harness/run-control-contracts.js";
-import { reviewRunInputSchema } from "../harness/review-run-input.js";
-import { fingerprint } from "../harness/versions.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import { requireRunPermission, RunControlError, type RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { reviewRunInputSchema } from "../review/intake/run-input.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import { computeLineageHash, computeShingleSignature, shingleSimilarity, validateDatasetFixture } from "./dataset-fixture.js";
 import type { DatasetCaseSource, DatasetFixtureV1, DatasetMetadata, DatasetSplitPolicyV1, DatasetStorePort } from "./dataset-contracts.js";
 import type { createDatasetSchema } from "./dataset-contracts.js";
@@ -30,7 +30,7 @@ interface CaseRow {
 }
 
 export class DatasetStore implements DatasetStorePort {
-  constructor(private readonly db: HarnessDatabase) {}
+  constructor(private readonly db: RuntimeDatabase) {}
 
   async create(principal: RunPrincipal, input: z.infer<typeof createDatasetSchema>): Promise<DatasetMetadata> {
     requireRunPermission(principal, "evaluations:create");

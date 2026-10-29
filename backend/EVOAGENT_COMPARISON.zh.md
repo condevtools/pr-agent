@@ -42,7 +42,7 @@ PR-Agent 原有核心是平台集成驱动的单次结构化审查：[ai-reviewe
 | Fix | 显式生成 patch 并进行可配置检查 | 独立 FixRun；code/test patch 分离、Docker 差分验证、精确意图审批，默认 suggestion |
 | Evolution | 根因生成器可提出 prompt/delegation/tool/budget 配置 | 离线 EvolutionRun；V1 只允许 prompt/tool description 文本，禁止修改权限、预算和拓扑 |
 
-当前生产底座的源码位置包括 [Run worker](./src/harness/review-run-worker.ts)、[执行存储](./src/harness/run-execution-store.ts)、[模型预算](./src/harness/model-budget-store.ts)、[发布账](./src/harness/publication.ts)、[Run API](./src/modules/harness/runs.service.ts)。阶段实现与实际验证分别报告；P1 的 deep 已实现为显式触发、强制 shadow 的只读工作流，见 [实现与验证边界](HARNESS_DEEP_REVIEW.md)；Fix 已实现为独立建议/隔离验证/人工审批子 Run，GitHub 受控 Draft PR、GitLab suggestion-only，见 [Fix 实现边界](HARNESS_FIX.md)；Evolution 的反馈、独立标注、冻结数据集、受限候选与生产路径离线回放，以及按仓库双人审批、最多 5% 灰度和回滚均已实现，见 [Evolution 实现边界](HARNESS_EVOLUTION.md)。发布激活默认关闭，功能实现不等于独立质量验收。
+当前生产底座的源码位置包括 [Run worker](./src/agent-runtime/execution/run-worker.ts)、[执行存储](./src/agent-runtime/execution/store.ts)、[模型预算](./src/agent-runtime/budget/model-budget-store.ts)、[发布账](./src/agent-runtime/publication/publication.ts)、[Run API](./src/modules/harness/runs.service.ts)。阶段实现与实际验证分别报告；P1 的 deep 已实现为显式触发、强制 shadow 的只读工作流，见 [实现与验证边界](HARNESS_DEEP_REVIEW.md)；Fix 已实现为独立建议/隔离验证/人工审批子 Run，GitHub 受控 Draft PR、GitLab suggestion-only，见 [Fix 实现边界](HARNESS_FIX.md)；Evolution 的反馈、独立标注、冻结数据集、受限候选与生产路径离线回放，以及按仓库双人审批、最多 5% 灰度和回滚均已实现，见 [Evolution 实现边界](HARNESS_EVOLUTION.md)。发布激活默认关闭，功能实现不等于独立质量验收。
 
 ## 优势、短板与补强顺序
 

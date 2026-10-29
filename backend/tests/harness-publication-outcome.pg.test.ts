@@ -4,18 +4,18 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { PublicationAuthorityStore, type PublicationBinding } from "../src/harness/authority.js";
-import { ModelBudgetStore, getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../src/harness/model-budget-store.js";
-import { PublicationBatchCoordinator, PublicationBatchStore } from "../src/harness/publication-batches.js";
-import { PublicationControlStateError, PublicationControlStore } from "../src/harness/publication-control.js";
-import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "../src/harness/publication-outcome.js";
-import { PgPublicationStore, PublicationService, type PublicationAdapter } from "../src/harness/publication.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { RunControlStore } from "../src/harness/run-control-store.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
+import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { ModelBudgetStore, getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../src/agent-runtime/budget/model-budget-store.js";
+import { PublicationBatchCoordinator, PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
+import { PublicationControlStateError, PublicationControlStore } from "../src/agent-runtime/publication/control.js";
+import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "../src/agent-runtime/publication/outcome.js";
+import { PgPublicationStore, PublicationService, type PublicationAdapter } from "../src/agent-runtime/publication/publication.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunControlStore } from "../src/agent-runtime/runs/control-store.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -28,7 +28,7 @@ if (!databaseUrl) {
   }
 
   const pool = new Pool({ connectionString: databaseUrl, max: 12 });
-  const db = new HarnessDatabase(pool);
+  const db = new RuntimeDatabase(pool);
   const tenantId = randomUUID();
   const integrationId = randomUUID();
   const version = hash("publication-outcome-runtime-v1");
@@ -47,7 +47,7 @@ if (!databaseUrl) {
       }, maxOutputTokens: 1_000, maxPhysicalCallsPerStep: 3 } },
     }),
   });
-  const runStore = new HarnessRunStore(db);
+  const runStore = new RunStore(db);
   const executionStore = new RunExecutionStore(db, { leaseTtlMs: 60_000 });
   const budgetStore = new ModelBudgetStore(db);
   const batchStore = new PublicationBatchStore(db);
@@ -61,7 +61,7 @@ if (!databaseUrl) {
   let binding: PublicationBinding;
 
   before(async () => {
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     const authority = new PublicationAuthorityStore(db);
     await runStore.registerIntegration({
       tenantId, id: integrationId, platform: "github", origin, repository,

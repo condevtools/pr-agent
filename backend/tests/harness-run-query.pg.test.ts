@@ -4,12 +4,12 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { RunControlError, type RunPrincipal } from "../src/harness/run-control-contracts.js";
-import { appendRunFact } from "../src/harness/run-events.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { RunCursorExpiredError, RunQueryStore } from "../src/harness/run-query-store.js";
+import { RunControlError, type RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import { appendRunFact } from "../src/agent-runtime/runs/events.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunCursorExpiredError, RunQueryStore } from "../src/agent-runtime/runs/query-store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -20,8 +20,8 @@ if (!databaseUrl) {
   if (!databaseName.startsWith("harness_test_")) throw new Error("Disposable harness_test_* database required");
 
   const adminPool = new Pool({ connectionString: databaseUrl, max: 3 });
-  const adminDb = new HarnessDatabase(adminPool);
-  const adminRuns = new HarnessRunStore(adminDb);
+  const adminDb = new RuntimeDatabase(adminPool);
+  const adminRuns = new RunStore(adminDb);
   const role = `run_query_${randomUUID().replaceAll("-", "")}`;
   const password = randomUUID();
   const tenantId = randomUUID();
@@ -39,7 +39,7 @@ if (!databaseUrl) {
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings,pr_agent_harness.agent_runs,
@@ -52,7 +52,7 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${role}`);
     const appUrl = new URL(databaseUrl); appUrl.username = role; appUrl.password = password;
     appPool = new Pool({ connectionString: appUrl.toString(), max: 4 });
-    queries = new RunQueryStore(new HarnessDatabase(appPool));
+    queries = new RunQueryStore(new RuntimeDatabase(appPool));
 
     await register(tenantId, integrationId, "primary");
     await register(tenantId, otherIntegrationId, "other-integration");

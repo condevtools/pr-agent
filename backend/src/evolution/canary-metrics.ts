@@ -1,4 +1,4 @@
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 
 export interface CanaryObservation {
   selection: "control" | "candidate"; status: string;

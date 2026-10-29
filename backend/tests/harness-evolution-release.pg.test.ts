@@ -16,19 +16,19 @@ import { PgEvolutionReleaseStore } from "../src/evolution/release-store.js";
 import { releaseBucket } from "../src/evolution/release-selection.js";
 import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH,
   REPLAY_VERIFIER_HASH } from "../src/evolution/replay-contracts.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore, type CreateRunInput } from "../src/harness/postgres/run-store.js";
-import { buildReviewRunCreationInput } from "../src/harness/review-run-intake.js";
-import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { closeHarnessRuntime, executeHarnessRun } from "../src/harness/runtime.js";
-import { HarnessMaintenanceStore } from "../src/harness/maintenance.js";
-import type { RunPrincipal } from "../src/harness/run-control-contracts.js";
-import { fingerprint, reviewVersionManifest, type RunVersionManifest } from "../src/harness/versions.js";
-import { getModelExecutionPolicy, ModelBudgetStore } from "../src/harness/model-budget-store.js";
-import { resolveReviewModelConfiguration } from "../src/review/ai-reviewer.js";
-import { HarnessModule } from "../src/modules/harness/harness.module.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore, type CreateRunInput } from "../src/agent-runtime/postgres/run-store.js";
+import { buildReviewRunCreationInput } from "../src/review/intake/run-intake.js";
+import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { closeAgentRuntime, executeAgentRun } from "../src/agent-runtime/runtime.js";
+import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
+import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import { fingerprint, runtimeVersionManifest, type RunVersionManifest } from "../src/agent-runtime/versions.js";
+import { getModelExecutionPolicy, ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";
+import { resolveModelConfiguration } from "../src/review/ai-reviewer.js";
+import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -39,7 +39,7 @@ if (!databaseUrl) {
   if (!databaseName.startsWith("harness_test_")) throw new Error("evolution release requires a disposable database");
 
   const pool = new Pool({ connectionString: databaseUrl, max: 6 });
-  const appPassword = randomUUID(); let appPool: Pool; let db: HarnessDatabase;
+  const appPassword = randomUUID(); let appPool: Pool; let db: RuntimeDatabase;
   const tenantId = randomUUID(); const integrationId = randomUUID(); const otherTenantId = randomUUID();
   const otherIntegrationId = randomUUID();
   const datasetId = randomUUID(); const candidateId = randomUUID(); const proposalRunId = randomUUID();
@@ -100,23 +100,23 @@ if (!databaseUrl) {
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-key";
     process.env.GITHUB_API_URL = origin; process.env.GITHUB_TOKEN = "local-read-token";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing();
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     const role = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
     const ddl = await pool.query<{ sql: string }>(role.rowCount
       ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql"
       : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql",
     [appPassword]);
     await pool.query(ddl.rows[0]!.sql);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
     });
     if (configured.status !== 0) throw new Error(`P3c runtime grants failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     process.env.HARNESS_DATABASE_URL = appUrl.toString();
-    appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); db = new HarnessDatabase(appPool);
-    currentManifest = await reviewVersionManifest(getModelExecutionPolicy(
-      resolveReviewModelConfiguration().provider, resolveReviewModelConfiguration().model));
+    appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); db = new RuntimeDatabase(appPool);
+    currentManifest = await runtimeVersionManifest(getModelExecutionPolicy(
+      resolveModelConfiguration().provider, resolveModelConfiguration().model));
     baselineManifest = withReviewTextVersions(currentManifest, BASELINE_REVIEW_TEXT);
     candidateManifest = withReviewTextVersions(currentManifest, candidateText);
     await seedReleaseEvidence();
@@ -126,14 +126,14 @@ if (!databaseUrl) {
         "evolution:release:rollback", "evolution:release:read"] },
     { subjectId: "release-cross-api", actorType: "user", tenantId, integrationId: otherIntegrationId,
       tokenSha256: createHash("sha256").update(crossApiToken).digest("hex"), permissions: ["runs:read", "runs:trace"] }]);
-    app = await NestFactory.create(HarnessModule, { logger: false, abortOnError: false });
+    app = await NestFactory.create(AgentRuntimeModule, { logger: false, abortOnError: false });
     await app.listen(0, "127.0.0.1");
     const apiAddress = app.getHttpServer().address();
     if (!apiAddress || typeof apiAddress === "string") throw new Error("release API fixture did not bind");
     apiOrigin = `http://127.0.0.1:${apiAddress.port}`;
   });
 
-  after(async () => { await app?.close(); await closeHarnessRuntime(); await appPool?.end(); await pool.end();
+  after(async () => { await app?.close(); await closeAgentRuntime(); await appPool?.end(); await pool.end();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); });
 
   test("offline qualification accepts the exact 300-case and 30-repository engineering fixture", async () => {
@@ -300,7 +300,7 @@ if (!databaseUrl) {
     assert.ok(sourceKey);
     const binding = await releaseBinding();
     candidateCreation = await buildReviewRunCreationInput(binding, reviewInput(sourceKey));
-    const created = await new HarnessRunStore(db).createRun(candidateCreation);
+    const created = await new RunStore(db).createRun(candidateCreation);
     selectedRunId = created.id;
     const selected = (await pool.query<{ selection: string; assignment_version: string; review_text_json: unknown;
       prompt_hash: string; tool_hash: string }>(
@@ -368,9 +368,9 @@ if (!databaseUrl) {
     await assert.rejects(store.approve(checker(), { requestId: promoteRequestId, decision: "approve",
       commandKey: "approve-promote" }, currentManifest), (error: unknown) => hasCode(error, "CANARY_GATE_FAILED"));
     const errors: unknown[] = [];
-    const worker = new ReviewRunWorker({ store: new RunExecutionStore(db), budget: new ModelBudgetStore(db),
+    const worker = new RunWorker({ store: new RunExecutionStore(db), budget: new ModelBudgetStore(db),
       bindings: async () => [await releaseBinding()], runtimeHash: async () => currentManifest.runtimeVersionHash,
-      execute: executeHarnessRun, onError: (error) => errors.push(error) }, 1);
+      execute: executeAgentRun, onError: (error) => errors.push(error) }, 1);
     await worker.tick(); await worker.drain();
     assert.equal(errors.length, 0, errors.map(String).join("\n"));
     assert.equal((await new RunExecutionStore(db).load(tenantId, selectedRunId))?.status, "succeeded");
@@ -415,7 +415,7 @@ if (!databaseUrl) {
 
   test("rollback affects only new Runs while duplicate delivery preserves the frozen candidate selection", async () => {
     assert.ok(candidateCreation && selectedRunId);
-    const runs = new HarnessRunStore(db);
+    const runs = new RunStore(db);
     const duplicate = await runs.createRun(candidateCreation);
     assert.equal(duplicate.id, selectedRunId); assert.equal(duplicate.created, false);
     const baselineCreation = await buildReviewRunCreationInput(await releaseBinding(), reviewInput("after-rollback"));
@@ -429,8 +429,8 @@ if (!databaseUrl) {
 
     const errors: unknown[] = [];
     const execution = new RunExecutionStore(db); const budget = new ModelBudgetStore(db);
-    const worker = new ReviewRunWorker({ store: execution, budget, bindings: async () => [await releaseBinding()],
-      runtimeHash: async () => currentManifest.runtimeVersionHash, execute: executeHarnessRun,
+    const worker = new RunWorker({ store: execution, budget, bindings: async () => [await releaseBinding()],
+      runtimeHash: async () => currentManifest.runtimeVersionHash, execute: executeAgentRun,
       onError: (error) => errors.push(error) }, 1);
     for (let count = 0; count < 2; count += 1) { await worker.tick(); await worker.drain(); }
     assert.equal(errors.length, 0, errors.map(String).join("\n"));
@@ -468,7 +468,7 @@ if (!databaseUrl) {
       SET finished_at=clock_timestamp()-interval '40 days'
       WHERE tenant_id=$1 AND id=ANY($2::uuid[])`,
     [tenantId, [sourceRunId, proposalRunId, selectedRunId, baselineRunId]]));
-    const preview = await new HarnessMaintenanceStore(pool).preview({ tenantId, olderThanDays: 30, limit: 1000 });
+    const preview = await new RuntimeMaintenanceStore(pool).preview({ tenantId, olderThanDays: 30, limit: 1000 });
     const candidates = new Set(preview.candidates.map(({ runId }) => runId));
     assert.ok(candidates.has(baselineRunId), "an unprotected baseline Run proves the preview scanned this cutoff");
     assert.ok(!candidates.has(sourceRunId));

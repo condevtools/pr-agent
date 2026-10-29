@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import test, { before, after } from "node:test";
 import { Pool } from "pg";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { PublicationAuthorityStore } from "../src/harness/authority.js";
-import { PublicationBatchStore } from "../src/harness/publication-batches.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { PublicationAuthorityStore } from "../src/agent-runtime/authority/publication-authority.js";
+import { PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
 
 const url = process.env.HARNESS_TEST_DATABASE_URL;
 if (!url) {
@@ -14,15 +14,15 @@ if (!url) {
 } else {
   if (!decodeURIComponent(new URL(url).pathname.slice(1)).startsWith("harness_test_")) throw new Error("Disposable harness_test_* database required");
   const admin = new Pool({ connectionString: url });
-  const db = new HarnessDatabase(admin);
+  const db = new RuntimeDatabase(admin);
   const authority = new PublicationAuthorityStore(db);
-  const registry = new HarnessRunStore(db);
+  const registry = new RunStore(db);
   const role = `harness_authority_${randomUUID().replaceAll("-", "")}`;
   const password = randomUUID();
   let app: Pool;
   let batches: PublicationBatchStore;
   before(async () => {
-    await migrateHarness(admin);
+    await migrateRuntime(admin);
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
     await admin.query(`GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA pr_agent_harness TO ${role}`);
@@ -31,7 +31,7 @@ if (!url) {
     await admin.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint) TO ${role}`);
     const appUrl = new URL(url); appUrl.username = role; appUrl.password = password;
     app = new Pool({ connectionString: appUrl.toString(), max: 4 });
-    batches = new PublicationBatchStore(new HarnessDatabase(app));
+    batches = new PublicationBatchStore(new RuntimeDatabase(app));
   });
   after(async () => {
     await app?.end();

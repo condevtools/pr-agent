@@ -2,22 +2,22 @@ import { reviewTextHashes, withReviewTextVersions } from "../agents/text-compone
 import { evolutionCandidateSchema, evolutionProposalSourceSchema, type EvolutionCandidateV1 } from "./candidate-contracts.js";
 import { createEvaluationSchema, REPLAY_VERIFIER_HASH, type EvaluationReceipt, type ReplayRunInput } from "./replay-contracts.js";
 import { EvaluationStore, type PendingReplayResult } from "./replay-store.js";
-import type { PublicationBinding } from "../harness/authority.js";
-import { freezeDeepBudget } from "../harness/deep-budget.js";
-import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../harness/model-budget-store.js";
-import type { HarnessDatabase } from "../harness/postgres/database.js";
-import type { CreateRunInput } from "../harness/postgres/run-store.js";
-import type { RunPrincipal } from "../harness/run-control-contracts.js";
-import { requireRunPermission, RunControlError } from "../harness/run-control-contracts.js";
-import { fingerprint, REVIEW_RUNTIME_CONFIG, reviewVersionManifest } from "../harness/versions.js";
-import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
+import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
+import { freezeDeepBudget } from "../review/deep/budget.js";
+import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../agent-runtime/budget/model-budget-store.js";
+import type { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import type { CreateRunInput } from "../agent-runtime/postgres/run-store.js";
+import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { requireRunPermission, RunControlError } from "../agent-runtime/runs/control-contracts.js";
+import { fingerprint, AGENT_RUNTIME_CONFIG, runtimeVersionManifest } from "../agent-runtime/versions.js";
+import { resolveModelConfiguration } from "../review/ai-reviewer.js";
 
 export class ReplayAdmissionManifestDriftError extends Error {
   constructor() { super("Replay component or model manifest drifted before child admission");
     this.name = "ReplayAdmissionManifestDriftError"; }
 }
 
-export async function admitEvaluation(input: { db: HarnessDatabase; principal: RunPrincipal;
+export async function admitEvaluation(input: { db: RuntimeDatabase; principal: RunPrincipal;
   commandKey: string; request: unknown }): Promise<EvaluationReceipt> {
   const request = createEvaluationSchema.parse(input.request);
   requireRunPermission(input.principal, "evaluations:create");
@@ -40,9 +40,9 @@ export async function admitEvaluation(input: { db: HarnessDatabase; principal: R
       baseline: { schemaVersion: 1 as const, prompt_text: source.baselinePromptText,
         tool_description_text: source.baselineToolDescriptionText } };
   });
-  const { provider, model } = resolveReviewModelConfiguration();
+  const { provider, model } = resolveModelConfiguration();
   const policy = getModelExecutionPolicy(provider, model);
-  const base = await reviewVersionManifest(policy);
+  const base = await runtimeVersionManifest(policy);
   const baselineManifest = withReviewTextVersions(base, frozen.baseline);
   const candidateManifest = withReviewTextVersions(base, frozen.candidate);
   if (baselineManifest.modelVersionHash !== candidateManifest.modelVersionHash
@@ -59,9 +59,9 @@ export async function admitEvaluation(input: { db: HarnessDatabase; principal: R
 
 export async function buildReplayRunCreationInput(binding: PublicationBinding, result: PendingReplayResult): Promise<CreateRunInput> {
   if (binding.id !== result.integrationId) throw new Error("Replay result binding mismatch");
-  const { provider, model } = resolveReviewModelConfiguration();
+  const { provider, model } = resolveModelConfiguration();
   const policy = getModelExecutionPolicy(provider, model);
-  const base = await reviewVersionManifest(policy);
+  const base = await runtimeVersionManifest(policy);
   const reviewText = result.variant === "baseline"
     ? evolutionCandidateSchema.parse(result.baselineText) : evolutionCandidateSchema.parse(result.candidateText);
   const manifest = withReviewTextVersions(base, reviewText);
@@ -82,8 +82,8 @@ export async function buildReplayRunCreationInput(binding: PublicationBinding, r
     runType: "eval.replay.v1", baseSha: result.baseSha, headSha: result.headSha, ...manifest,
     input: replayInput, authorityGeneration: binding.generation,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
-    runtimeConfig: { ...REVIEW_RUNTIME_CONFIG, modelPolicy: policy, deepBudget: freezeDeepBudget(policy.runLimits), reviewText },
-    limits: { maxRunMs: REVIEW_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: REVIEW_RUNTIME_CONFIG.maxJobAttempts,
-      maxStepAttempts: REVIEW_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
+    runtimeConfig: { ...AGENT_RUNTIME_CONFIG, modelPolicy: policy, deepBudget: freezeDeepBudget(policy.runLimits), reviewText },
+    limits: { maxRunMs: AGENT_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: AGENT_RUNTIME_CONFIG.maxJobAttempts,
+      maxStepAttempts: AGENT_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
     admission: (client, runId) => reserveRunBudgetInTransaction(client, { tenantId: binding.tenantId, runId, policy }) };
 }

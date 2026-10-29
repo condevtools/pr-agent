@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import type { PublicationBinding } from "../harness/authority.js";
-import { executeDeepReviewWithContext } from "../harness/deep-review-run.js";
-import { currentReviewRunContext } from "../harness/review-run-context.js";
-import { DeepReviewAnalysisFailedError } from "../harness/review-run-context.js";
-import type { RunLease } from "../harness/run-contracts.js";
-import { getHarnessServices } from "../harness/runtime.js";
+import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
+import { executeDeepReviewWithContext } from "../review/deep/run.js";
+import { currentRunExecutionContext } from "../agent-runtime/execution/run-context.js";
+import { DeepReviewAnalysisFailedError } from "../agent-runtime/execution/run-context.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
+import { getAgentRuntimeServices } from "../agent-runtime/runtime.js";
 import type { DiffFileContext, PullRequestReviewInput } from "../review/review-types.js";
 import { ReplayFixtureAdapter } from "./replay-fixture-adapter.js";
 import { replayRunInputSchema } from "./replay-contracts.js";
@@ -14,10 +14,10 @@ import { EvaluationStore } from "./replay-store.js";
 
 export async function executeReplayRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
   const input = replayRunInputSchema.parse(lease.input);
-  const context = currentReviewRunContext();
+  const context = currentRunExecutionContext();
   if (!context || context.lease.runId !== lease.runId || binding.tenantId !== lease.tenantId
       || binding.id !== lease.integrationId) throw new Error("Replay Run context or binding mismatch");
-  const fixture = await new EvaluationStore((await getHarnessServices()).db).loadReplayFixture(lease, input);
+  const fixture = await new EvaluationStore((await getAgentRuntimeServices()).db).loadReplayFixture(lease, input);
   const artifact = await executeDeepReviewWithContext(parseCollectedFixture(fixture.collected), new ReplayFixtureAdapter(fixture), context);
   if (artifact.analysisStatus === "failed") throw new DeepReviewAnalysisFailedError();
 }

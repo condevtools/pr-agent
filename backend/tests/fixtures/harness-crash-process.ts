@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 
-import { HarnessDatabase } from "../../src/harness/postgres/database.js";
-import { migrateHarness } from "../../src/harness/postgres/migrations.js";
-import { ModelBudgetStore, type ModelExecutionPolicy } from "../../src/harness/model-budget-store.js";
-import { RunExecutionStore } from "../../src/harness/run-execution-store.js";
-import type { ClaimableBinding } from "../../src/harness/run-contracts.js";
+import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
+import { ModelBudgetStore, type ModelExecutionPolicy } from "../../src/agent-runtime/budget/model-budget-store.js";
+import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import type { ClaimableBinding } from "../../src/agent-runtime/runs/contracts.js";
 
 // This process is deliberately SIGKILLed by the owning disposable-database test.
 const pool = new Pool({ connectionString: process.env.HARNESS_TEST_CHILD_DATABASE_URL, max: 1 });
@@ -25,10 +25,10 @@ process.once("message", async (input: { mode: string; binding: ClaimableBinding;
         }
         return result;
       }) as typeof client.query;
-      await migrateHarness({ connect: async () => client } as unknown as Pool);
+      await migrateRuntime({ connect: async () => client } as unknown as Pool);
       throw new Error("Migration fixture should have paused");
     }
-    const db = new HarnessDatabase(pool);
+    const db = new RuntimeDatabase(pool);
     const store = new RunExecutionStore(db);
     const budget = new ModelBudgetStore(db);
     const lease = await store.claim(input.binding, "crash-process", input.runtimeHash);

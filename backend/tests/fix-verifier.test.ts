@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { applyUnifiedPatch } from "../src/fix/unified-patch.js";
 import { readSnapshotBundle, writeSnapshotBundle } from "../src/fix/snapshot-bundle.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 import { evaluateVerificationResult, sandboxCommandResultSchema, type SandboxRunnerResult } from "../src/fix/sandbox-result.js";
 import { isFixDifferentialEligible } from "../src/fix/verification-gate.js";
 

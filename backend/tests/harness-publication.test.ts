@@ -14,7 +14,7 @@ import {
   type PreparedPublication,
   type PublicationOperation,
   type PublicationStore,
-} from "../src/harness/publication.js";
+} from "../src/agent-runtime/publication/publication.js";
 
 const request = {
   scope: {

@@ -1,4 +1,4 @@
-import { isDurablePublicationEnabled } from "../../harness/publication-mode.js";
+import { isDurablePublicationEnabled } from "../../agent-runtime/publication/mode.js";
 import { localizeText, type UiLocale } from "#core";
 import { getPublicErrorMessage } from "../shared/public-error.js";
 import type {

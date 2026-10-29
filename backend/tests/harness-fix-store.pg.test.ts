@@ -5,14 +5,14 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { fingerprint } from "../src/harness/versions.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { createRunInTransaction } from "../src/harness/postgres/run-store.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { createRunInTransaction } from "../src/agent-runtime/postgres/run-store.js";
 import { approveFixApprovalInTransaction, consumeFixApprovalInTransaction,
   createApprovalInTransaction, PgFixStore } from "../src/fix/fix-store.js";
 import type { FixApprovalIntent, VerificationResult } from "../src/fix/contracts.js";
-import { PublicationBatchStore } from "../src/harness/publication-batches.js";
+import { PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -22,7 +22,7 @@ if (!databaseUrl) {
   const databaseName = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
   if (!databaseName.startsWith("harness_test_")) throw new Error("fix tests require a disposable database");
   const pool = new Pool({ connectionString: databaseUrl, max: 3 });
-  let appPool: Pool; let appDb: HarnessDatabase;
+  let appPool: Pool; let appDb: RuntimeDatabase;
   const tenantId = randomUUID(); const integrationId = randomUUID();
   const sourceRunId = randomUUID(); const fixRunId = randomUUID(); const stepId = randomUUID();
   const findingId = fingerprint("finding"); const gateId = fingerprint("gate");
@@ -37,7 +37,7 @@ if (!databaseUrl) {
     imageDigest, policyHash: fingerprint("policy"), proposalHash };
 
   before(async () => {
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     await pool.query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app') THEN
         CREATE ROLE pr_agent_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
@@ -49,14 +49,14 @@ if (!databaseUrl) {
         ALTER ROLE pr_agent_verifier PASSWORD 'verifier-test-password-123' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       END IF;
     END $$`);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl,
         HARNESS_VERIFIER_PASSWORD: "verifier-test-password-123" },
     });
     if (configured.status !== 0) throw new Error(`runtime grant CLI failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = "app-test";
-    appPool = new Pool({ connectionString: appUrl.toString(), max: 2 }); appDb = new HarnessDatabase(appPool);
+    appPool = new Pool({ connectionString: appUrl.toString(), max: 2 }); appDb = new RuntimeDatabase(appPool);
     await pool.query(
       `INSERT INTO pr_agent_harness.integration_bindings
          (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,

@@ -1,10 +1,10 @@
 import type { Pool, PoolClient } from "pg";
 
 import type { FixProposal, VerificationJobInput, VerificationResult } from "./contracts.js";
-import { fingerprint } from "../harness/versions.js";
-import type { RunLease } from "../harness/run-contracts.js";
-import { assertRunLease } from "../harness/run-execution-store.js";
-import { HarnessDatabase } from "../harness/postgres/database.js";
+import { fingerprint } from "../agent-runtime/versions.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
+import { assertRunLease } from "../agent-runtime/execution/store.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
 
 export interface VerificationJobLease extends VerificationJobInput {
   id: string;
@@ -134,7 +134,7 @@ export function verificationInputHashForProposal(proposal: FixProposal): string 
 
 /** Polls the external job while the caller owns the Run. The completed Step is promoted by PgFixStore. */
 export async function waitForVerification(
-  db: HarnessDatabase,
+  db: RuntimeDatabase,
   lease: RunLease,
   proposal: FixProposal,
   signal?: AbortSignal,

@@ -9,11 +9,11 @@ Publication authority 管理能否发布；execution authority 管理评审调�
 对已完成 publication enrollment 的单个测试 integration，先运行 `inspect` 获取当前 version，再执行：
 
 ```sh
-docker compose run --rm harness-migrate node dist/harness/cli.js execution-drain \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js execution-drain \
   --tenant <tenant-uuid> --id <integration-uuid> --version <current-version> \
   --evidence '<verified rollout/change record>'
 
-docker compose run --rm harness-migrate node dist/harness/cli.js execution-switch \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js execution-switch \
   --tenant <tenant-uuid> --id <integration-uuid> --version <version-returned-by-drain> \
   --mode harness_async --evidence '<fault/backup/capacity evidence and allowlist decision>'
 ```
@@ -29,7 +29,7 @@ Draining 阻止新 intake 和普通 claim。已取得租约的 Run 可以完成�
 ## 状态诊断
 
 ```sh
-docker compose run --rm harness-migrate node dist/harness/cli.js metrics \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js metrics \
   --tenant <tenant-uuid> --id <integration-uuid>
 ```
 
@@ -52,10 +52,10 @@ docker compose run --rm harness-migrate node dist/harness/cli.js metrics \
 保留操作使用管理数据库角色，默认选择 30 天前终结的 Run，最小 7 天，单批最多 1,000 个。先查看候选，再由管理员按既定数据策略执行：
 
 ```sh
-docker compose run --rm harness-migrate node dist/harness/cli.js retention \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js retention \
   --tenant <tenant-uuid> --action preview --days 30 --limit 100
 
-docker compose run --rm harness-migrate node dist/harness/cli.js retention \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js retention \
   --tenant <tenant-uuid> --action apply --days 30 --limit 100
 ```
 

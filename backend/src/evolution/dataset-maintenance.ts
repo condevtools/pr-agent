@@ -1,13 +1,13 @@
 import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
-import { HarnessDatabase } from "../harness/postgres/database.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
 
 const requestSchema = z.object({ tenantId: z.string().uuid(), datasetId: z.string().uuid() }).strict();
 
 /** Administrative retirement preserves immutable manifests while making raw fixtures unavailable. */
 export class EvolutionDatasetMaintenanceStore {
-  private readonly db: HarnessDatabase;
-  constructor(pool: Pool) { this.db = new HarnessDatabase(pool); }
+  private readonly db: RuntimeDatabase;
+  constructor(pool: Pool) { this.db = new RuntimeDatabase(pool); }
 
   async retire(input: { tenantId: string; datasetId: string; expectedVersion: number }): Promise<{ retired: boolean }> {
     const request = requestSchema.extend({ expectedVersion: z.number().int().positive() }).parse(input);

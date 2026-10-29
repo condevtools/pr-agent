@@ -5,9 +5,9 @@ import { DockerFixVerifier } from "./docker-verifier.js";
 import { loadFixPolicyRegistry } from "./fix-policy.js";
 import { VerifierJobStore } from "./verifier-jobs.js";
 import { VerifierWorker } from "./verifier-worker.js";
-import { harnessPoolConfig } from "../harness/runtime.js";
+import { agentRuntimePoolConfig } from "../agent-runtime/runtime.js";
 
-const pool = new Pool(harnessPoolConfig());
+const pool = new Pool(agentRuntimePoolConfig());
 pool.on("error", (error) => process.stderr.write(`verifier database connection error: ${error.name}\n`));
 const role = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean; current_user: string }>(
   "SELECT rolsuper,rolbypassrls,current_user FROM pg_roles WHERE rolname=current_user",

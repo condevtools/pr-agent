@@ -13,8 +13,8 @@ import {
   type EvidenceRecord,
   type StructuredModel,
 } from "../src/agents/index.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { fingerprint } from "../src/harness/versions.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 test("deep workflow persists bounded role, critic, gate and shadow artifact steps", async () => {
   const harness = createHarness();

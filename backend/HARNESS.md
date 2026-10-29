@@ -21,12 +21,12 @@ docker compose up -d --build
 新绑定默认为 `blocked`。绑定由管理员维护，Webhook 不能提供或改变 tenant、发布身份和凭证引用。以下 UUID、仓库和数值 ID 是示例，需要替换为已核实的目标：
 
 ```sh
-docker compose run --rm harness-migrate node dist/harness/cli.js bind \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js bind \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222 \
   --platform github --origin https://api.github.com --repository owner/repo
 
-docker compose run --rm harness-migrate node dist/harness/cli.js configure \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js configure \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222 \
   --repository-id 123 --actor-id 456 --credential-ref env:GITHUB_TOKEN --version 0
@@ -39,7 +39,7 @@ GitHub 用户 token 在发布前用 `/user` 验证实际身份；App 凭证从�
 切换前先实际停止旧版本发布实例，等待在途请求结束，并确认旧实例不会被自动重启。PostgreSQL 的 generation 无法约束不读取数据库的旧二进制程序；填写凭据或切换标记不能替代这一步。核实停止证据后激活：
 
 ```sh
-docker compose run --rm harness-migrate node dist/harness/cli.js authority \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js authority \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222 \
   --action activate --version 1 --evidence 'deployment/change record confirming previous publishers stopped and drained'
@@ -66,7 +66,7 @@ GitHub/GitLab review 先生成完整输出，再在一个事务内冻结有序 b
 ## 人工处理不确定结果
 
 ```sh
-docker compose run --rm harness-migrate node dist/harness/cli.js inspect \
+docker compose run --rm harness-migrate node dist/agent-runtime/cli.js inspect \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222
 ```
@@ -91,7 +91,7 @@ docker compose run --rm harness-migrate node dist/harness/cli.js inspect \
 
 ```sh
 docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" harness-migrate \
-  node dist/harness/cli.js control --input-file /run/control.json
+  node dist/agent-runtime/cli.js control --input-file /run/control.json
 ```
 
 人工证据是有数据库管理权限者的声明，**不是自动经过提供方验证的证明**。CLI 忽略调用者传入的 actor，审计记录实际数据库角色；不要把迁移账户交给普通应用调用者。自动 reconciler 另行执行提供方证据校验。
@@ -124,7 +124,7 @@ Worker 每秒轮询，租约 60 秒、每 15 秒续租、每 5 秒清扫；过�
 
 Run 入队先预留 tenant envelope，每次物理调用再从该 envelope 预留。供应商原始 usage 与统一账分开保存，缓存和推理 token 按供应商口径处理。已知结果可复用；响应丢失、无 usage 或无法证明未计费时保留费用预留，不按零费用结算。终态预算维护只释放尚未分配额度，未知调用继续待对账。账期与价格快照被冻结；更换账期或配置只影响新 Run。测试专用零费用开关同时要求 `NODE_ENV=test` 和 `HARNESS_ALLOW_ZERO_COST_MODEL_POLICY=isolated-test-only`。
 
-Durable 模式关闭 SDK/HTTP 隐藏重试；兼容回退也计为独立物理调用。源码、运行参数、模型/价格和评审环境配置进入版本 hash；不兼容的旧 Run 明确进入死信，不能用新实现猜测旧 checkpoint。编译时生成 `dist/harness/runtime-manifest.json`，缺失时拒绝执行。
+Durable 模式关闭 SDK/HTTP 隐藏重试；兼容回退也计为独立物理调用。源码、运行参数、模型/价格和评审环境配置进入版本 hash；不兼容的旧 Run 明确进入死信，不能用新实现猜测旧 checkpoint。编译时生成 `dist/agent-runtime/runtime-manifest.json`，缺失时拒绝执行。
 
 ## 验证、升级与后续范围
 

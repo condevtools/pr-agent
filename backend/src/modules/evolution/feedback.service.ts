@@ -3,9 +3,9 @@ import type { Request } from "express";
 import { z } from "zod";
 
 import { FeedbackStore } from "../../evolution/feedback-store.js";
-import { RunApiAuthenticator } from "../../harness/run-api-auth.js";
-import { requireRunPermission, RunControlError, type RunPrincipal } from "../../harness/run-control-contracts.js";
-import { getHarnessServices } from "../../harness/runtime.js";
+import { RunApiAuthenticator } from "../../http/common/run-auth.js";
+import { requireRunPermission, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
 
 @Injectable()
 export class EvolutionFeedbackService {
@@ -34,7 +34,7 @@ export class EvolutionFeedbackService {
     return (await this.store()).arbitrate(principal, validRunId(runId), commandKey(key), body);
   }
 
-  private async store(): Promise<FeedbackStore> { return new FeedbackStore((await getHarnessServices()).db); }
+  private async store(): Promise<FeedbackStore> { return new FeedbackStore((await getAgentRuntimeServices()).db); }
 }
 
 function validRunId(value: string): string { return z.string().uuid().parse(value); }

@@ -5,8 +5,8 @@ import type { StructuredModelRequest } from "../src/agents/contracts.js";
 import type { FixArtifact, FixProposal, FixSource, FixWorkflowPolicy, VerificationResult } from "../src/fix/contracts.js";
 import { executeFixProposal } from "../src/fix/fix-workflow.js";
 import { FixPatchValidationError, validateFixPatchPair } from "../src/fix/patch-validator.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { fingerprint } from "../src/harness/versions.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const source: FixSource = {

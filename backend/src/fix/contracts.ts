@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 
 import type { StructuredModel } from "../agents/contracts.js";
-import type { RunLease, RunStepKind } from "../harness/run-contracts.js";
+import type { RunLease, RunStepKind } from "../agent-runtime/runs/contracts.js";
 
 export type FixOutcome = "verified" | "suggestion_only" | "failed";
 export type VerificationTargetOutcome = "pass" | "fail" | "timeout" | "not_run";

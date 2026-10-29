@@ -4,12 +4,12 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
 import {
-  HarnessRunStore,
+  RunStore,
   RunCreateConflictError,
-} from "../src/harness/postgres/run-store.js";
+} from "../src/agent-runtime/postgres/run-store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -24,13 +24,13 @@ if (!databaseUrl) {
   const roleName = `harness_app_${randomUUID().replaceAll("-", "")}`;
   const rolePassword = randomUUID();
   let pool: Pool;
-  let registryStore: HarnessRunStore;
-  let store: HarnessRunStore;
+  let registryStore: RunStore;
+  let store: RunStore;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA pr_agent_harness TO ${roleName}`);
@@ -39,8 +39,8 @@ if (!databaseUrl) {
     appUrl.username = roleName;
     appUrl.password = rolePassword;
     pool = new Pool({ connectionString: appUrl.toString(), max: 6 });
-    registryStore = new HarnessRunStore(new HarnessDatabase(adminPool));
-    store = new HarnessRunStore(new HarnessDatabase(pool));
+    registryStore = new RunStore(new RuntimeDatabase(adminPool));
+    store = new RunStore(new RuntimeDatabase(pool));
   });
 
   after(async () => {
@@ -100,7 +100,7 @@ if (!databaseUrl) {
     assert.deepEqual(new Set(attempts.map((attempt) => attempt.id)), new Set([first.id]));
     assert.deepEqual(new Set(attempts.map((attempt) => attempt.jobId)), new Set([first.jobId]));
 
-    await new HarnessDatabase(pool).transaction(tenantId, (client) =>
+    await new RuntimeDatabase(pool).transaction(tenantId, (client) =>
       client.query(
         "UPDATE pr_agent_harness.agent_runs SET status = 'succeeded', finished_at = now() WHERE id = $1",
         [first.id],
@@ -108,7 +108,7 @@ if (!databaseUrl) {
     );
     assert.equal((await store.createRun(input)).status, "succeeded");
 
-    const counts = await new HarnessDatabase(pool).transaction(tenantId, async (client) => {
+    const counts = await new RuntimeDatabase(pool).transaction(tenantId, async (client) => {
       const results = [];
       for (const table of ["agent_runs", "run_events", "job_queue", "audit_logs"] as const) {
         results.push(
@@ -176,7 +176,7 @@ if (!databaseUrl) {
       repository: "acme/private",
     });
     await store.createRun(buildRunInput(tenantA, integrationId, "delivery-private", hash("private")));
-    const result = await new HarnessDatabase(pool).transaction(tenantB, (client) =>
+    const result = await new RuntimeDatabase(pool).transaction(tenantB, (client) =>
       client.query("SELECT count(*)::int AS count FROM pr_agent_harness.agent_runs"),
     );
     assert.equal(result.rows[0]?.count, 0);

@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   type ModelRequestIntent,
   withModelExecutionContext,
-} from "../src/harness/model-execution-context.js";
+} from "../src/model/execution-context.js";
 import { callGeminiJson } from "../src/review/ai-provider-gemini.js";
 
 test("durable Gemini compatibility fallback is two visible physical calls with no hidden retry", async () => {

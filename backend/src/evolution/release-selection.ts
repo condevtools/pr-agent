@@ -5,9 +5,9 @@ import { evolutionCandidateSchema, evolutionProposalSourceSchema, type Evolution
 import type { EvolutionReleaseRouting, EvolutionReleaseState } from "./release-contracts.js";
 import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "./release-policy.js";
 import { REPLAY_VERIFIER_HASH } from "./replay-contracts.js";
-import type { PublicationBinding } from "../harness/authority.js";
-import type { ReviewRunInput } from "../harness/review-run-input.js";
-import { fingerprint, type RunVersionManifest } from "../harness/versions.js";
+import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
+import type { ReviewRunInput } from "../review/intake/run-input.js";
+import { fingerprint, type RunVersionManifest } from "../agent-runtime/versions.js";
 
 export type DeepReleaseSelectionKind = "baseline" | "control" | "candidate";
 

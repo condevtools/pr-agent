@@ -61,7 +61,7 @@ import {
   modelRequestHash,
   type ModelProvider,
   type NormalizedModelUsage,
-} from "../harness/model-execution-context.js";
+} from "../model/execution-context.js";
 export {
   buildAskPrompt,
   buildAskPromptWithOptions,
@@ -357,7 +357,7 @@ function resolveModel(provider: AIProvider): string {
   return readStringEnv("GEMINI_MODEL", "gemini-2.0-flash");
 }
 
-export function resolveReviewModelConfiguration(): {
+export function resolveModelConfiguration(): {
   provider: ModelProvider;
   model: string;
 } {

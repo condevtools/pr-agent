@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
-import type { RepositoryOperationType } from "../harness/publication.js";
-import { canonicalJson, fingerprint } from "../harness/versions.js";
+import type { RepositoryOperationType } from "../agent-runtime/publication/publication.js";
+import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
 import type { FixApprovalIntent, FixProposal, VerificationResult } from "./contracts.js";
 import { applyUnifiedPatch } from "./unified-patch.js";
 import { isFixDifferentialEligible } from "./verification-gate.js";

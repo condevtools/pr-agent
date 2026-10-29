@@ -9,13 +9,13 @@ import {
   type PublicationResult,
   type PublicationScope,
   type PublicationService,
-} from "../../harness/publication.js";
+} from "../../agent-runtime/publication/publication.js";
 import { buildManagedCommentBody, buildManagedCommentMarker } from "../shared/managed-comments.js";
 import { GitHubRestApiError } from "./github-rest-client.js";
 import type { GitHubReviewContext, MinimalGitHubOctokit } from "./github-review-types.js";
-import type { PublicationAdapterFactory, PublicationBatchCoordinator, PublicationBatchStore } from "../../harness/publication-batches.js";
-import type { PublicationBinding } from "../../harness/authority.js";
-import { isDurablePublicationEnabled } from "../../harness/publication-mode.js";
+import type { PublicationAdapterFactory, PublicationBatchCoordinator, PublicationBatchStore } from "../../agent-runtime/publication/batches.js";
+import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
+import { isDurablePublicationEnabled } from "../../agent-runtime/publication/mode.js";
 
 const PAGE_SIZE = 100;
 const PAGE_CAP = 20;

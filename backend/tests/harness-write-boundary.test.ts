@@ -12,13 +12,13 @@ import {
   type PreparedPublication,
   type PublicationOperation,
   type PublicationStore,
-} from "../src/harness/publication.js";
+} from "../src/agent-runtime/publication/publication.js";
 import {
   assertPublicationWriteAllowed,
   PublicationWriteBoundaryError,
   withPublicationWriteAuthority,
-} from "../src/harness/write-boundary.js";
-import { requireOnlinePublicationAuthority } from "../src/harness/publication-mode.js";
+} from "../src/agent-runtime/authority/write-boundary.js";
+import { requireOnlinePublicationAuthority } from "../src/agent-runtime/publication/mode.js";
 
 const previousMode = process.env.HARNESS_PUBLICATION_MODE;
 process.env.HARNESS_PUBLICATION_MODE = "postgres";

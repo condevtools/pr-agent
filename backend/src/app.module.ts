@@ -8,10 +8,10 @@ import { GithubAppModule } from "./modules/github-app/github-app.module.js";
 import { GithubModule } from "./modules/github/github.module.js";
 import { GitlabModule } from "./modules/gitlab/gitlab.module.js";
 import { ShutdownCoordinatorService } from "./modules/webhook/shutdown-coordinator.service.js";
-import { HarnessModule } from "./modules/harness/harness.module.js";
+import { AgentRuntimeModule } from "./modules/harness/harness.module.js";
 
 @Module({
-  imports: [GithubModule, GitlabModule, GithubAppModule, HarnessModule],
+  imports: [GithubModule, GitlabModule, GithubAppModule, AgentRuntimeModule],
   controllers: [AppController],
   providers: [
     AppService,

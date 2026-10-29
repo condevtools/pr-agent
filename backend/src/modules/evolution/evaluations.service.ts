@@ -4,8 +4,8 @@ import { z } from "zod";
 
 import { admitEvaluation } from "../../evolution/replay-intake.js";
 import { EvaluationStore } from "../../evolution/replay-store.js";
-import { RunControlError } from "../../harness/run-control-contracts.js";
-import { getHarnessServices } from "../../harness/runtime.js";
+import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
 import { RunsService } from "../harness/runs.service.js";
 
 @Injectable()
@@ -14,13 +14,13 @@ export class EvaluationsService {
 
   async create(request: Request, body: unknown) {
     const commandKey = idempotencyKey(request);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     return admitEvaluation({ db: services.db, principal: this.runs.authenticate(request), commandKey, request: body });
   }
 
   async read(request: Request, id: string) {
     z.string().uuid().parse(id);
-    return new EvaluationStore((await getHarnessServices()).db).read(this.runs.authenticate(request), id);
+    return new EvaluationStore((await getAgentRuntimeServices()).db).read(this.runs.authenticate(request), id);
   }
 }
 function idempotencyKey(request: Request): string {

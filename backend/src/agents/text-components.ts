@@ -1,5 +1,5 @@
 import { evolutionCandidateSchema, type EvolutionCandidateV1 } from "../evolution/candidate-contracts.js";
-import { fingerprint, type RunVersionManifest } from "../harness/versions.js";
+import { fingerprint, type RunVersionManifest } from "../agent-runtime/versions.js";
 
 /** Candidate text may change review guidance, never execution authority or tool schemas. */
 export const BASELINE_REVIEW_TEXT: Readonly<EvolutionCandidateV1> = Object.freeze({

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { RunApiAuthenticator } from "../src/harness/run-api-auth.js";
-import { RunControlError } from "../src/harness/run-control-contracts.js";
+import { RunApiAuthenticator } from "../src/http/common/run-auth.js";
+import { RunControlError } from "../src/agent-runtime/runs/control-contracts.js";
 
 const tenantId = randomUUID();
 const integrationId = randomUUID();

@@ -1,10 +1,10 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
-import { HarnessApiErrorFilter } from "../harness/runs.error-filter.js";
+import { RunApiErrorFilter } from "../harness/runs.error-filter.js";
 import { ReleasesService } from "./releases.service.js";
 
 @Controller("evolution/releases")
-@UseFilters(HarnessApiErrorFilter)
+@UseFilters(RunApiErrorFilter)
 export class ReleasesController {
   constructor(@Inject(ReleasesService) private readonly service: ReleasesService) {}
   @Post("qualify") @HttpCode(201) qualify(@Req() request: Request, @Body() body: unknown) { return this.service.qualify(request, body); }

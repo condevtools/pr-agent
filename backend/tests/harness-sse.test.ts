@@ -5,9 +5,9 @@ import test from "node:test";
 
 import type { ServerResponse } from "node:http";
 
-import { RunControlError, type RunPrincipal } from "../src/harness/run-control-contracts.js";
-import type { RunEventPage } from "../src/harness/run-query-store.js";
-import { RunEventStreamHub } from "../src/harness/run-sse.js";
+import { RunControlError, type RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import type { RunEventPage } from "../src/agent-runtime/runs/query-store.js";
+import { RunEventStreamHub } from "../src/http/runs/event-stream.js";
 
 const runId = randomUUID();
 const principal: RunPrincipal = {

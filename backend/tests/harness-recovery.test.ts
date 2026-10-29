@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { PublicationBinding } from "../src/harness/authority.js";
-import type { FrozenPublicationBatch } from "../src/harness/publication-batches.js";
+import type { PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import type { FrozenPublicationBatch } from "../src/agent-runtime/publication/batches.js";
 import {
   PublicationRecoveryLoop,
   type PublicationRecoveryClaim,
   type PublicationRecoveryDependencies,
-} from "../src/harness/recovery.js";
+} from "../src/agent-runtime/publication/recovery.js";
 
 const binding: PublicationBinding = {
   id: "22222222-2222-4222-8222-222222222222",

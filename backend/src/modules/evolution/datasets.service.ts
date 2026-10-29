@@ -7,8 +7,8 @@ import { addDatasetCaseSchema, createDatasetSchema, freezeDatasetSchema } from "
 import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../../evolution/dataset-fixture.js";
 import { GitHubRepositoryReadAdapter } from "../../integrations/github/github-repository-read-tools.js";
 import { GitLabRepositoryReadAdapter } from "../../integrations/gitlab/gitlab-repository-read-tools.js";
-import { RunControlError } from "../../harness/run-control-contracts.js";
-import { getHarnessServices, resolvePublicationRuntime } from "../../harness/runtime.js";
+import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
+import { getAgentRuntimeServices, resolvePublicationRuntime } from "../../agent-runtime/runtime.js";
 import { RunsService } from "../harness/runs.service.js";
 
 const uuid = z.string().uuid();
@@ -61,7 +61,7 @@ export class DatasetsService {
   }
 
   private async store(): Promise<DatasetStore> {
-    return new DatasetStore((await getHarnessServices()).db);
+    return new DatasetStore((await getAgentRuntimeServices()).db);
   }
 }
 

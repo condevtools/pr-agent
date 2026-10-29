@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { assertReviewRunActive, assertReviewRunRevision, currentReviewRunLease, durableReviewAnalysis, durableReviewCollection } from "../../harness/review-run-context.js";
-import { shouldQueueReview } from "../../harness/review-run-intake.js";
-import { enqueueGitLabReview } from "../../harness/provider-review-intake.js";
+import { assertRunActive, assertReviewRunRevision, currentRunLease, durableReviewAnalysis, durableReviewCollection } from "../../agent-runtime/execution/run-context.js";
+import { shouldQueueReview } from "../../review/intake/run-intake.js";
+import { enqueueGitLabReview } from "../../review/intake/provider-intake.js";
 import {
   BadWebhookRequestError,
   clearDuplicateRecord,
@@ -127,14 +127,14 @@ import {
 } from "../shared/similar-issue.js";
 import { createGitLabCommandWorkflows } from "./gitlab-command-workflows.js";
 import { gitLabApiRequest } from "./gitlab-http.js";
-import { PendingPublicationError, PublicationDefiniteFailureError } from "../../harness/publication.js";
+import { PendingPublicationError, PublicationDefiniteFailureError } from "../../agent-runtime/publication/publication.js";
 import {
   publishGitLabDiscussionDurably,
   publishGitLabLabelsDurably,
   publishGitLabNoteDurably,
   type GitLabPublicationRuntime,
 } from "./gitlab-publication.js";
-import { resolvePublicationRuntime } from "../../harness/runtime.js";
+import { resolvePublicationRuntime } from "../../agent-runtime/runtime.js";
 import { DurableUnadaptedWriterBlockedError } from "../github/github-issue-comment-command.js";
 import {
   verifyGitLabWebhookBodySize,
@@ -927,13 +927,13 @@ export async function runGitLabReview(
       durableSourceHash,
     );
     if (existing) {
-      const lease = currentReviewRunLease();
+      const lease = currentRunLease();
       if (lease) await activePublicationRuntime.batchStore.attachExistingBatchToRun(lease, existing.id);
       else await activePublicationRuntime.batchStore.assertLegacyBatchExecution(
         existing,
         resolvedExecutionModeGeneration,
       );
-      await assertReviewRunActive();
+      await assertRunActive();
       assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(
         existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter, lease,
         lease ? undefined : resolvedExecutionModeGeneration,
@@ -989,7 +989,7 @@ export async function runGitLabReview(
       payload,
       gitlabToken,
       baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
-      incrementalBaseSha: currentReviewRunLease() ? undefined : incrementalBaseSha,
+      incrementalBaseSha: currentRunLease() ? undefined : incrementalBaseSha,
       customRules,
       includeCiChecks,
       feedbackSignals,
@@ -1307,13 +1307,13 @@ async function prepareGitLabPublicationBatch(params: {
   const scope = { ...runtime.scope, target: String(params.mrId), revision: params.revision };
   const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
   if (existing) {
-    const lease = currentReviewRunLease();
+    const lease = currentRunLease();
     if (lease) await runtime.batchStore.attachExistingBatchToRun(lease, existing.id);
     else await runtime.batchStore.assertLegacyBatchExecution(
       existing,
       runtime.binding?.executionModeGeneration ?? 0,
     );
-    await assertReviewRunActive();
+    await assertRunActive();
     assertGitLabBatchSucceeded(await runtime.batchCoordinator.execute(
       scope.tenantId, existing.id, runtime.createAdapter, lease,
       lease ? undefined : runtime.binding?.executionModeGeneration ?? 0,
@@ -1327,11 +1327,11 @@ async function prepareGitLabPublicationBatch(params: {
     resumed: false,
     finish: async () => {
       if (operations.length === 0) throw new Error("durable GitLab review produced no frozen publication operations");
-      const lease = currentReviewRunLease();
+      const lease = currentRunLease();
       const executionModeGeneration = runtime.binding?.executionModeGeneration ?? 0;
       const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations,
         runLease: lease, executionModeGeneration });
-      await assertReviewRunActive();
+      await assertRunActive();
       assertGitLabBatchSucceeded(await runtime.batchCoordinator!.execute(
         scope.tenantId, frozen.id, runtime.createAdapter!, lease,
         lease ? undefined : executionModeGeneration,
@@ -2346,7 +2346,7 @@ export async function collectGitLabMergeRequestContext(params: {
   if (!changesResponse.diff_refs || !Array.isArray(changesResponse.changes)) {
     throw new Error("GitLab changes response omitted diff refs or the frozen change list");
   }
-  const durableLease = currentReviewRunLease();
+  const durableLease = currentRunLease();
   if (durableLease) {
     // GitLab returns diff refs and changes in one response, so validate the
     // immutable Run revision before interpreting any returned patch.

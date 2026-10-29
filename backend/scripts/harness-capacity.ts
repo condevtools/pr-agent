@@ -10,17 +10,17 @@ import type { INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { Pool } from "pg";
 
-import { PublicationAuthorityStore, type PublicationBinding } from "../src/harness/authority.js";
-import { getModelExecutionPolicy, ModelBudgetExceededError, ModelBudgetStore } from "../src/harness/model-budget-store.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { appendRunFact } from "../src/harness/run-events.js";
-import { parseRunCursor, RunQueryStore } from "../src/harness/run-query-store.js";
-import { RunEventStreamHub } from "../src/harness/run-sse.js";
-import { closeHarnessRuntime } from "../src/harness/runtime.js";
-import { HarnessModule } from "../src/modules/harness/harness.module.js";
+import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { getModelExecutionPolicy, ModelBudgetExceededError, ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { appendRunFact } from "../src/agent-runtime/runs/events.js";
+import { parseRunCursor, RunQueryStore } from "../src/agent-runtime/runs/query-store.js";
+import { RunEventStreamHub } from "../src/http/runs/event-stream.js";
+import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
+import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
 
 interface CapacityProfile {
   name: "quick" | "qualification";
@@ -59,7 +59,7 @@ const heartbeat = setInterval(() => progress("capacity.progress", currentProgres
 heartbeat.unref();
 
 const adminPool = new Pool({ connectionString: databaseUrl, max: 8 });
-const adminDb = new HarnessDatabase(adminPool);
+const adminDb = new RuntimeDatabase(adminPool);
 const role = `capacity_${randomUUID().replaceAll("-", "")}`;
 const rolePassword = randomUUID();
 const tenantId = randomUUID();
@@ -75,8 +75,8 @@ let providerRequests = 0;
 let providerServer: Server | undefined;
 let app: INestApplication | undefined;
 let appPool: Pool | undefined;
-let appDb: HarnessDatabase | undefined;
-let runStore: HarnessRunStore | undefined;
+let appDb: RuntimeDatabase | undefined;
+let runStore: RunStore | undefined;
 let binding: PublicationBinding | undefined;
 
 try {
@@ -91,7 +91,7 @@ try {
 } finally {
   clearInterval(heartbeat);
   await app?.close().catch(() => undefined);
-  await closeHarnessRuntime().catch(() => undefined);
+  await closeAgentRuntime().catch(() => undefined);
   await appPool?.end().catch(() => undefined);
   await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE").catch(() => undefined);
   await adminPool.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
@@ -128,7 +128,7 @@ async function setup(): Promise<void> {
   if (!address || typeof address === "string") throw new Error("Provider fixture did not bind");
   providerOrigin = `http://127.0.0.1:${address.port}`;
 
-  await migrateHarness(adminPool);
+  await migrateRuntime(adminPool);
   await adminPool.query(`CREATE ROLE ${role} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
   await grantRuntimeRole(adminPool, role);
   const appUrl = new URL(databaseUrl!); appUrl.username = role; appUrl.password = rolePassword;
@@ -147,15 +147,15 @@ async function setup(): Promise<void> {
   process.env.HARNESS_API_PRINCIPALS_JSON = JSON.stringify(principals);
 
   appPool = new Pool({ connectionString: appUrl.toString(), max: 32 });
-  appDb = new HarnessDatabase(appPool);
-  runStore = new HarnessRunStore(appDb);
-  const adminRuns = new HarnessRunStore(adminDb);
+  appDb = new RuntimeDatabase(appPool);
+  runStore = new RunStore(appDb);
+  const adminRuns = new RunStore(adminDb);
   binding = await activate(adminRuns, tenantId, integrationId, providerOrigin, repository, 7001);
   await activate(adminRuns, budgetTenantId, budgetIntegrationId, providerOrigin, "acme/capacity-budget", 7002);
   const roleState = await appPool.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
     "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user");
   if (roleState.rows[0]?.rolsuper || roleState.rows[0]?.rolbypassrls) throw new Error("Capacity runtime role is privileged");
-  app = await NestFactory.create(HarnessModule, { logger: false });
+  app = await NestFactory.create(AgentRuntimeModule, { logger: false });
   await app.listen(0, "127.0.0.1");
   const apiAddress = app.getHttpServer().address();
   if (!apiAddress || typeof apiAddress === "string") throw new Error("Harness API did not bind");
@@ -354,7 +354,7 @@ async function phase(name: string, operation: () => Promise<Record<string, unkno
   }
 }
 
-async function activate(store: HarnessRunStore, currentTenant: string, currentIntegration: string, origin: string,
+async function activate(store: RunStore, currentTenant: string, currentIntegration: string, origin: string,
   currentRepository: string, repositoryId: number): Promise<PublicationBinding> {
   await store.registerIntegration({ tenantId: currentTenant, id: currentIntegration, platform: "github", origin,
     repository: currentRepository });

@@ -1,11 +1,11 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
 
-import { HarnessApiErrorFilter } from "../harness/runs.error-filter.js";
+import { RunApiErrorFilter } from "../harness/runs.error-filter.js";
 import { DatasetsService } from "./datasets.service.js";
 
 @Controller("evaluation-datasets")
-@UseFilters(HarnessApiErrorFilter)
+@UseFilters(RunApiErrorFilter)
 export class DatasetsController {
   constructor(@Inject(DatasetsService) private readonly service: DatasetsService) {}
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { RunPrincipal } from "../harness/run-control-contracts.js";
+import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
 
 const safePath = z.string().min(1).max(512).refine((value) =>
   !value.startsWith("/") && !value.includes("\\") && !value.includes("\0")

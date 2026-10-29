@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
 import { reviewTextHashes } from "../agents/text-components.js";
-import type { RunLease } from "../harness/run-contracts.js";
-import { HarnessDatabase } from "../harness/postgres/database.js";
-import { assertRunLease } from "../harness/run-execution-store.js";
-import { requireRunPermission, RunControlError, type RunPrincipal } from "../harness/run-control-contracts.js";
-import { fingerprint } from "../harness/versions.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import { assertRunLease } from "../agent-runtime/execution/store.js";
+import { requireRunPermission, RunControlError, type RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import {
   evolutionCandidateSchema, type EvolutionCandidateRecord, type EvolutionCandidateV1,
   evolutionProposalSourceSchema, type EvolutionProposalSource,
@@ -16,7 +16,7 @@ export class EvolutionCandidateError extends RunControlError {
   constructor(code: string, status: number, message: string) { super(code, status, message); }
 }
 export class PgEvolutionCandidateStore {
-  constructor(private readonly db: HarnessDatabase) {}
+  constructor(private readonly db: RuntimeDatabase) {}
 
   async loadSource(lease: RunLease): Promise<EvolutionProposalSource> {
     return this.db.transaction(lease.tenantId, async (client) => {

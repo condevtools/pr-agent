@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
-import { HarnessDatabase } from "../harness/postgres/database.js";
-import { requireRunPermission, RunControlError, type RunPrincipal } from "../harness/run-control-contracts.js";
-import { fingerprint, type RunVersionManifest } from "../harness/versions.js";
+import { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import { requireRunPermission, RunControlError, type RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { fingerprint, type RunVersionManifest } from "../agent-runtime/versions.js";
 import { canPromoteCanary, computeCanaryMetrics, type CanaryObservation } from "./canary-metrics.js";
 import { evaluateOfflineReleaseGates, EvolutionReleaseGateError } from "./release-gates.js";
 import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "./release-policy.js";
@@ -24,7 +24,7 @@ interface RequestRow { id: string; tenant_id: string; integration_id: string; ta
   revoke_command_key?: string | null; revoke_request_hash?: string | null }
 
 export class PgEvolutionReleaseStore {
-  constructor(private readonly db: HarnessDatabase) {}
+  constructor(private readonly db: RuntimeDatabase) {}
 
   async qualify(principal: RunPrincipal, input: QualifyCandidateInput, currentManifest: RunVersionManifest): Promise<EvolutionReleaseQualification> {
     requireRunPermission(principal, "evolution:release:qualify");

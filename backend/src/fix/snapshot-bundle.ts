@@ -2,7 +2,7 @@ import { lstat, mkdir, open, readFile, realpath, rename, rm, stat } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 
 const MAX_FILES = 2_000;
 const MAX_BYTES = 50 * 1024 * 1024;

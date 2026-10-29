@@ -1,12 +1,12 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Query, Req, Res, UseFilters } from "@nestjs/common";
 import type { Request, Response } from "express";
 
-import { HarnessApiErrorFilter } from "./runs.error-filter.js";
+import { RunApiErrorFilter } from "./runs.error-filter.js";
 import { RunsService } from "./runs.service.js";
-import { RunControlError } from "../../harness/run-control-contracts.js";
+import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 
 @Controller("runs")
-@UseFilters(HarnessApiErrorFilter)
+@UseFilters(RunApiErrorFilter)
 export class RunsController {
   constructor(@Inject(RunsService) private readonly service: RunsService) {}
 

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 
-import type { PublicationBinding } from "../harness/authority.js";
+import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
 import {
   buildPublicationIdentity, PublicationDefiniteFailureError, PublicationLookupIndeterminateError, PublicationPreflightError,
   type PublicationAdapter, type PublicationOperation, type PublicationPayload, type PublicationRemoteResult,
-} from "../harness/publication.js";
-import { assertPublicationWriteAllowed } from "../harness/write-boundary.js";
+} from "../agent-runtime/publication/publication.js";
+import { assertPublicationWriteAllowed } from "../agent-runtime/authority/write-boundary.js";
 import type { GitHubCredentialIdentityVerifier } from "../integrations/github/github-publication.js";
 
 interface Change { path: string; action: "create" | "update"; contentBase64: string; contentSha256: string }

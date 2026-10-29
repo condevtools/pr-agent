@@ -50,7 +50,7 @@ services:
   harness-migrate:
     build: .
     restart: "no"
-    command: ["node", "dist/harness/cli.js", "migrate"]
+    command: ["node", "dist/agent-runtime/cli.js", "migrate"]
     environment:
       HARNESS_PG_HOST: postgres
       HARNESS_PG_PORT: "5432"

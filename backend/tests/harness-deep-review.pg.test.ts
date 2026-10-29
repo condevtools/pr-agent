@@ -5,12 +5,12 @@ import test, { after, before } from "node:test";
 import { Pool } from "pg";
 
 import type { EvidenceRecord } from "../src/agents/contracts.js";
-import { DeepReviewEvidenceError, DeepReviewStore } from "../src/harness/deep-review-store.js";
-import { HarnessMaintenanceStore } from "../src/harness/maintenance.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { DeepReviewEvidenceError, DeepReviewStore } from "../src/review/deep/persistence/store.js";
+import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 import { RepositoryReadToolRegistry } from "../src/integrations/shared/repository-read-tools.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -21,7 +21,7 @@ if (!databaseUrl) {
   const databaseName = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
   if (!databaseName.startsWith("harness_test_")) throw new Error("deep review tests require a disposable database");
   const pool = new Pool({ connectionString: databaseUrl, max: 4 });
-  const db = new HarnessDatabase(pool);
+  const db = new RuntimeDatabase(pool);
   const store = new DeepReviewStore(db);
   const tenantId = randomUUID();
   const otherTenantId = randomUUID();
@@ -32,7 +32,7 @@ if (!databaseUrl) {
   let lease: RunLease;
 
   before(async () => {
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     lease = await fixture(tenantId, integrationId, "acme/deep");
     await fixture(tenantId, sameTenantOtherIntegrationId, "acme/other-deep");
     await fixture(otherTenantId, otherIntegrationId, "other/deep");
@@ -112,7 +112,7 @@ if (!databaseUrl) {
     await pool.query(
       `UPDATE pr_agent_harness.job_queue SET status='completed',completed_at=clock_timestamp(),updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND run_id=$2`, [tenantId, lease.runId]);
-    const applied = await new HarnessMaintenanceStore(pool).apply({ tenantId, olderThanDays: 30 });
+    const applied = await new RuntimeMaintenanceStore(pool).apply({ tenantId, olderThanDays: 30 });
     assert.equal(applied.applied, 1);
     const rows = await pool.query<{ result_json: Record<string, unknown>; content_purged_at: Date | null }>(
       "SELECT result_json,content_purged_at FROM pr_agent_harness.evidence_records WHERE tenant_id=$1 AND run_id=$2",

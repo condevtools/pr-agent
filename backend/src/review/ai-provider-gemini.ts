@@ -9,7 +9,7 @@ import {
   executeModelRequest,
   modelRequestHash,
   type NormalizedModelUsage,
-} from "../harness/model-execution-context.js";
+} from "../model/execution-context.js";
 
 const MAX_ERROR_BODY_PREVIEW_CHARS = 300;
 

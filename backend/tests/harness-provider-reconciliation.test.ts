@@ -7,14 +7,14 @@ import {
   PublicationDefiniteFailureError,
   PublicationLookupIndeterminateError,
   type PublicationOperation,
-} from "../src/harness/publication.js";
+} from "../src/agent-runtime/publication/publication.js";
 import {
   createGitHubPublicationAdapter,
   type GitHubPublicationBinding,
 } from "../src/integrations/github/github-publication.js";
 import type { MinimalGitHubOctokit } from "../src/integrations/github/github-review-types.js";
 import { runGitHubReview } from "../src/integrations/github/github-review.js";
-import { withReviewRunContext } from "../src/harness/review-run-context.js";
+import { withRunExecutionContext } from "../src/agent-runtime/execution/run-context.js";
 
 const binding: GitHubPublicationBinding = {
   platform: "github",
@@ -179,7 +179,7 @@ test("existing frozen review batch resumes before context collection or model an
   };
 
   try {
-    await withReviewRunContext({
+    await withRunExecutionContext({
       lease: {
         tenantId: existing.scope.tenantId, integrationId: existing.scope.integrationId,
         runId: "run-1", jobId: "job-1", owner: "worker", epoch: 1, jobAttempt: 1,

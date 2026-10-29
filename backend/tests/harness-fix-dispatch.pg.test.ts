@@ -11,20 +11,20 @@ import { Pool } from "pg";
 
 import { expectedSandboxPolicyHash } from "../src/fix/sandbox-policy.js";
 import type { FixProposal, VerificationResult } from "../src/fix/contracts.js";
-import { PublicationAuthorityStore, type PublicationBinding } from "../src/harness/authority.js";
-import { getModelExecutionPolicy, ModelBudgetStore } from "../src/harness/model-budget-store.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { closeHarnessRuntime } from "../src/harness/runtime.js";
-import { reviewVersionManifest, fingerprint } from "../src/harness/versions.js";
-import { executeReviewRun } from "../src/harness/review-workflow.js";
-import type { ReviewRunInput } from "../src/harness/review-run-input.js";
-import type { RunPrincipal } from "../src/harness/run-control-contracts.js";
+import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { getModelExecutionPolicy, ModelBudgetStore } from "../src/agent-runtime/budget/model-budget-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
+import { runtimeVersionManifest, fingerprint } from "../src/agent-runtime/versions.js";
+import { executeReviewRun } from "../src/review/run.js";
+import type { ReviewRunInput } from "../src/review/intake/run-input.js";
+import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
 import { RunsService } from "../src/modules/harness/runs.service.js";
-import { resolveReviewModelConfiguration } from "../src/review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../src/review/ai-reviewer.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -35,7 +35,7 @@ if (!databaseUrl) {
   if (!databaseName.startsWith("harness_test_")) throw new Error("fix dispatch requires a disposable database");
 
   const adminPool = new Pool({ connectionString: databaseUrl, max: 4 });
-  const adminDb = new HarnessDatabase(adminPool);
+  const adminDb = new RuntimeDatabase(adminPool);
   const appPassword = randomUUID();
   const tenantId = randomUUID();
   const integrationId = randomUUID();
@@ -55,7 +55,7 @@ if (!databaseUrl) {
   let server: Server;
   let snapshotRoot = "";
   let appPool: Pool;
-  let appDb: HarnessDatabase;
+  let appDb: RuntimeDatabase;
   let binding: PublicationBinding;
   let service: RunsService;
 
@@ -103,7 +103,7 @@ if (!databaseUrl) {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture did not bind");
     origin = `http://127.0.0.1:${address.port}`;
 
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     const appRole = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
     const roleDdl = await adminPool.query<{ sql: string }>(appRole.rowCount
       ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql"
@@ -118,19 +118,19 @@ if (!databaseUrl) {
     process.env.HARNESS_MODEL_PRICING_JSON = pricing(); process.env.FIX_DEFAULT_POLICY_ID = "node-fixture";
     process.env.FIX_VERIFIER_SNAPSHOT_ROOT = snapshotRoot;
     const rawPolicy = policy(); process.env.FIX_POLICY_REGISTRY_JSON = JSON.stringify({ "node-fixture": rawPolicy });
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
     });
     if (configured.status !== 0) throw new Error(`runtime grant CLI failed: ${configured.stderr}`);
-    appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); appDb = new HarnessDatabase(appPool);
+    appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); appDb = new RuntimeDatabase(appPool);
     binding = await bind();
     await seedAcceptedReview();
     service = new RunsService();
   });
 
   after(async () => {
-    await closeHarnessRuntime(); await appPool?.end();
+    await closeAgentRuntime(); await appPool?.end();
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE"); await adminPool.end();
     await rm(snapshotRoot, { recursive: true, force: true });
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -143,12 +143,12 @@ if (!databaseUrl) {
     const runtime = await appDb.transaction(tenantId, async (client) => (await client.query<{
       runtime_version_hash: string }>("SELECT runtime_version_hash FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
     [tenantId, created.id])).rows[0]!.runtime_version_hash);
-    const { provider, model } = resolveReviewModelConfiguration();
-    assert.equal(runtime, (await reviewVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash);
+    const { provider, model } = resolveModelConfiguration();
+    assert.equal(runtime, (await runtimeVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash);
 
     const execution = new RunExecutionStore(appDb);
     const errors: unknown[] = [];
-    const worker = new ReviewRunWorker({ store: execution, budget: new ModelBudgetStore(appDb), bindings: async () => [binding],
+    const worker = new RunWorker({ store: execution, budget: new ModelBudgetStore(appDb), bindings: async () => [binding],
       runtimeHash: async () => runtime, execute: executeReviewRun, onError: (error) => errors.push(error) }, 1);
     const verifier = completeNextVerification(created.id);
     await worker.tick(); await worker.drain(); await verifier;
@@ -193,7 +193,7 @@ if (!databaseUrl) {
   }
 
   async function bind(): Promise<PublicationBinding> {
-    const runs = new HarnessRunStore(adminDb); const authority = new PublicationAuthorityStore(adminDb);
+    const runs = new RunStore(adminDb); const authority = new PublicationAuthorityStore(adminDb);
     await runs.registerIntegration({ tenantId, id: integrationId, platform: "github", origin, repository });
     await authority.configure({ tenantId, integrationId, providerRepositoryId: 88, providerActorId: 99,
       credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });

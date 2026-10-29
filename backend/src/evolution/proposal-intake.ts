@@ -1,15 +1,15 @@
 import type { PoolClient } from "pg";
 
 import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../agents/text-components.js";
-import type { PublicationBinding } from "../harness/authority.js";
-import { getModelExecutionPolicy, reserveRunBudgetInTransaction, type ModelExecutionPolicy } from "../harness/model-budget-store.js";
-import type { HarnessDatabase } from "../harness/postgres/database.js";
-import { createRunInTransaction, type CreateRunInput } from "../harness/postgres/run-store.js";
-import type { RunPrincipal } from "../harness/run-control-contracts.js";
-import { requireRunPermission } from "../harness/run-control-contracts.js";
-import { fingerprint, reviewVersionManifest } from "../harness/versions.js";
+import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
+import { getModelExecutionPolicy, reserveRunBudgetInTransaction, type ModelExecutionPolicy } from "../agent-runtime/budget/model-budget-store.js";
+import type { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import { createRunInTransaction, type CreateRunInput } from "../agent-runtime/postgres/run-store.js";
+import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { requireRunPermission } from "../agent-runtime/runs/control-contracts.js";
+import { fingerprint, runtimeVersionManifest } from "../agent-runtime/versions.js";
 import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
-import { resolveReviewModelConfiguration } from "../review/ai-reviewer.js";
+import { resolveModelConfiguration } from "../review/ai-reviewer.js";
 import { trustedLabelSetSchema } from "./feedback-contracts.js";
 import type { EvolutionDevelopmentCaseSummary, EvolutionProposalRunInput, EvolutionProposalSource } from "./candidate-contracts.js";
 import { EvolutionCandidateError, insertEvolutionProposalSource } from "./candidate-store.js";
@@ -21,7 +21,7 @@ export interface EvolutionProposalAdmission {
   id: string; status: string; version: number; created: boolean;
 }
 export async function admitEvolutionProposalRun(input: {
-  db: HarnessDatabase; binding: PublicationBinding; principal: RunPrincipal; datasetId: string; commandKey: string;
+  db: RuntimeDatabase; binding: PublicationBinding; principal: RunPrincipal; datasetId: string; commandKey: string;
 }): Promise<EvolutionProposalAdmission> {
   requireRunPermission(input.principal, "evolution:propose");
   const requestHash = fingerprint({ datasetId: input.datasetId });
@@ -68,8 +68,8 @@ export async function admitEvolutionProposalRun(input: {
 
 export async function buildEvolutionProposalCreation(binding: PublicationBinding, principal: RunPrincipal,
   createScope: string, createKey: string, requestHash: string, source: EvolutionProposalSource): Promise<CreateRunInput> {
-  const { provider, model } = resolveReviewModelConfiguration();
-  const modelPolicy = getModelExecutionPolicy(provider, model); const base = await reviewVersionManifest(modelPolicy);
+  const { provider, model } = resolveModelConfiguration();
+  const modelPolicy = getModelExecutionPolicy(provider, model); const base = await runtimeVersionManifest(modelPolicy);
   const evolutionPolicy = { ...EVOLUTION_POLICY,
     maxOutputTokens: Math.min(EVOLUTION_POLICY.maxOutputTokens, modelPolicy.maxOutputTokens) };
   const input: EvolutionProposalRunInput = { schemaVersion: 1, workflow: "evolution.propose.v1",

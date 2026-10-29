@@ -10,17 +10,17 @@ import {
   PublicationControlStateError,
   PublicationControlStore,
   type PublicationControlDecision,
-} from "../src/harness/publication-control.js";
-import { PgPublicationRecoverySchedule } from "../src/harness/recovery.js";
+} from "../src/agent-runtime/publication/control.js";
+import { PgPublicationRecoverySchedule } from "../src/agent-runtime/publication/recovery.js";
 import {
   buildPublicationIdentity,
   PgPublicationStore,
   preparePublicationInTransaction,
   type PublicationRequest,
-} from "../src/harness/publication.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
+} from "../src/agent-runtime/publication/publication.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -40,16 +40,16 @@ if (!databaseUrl) {
   const runtimePassword = randomUUID();
   let pool: Pool;
   let runtimePool: Pool;
-  let db: HarnessDatabase;
+  let db: RuntimeDatabase;
   let controlStore: PublicationControlStore;
   let operationStore: PgPublicationStore;
-  let controlRunStore: HarnessRunStore;
+  let controlRunStore: RunStore;
   let recoverySchedule: PgPublicationRecoverySchedule;
   let nextProviderId = 20_000;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`CREATE ROLE ${runtimeRoleName} LOGIN PASSWORD '${runtimePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}, ${runtimeRoleName}`);
@@ -72,11 +72,11 @@ if (!databaseUrl) {
     runtimeUrl.username = runtimeRoleName;
     runtimeUrl.password = runtimePassword;
     runtimePool = new Pool({ connectionString: runtimeUrl.toString(), max: 2 });
-    db = new HarnessDatabase(pool);
+    db = new RuntimeDatabase(pool);
     controlStore = new PublicationControlStore(db);
     operationStore = new PgPublicationStore(db);
     recoverySchedule = new PgPublicationRecoverySchedule(db);
-    controlRunStore = new HarnessRunStore(new HarnessDatabase(adminPool));
+    controlRunStore = new RunStore(new RuntimeDatabase(adminPool));
   });
 
   after(async () => {
@@ -416,7 +416,7 @@ if (!databaseUrl) {
       actor: { type: "user", id: "admin@example.test" },
       evidence: { kind: "provider_confirmation", reference: "operator:no-dispatch" },
     });
-    const runtimeDb = new HarnessDatabase(runtimePool);
+    const runtimeDb = new RuntimeDatabase(runtimePool);
     assert.equal(
       await runtimeDb.transaction(readable.request.scope.tenantId, async (client) =>
         (await client.query(

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { z } from "zod";
 
-import { withModelExecutionContext, type ModelRequestIntent } from "../src/harness/model-execution-context.js";
+import { withModelExecutionContext, type ModelRequestIntent } from "../src/model/execution-context.js";
 import { createStructuredModel } from "../src/review/structured-model.js";
 import { createAiConcurrencyLimiter } from "../src/review/ai-concurrency.js";
 import type { OpenAIClientCache } from "../src/review/ai-client-cache.js";

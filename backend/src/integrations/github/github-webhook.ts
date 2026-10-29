@@ -23,7 +23,7 @@ import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
 import {
   handleGitHubIssueCommentCommand,
 } from "./github-issue-comment-command.js";
-import { resolvePublicationRuntime } from "../../harness/runtime.js";
+import { resolvePublicationRuntime } from "../../agent-runtime/runtime.js";
 export { createRestBackedOctokit } from "./github-rest-client.js";
 export {
   handleGitHubIssueCommentCommand,

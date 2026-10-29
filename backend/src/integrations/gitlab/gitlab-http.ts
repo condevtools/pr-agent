@@ -1,6 +1,6 @@
 import { fetchWithRetry } from "#core";
 import { buildGitLabHttpRetryOptions } from "../shared/http-retry-options.js";
-import { assertPublicationWriteAllowed } from "../../harness/write-boundary.js";
+import { assertPublicationWriteAllowed } from "../../agent-runtime/authority/write-boundary.js";
 
 export async function gitLabApiRequest(params: {
   url: string;

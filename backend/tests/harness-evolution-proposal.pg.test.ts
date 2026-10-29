@@ -7,11 +7,11 @@ import { Pool } from "pg";
 import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../src/agents/text-components.js";
 import type { EvolutionProposalSource } from "../src/evolution/candidate-contracts.js";
 import { PgEvolutionCandidateStore } from "../src/evolution/candidate-store.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import type { RunPrincipal } from "../src/harness/run-control-contracts.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -44,7 +44,7 @@ else {
   let app: Pool; let store: PgEvolutionCandidateStore;
 
   before(async () => {
-    await migrateHarness(admin);
+    await migrateRuntime(admin);
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
     await admin.query(`GRANT SELECT ON pr_agent_harness.agent_runs,pr_agent_harness.agent_steps,
@@ -82,7 +82,7 @@ else {
       VALUES ($1,$2,$3,'evolution.proposal.model','model',$4,'succeeded',$5,$6::jsonb,1,1,clock_timestamp())`,
     [stepId, tenantId, runId, fingerprint("model-input"), fingerprint(candidate), JSON.stringify({ value: candidate })]);
     const url = new URL(databaseUrl); url.username = role; url.password = password;
-    app = new Pool({ connectionString: url.toString(), max: 2 }); store = new PgEvolutionCandidateStore(new HarnessDatabase(app));
+    app = new Pool({ connectionString: url.toString(), max: 2 }); store = new PgEvolutionCandidateStore(new RuntimeDatabase(app));
   });
 
   after(async () => { await app?.end(); await admin.query(`DROP OWNED BY ${role}`);

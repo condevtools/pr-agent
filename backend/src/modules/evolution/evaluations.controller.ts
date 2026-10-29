@@ -1,11 +1,11 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
 
-import { HarnessApiErrorFilter } from "../harness/runs.error-filter.js";
+import { RunApiErrorFilter } from "../harness/runs.error-filter.js";
 import { EvaluationsService } from "./evaluations.service.js";
 
 @Controller("evolution/evaluations")
-@UseFilters(HarnessApiErrorFilter)
+@UseFilters(RunApiErrorFilter)
 export class EvaluationsController {
   constructor(@Inject(EvaluationsService) private readonly service: EvaluationsService) {}
 

@@ -11,12 +11,12 @@ import { EvolutionDatasetMaintenanceStore } from "../src/evolution/dataset-maint
 import { FeedbackStore } from "../src/evolution/feedback-store.js";
 import type { TrustedLabelSetV1 } from "../src/evolution/feedback-contracts.js";
 import { labelSetHash } from "../src/evolution/feedback-contracts.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessMaintenanceStore } from "../src/harness/maintenance.js";
-import type { RunPrincipal } from "../src/harness/run-control-contracts.js";
-import { RunControlError } from "../src/harness/run-control-contracts.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
+import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import { RunControlError } from "../src/agent-runtime/runs/control-contracts.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -56,21 +56,21 @@ if (!databaseUrl) {
     tenantId, integrationId: integration, permissions: ["feedback:create", "annotations:create", "annotations:arbitrate"] });
 
   before(async () => {
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     const role = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
     const ddl = await adminPool.query<{ sql: string }>(role.rowCount
       ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql"
       : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql",
     [appPassword]);
     await adminPool.query(ddl.rows[0]!.sql);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
     });
     if (configured.status !== 0) throw new Error(`runtime grant CLI failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     appPool = new Pool({ connectionString: appUrl.toString(), max: 8 });
-    const appDb = new HarnessDatabase(appPool);
+    const appDb = new RuntimeDatabase(appPool);
     store = new FeedbackStore(appDb); datasets = new DatasetStore(appDb);
     await seedIntegration(integrationId, "acme/evolution", 88);
     await seedIntegration(otherIntegrationId, "acme/other", 89);
@@ -98,7 +98,7 @@ if (!databaseUrl) {
     for (const [runId, integration] of [[datasetRunA, datasetIntegrationA], [datasetRunB, datasetIntegrationB],
       [datasetRunC, datasetIntegrationC], [datasetRunD, datasetIntegrationD],
       [datasetRunE, datasetIntegrationE], [datasetRunF, datasetIntegrationF]] as const) {
-      const feedback = new FeedbackStore(new HarnessDatabase(appPool));
+      const feedback = new FeedbackStore(new RuntimeDatabase(appPool));
       const annotation = { artifactHash, labelSet: emptyLabels, provenance: { method: "full_diff_review" as const } };
       await feedback.createAnnotation(principal(`seed-a-${runId}`, integration), runId, "seed-a", annotation);
       await feedback.createAnnotation(principal(`seed-b-${runId}`, integration), runId, "seed-b", annotation);
@@ -201,7 +201,7 @@ if (!databaseUrl) {
   });
 
   test("FORCE RLS hides another tenant from the actual non-bypass application role", async () => {
-    const visible = await new HarnessDatabase(appPool).transaction(tenantId, async (client) => client.query(
+    const visible = await new RuntimeDatabase(appPool).transaction(tenantId, async (client) => client.query(
       "SELECT id FROM pr_agent_harness.feedback_observations WHERE tenant_id=$1", [otherTenantId]));
     assert.equal(visible.rowCount, 0);
     const role = await appPool.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
@@ -217,7 +217,7 @@ if (!databaseUrl) {
       pr_agent_harness.eval_fixtures,pr_agent_harness.eval_fixture_files TO pr_agent_app`);
     assert.equal((await appPool.query<{ allowed: boolean }>(
       "SELECT has_table_privilege(current_user,'pr_agent_harness.eval_datasets','INSERT') allowed")).rows[0]!.allowed, true);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
     });
@@ -244,7 +244,7 @@ if (!databaseUrl) {
         has_column_privilege(current_user,'pr_agent_harness.trusted_review_label_sets','created_at','INSERT') label_created_insert`);
     assert.deepEqual(privileges.rows[0], Object.fromEntries(Object.keys(privileges.rows[0]!).map((key) => [key, false])));
 
-    const appDb = new HarnessDatabase(appPool);
+    const appDb = new RuntimeDatabase(appPool);
     for (const [statement, parameters] of [
       [`INSERT INTO pr_agent_harness.eval_datasets
          (tenant_id,name,status,curator_actor_type,curator_actor_id,split_policy_json,split_policy_hash)
@@ -313,7 +313,7 @@ if (!databaseUrl) {
     const source = await datasets.loadCaseSource(curator, dataset.id, datasetRunC, await trustedLabelId(datasetRunC));
     const fixture = await buildDatasetFixture(source, repositoryAdapter([]));
     const added = await datasets.addCase(curator, dataset.id, dataset.version, source, fixture);
-    await assert.rejects(new HarnessDatabase(appPool).transaction(tenantId, async (client) => client.query(
+    await assert.rejects(new RuntimeDatabase(appPool).transaction(tenantId, async (client) => client.query(
       `INSERT INTO pr_agent_harness.eval_fixture_files
          (tenant_id,fixture_id,path,kind,content_text,content_hash,size_bytes)
        VALUES ($1,$2,'src/injected.ts','source','injected',$3,8)`,
@@ -336,7 +336,7 @@ if (!databaseUrl) {
     assert.equal((rejected[0]!.reason as RunControlError).code, "DATASET_CAS_CONFLICT");
     const frozen = fulfilled[0]!.value;
 
-    await assert.rejects(new HarnessDatabase(appPool).transaction(tenantId, async (client) => client.query(
+    await assert.rejects(new RuntimeDatabase(appPool).transaction(tenantId, async (client) => client.query(
       "UPDATE pr_agent_harness.eval_datasets SET status='retired',updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2",
       [tenantId, dataset.id])), /admin|immutable/);
     await assert.rejects(datasets.addCase(curator, dataset.id, frozen.version, source, fixture),
@@ -382,7 +382,7 @@ if (!databaseUrl) {
 
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET finished_at=clock_timestamp()-interval '90 days' WHERE tenant_id=$1 AND id=$2",
       [tenantId, datasetRunF]);
-    const sourceRetention = await new HarnessMaintenanceStore(adminPool).apply({ tenantId, olderThanDays: 30, limit: 10 });
+    const sourceRetention = await new RuntimeMaintenanceStore(adminPool).apply({ tenantId, olderThanDays: 30, limit: 10 });
     assert.equal(sourceRetention.applied, 1);
 
     await assert.rejects(new EvolutionDatasetMaintenanceStore(appPool).retire({ tenantId, datasetId: retiring.id,

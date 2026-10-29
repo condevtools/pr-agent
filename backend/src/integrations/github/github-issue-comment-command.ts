@@ -18,7 +18,7 @@ import {
 } from "./github-review.js";
 import { resolveGitHubReviewBehaviorPolicy } from "./github-policy.js";
 import { runGitHubImplementCommand } from "./github-implement.js";
-import { resolvePublicationRuntime } from "../../harness/runtime.js";
+import { resolvePublicationRuntime } from "../../agent-runtime/runtime.js";
 import { guardGitHubOctokit } from "./github-rest-client.js";
 import {
   findSimilarIssues,

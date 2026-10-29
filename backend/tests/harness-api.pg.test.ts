@@ -8,12 +8,12 @@ import test, { after, before } from "node:test";
 import { NestFactory, type INestApplication } from "@nestjs/core";
 import { Pool } from "pg";
 
-import { PublicationAuthorityStore } from "../src/harness/authority.js";
-import { closeHarnessRuntime } from "../src/harness/runtime.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { HarnessModule } from "../src/modules/harness/harness.module.js";
+import { PublicationAuthorityStore } from "../src/agent-runtime/authority/publication-authority.js";
+import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { AgentRuntimeModule } from "../src/modules/harness/harness.module.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -24,8 +24,8 @@ if (!databaseUrl) {
   if (!databaseName.startsWith("harness_test_")) throw new Error("Disposable harness_test_* database required");
 
   const adminPool = new Pool({ connectionString: databaseUrl, max: 4 });
-  const adminDb = new HarnessDatabase(adminPool);
-  const adminRuns = new HarnessRunStore(adminDb);
+  const adminDb = new RuntimeDatabase(adminPool);
+  const adminRuns = new RunStore(adminDb);
   const role = `run_api_${randomUUID().replaceAll("-", "")}`;
   const password = randomUUID();
   const tenantId = randomUUID();
@@ -67,7 +67,7 @@ if (!databaseUrl) {
     origin = `http://127.0.0.1:${providerAddress.port}`;
 
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`
       GRANT USAGE ON SCHEMA pr_agent_harness TO ${role};
@@ -140,7 +140,7 @@ if (!databaseUrl) {
       principal("cross", crossToken, tenantId, crossIntegrationId, ["runs:read", "runs:trace"]),
       principal("read-only", readOnlyToken, tenantId, integrationId, ["runs:read"]),
     ]);
-    app = await NestFactory.create(HarnessModule, { logger: false });
+    app = await NestFactory.create(AgentRuntimeModule, { logger: false });
     await app.listen(0, "127.0.0.1");
     const apiAddress = app.getHttpServer().address();
     if (!apiAddress || typeof apiAddress === "string") throw new Error("Harness API did not bind");
@@ -149,7 +149,7 @@ if (!databaseUrl) {
 
   after(async () => {
     await app?.close();
-    await closeHarnessRuntime();
+    await closeAgentRuntime();
     await appPool?.end();
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
     await adminPool.query(`DROP ROLE IF EXISTS ${role}`);

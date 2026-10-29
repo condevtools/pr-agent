@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { FixWorkflowPolicy, VerificationPolicy } from "./contracts.js";
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import { expectedSandboxPolicyHash } from "./sandbox-policy.js";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);

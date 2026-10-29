@@ -11,12 +11,12 @@ import {
   ModelBudgetStore,
   reserveRunBudgetInTransaction,
   type ModelExecutionPolicy,
-} from "../src/harness/model-budget-store.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
+} from "../src/agent-runtime/budget/model-budget-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (!databaseUrl) {
@@ -28,8 +28,8 @@ if (!databaseUrl) {
   }
 
   const pool = new Pool({ connectionString: databaseUrl, max: 25 });
-  const db = new HarnessDatabase(pool);
-  const runStore = new HarnessRunStore(db);
+  const db = new RuntimeDatabase(pool);
+  const runStore = new RunStore(db);
   const executionStore = new RunExecutionStore(db);
   const budgetStore = new ModelBudgetStore(db);
   const tenantId = randomUUID();
@@ -41,7 +41,7 @@ if (!databaseUrl) {
 
   before(async () => {
     await pool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     await runStore.registerIntegration({
       tenantId,
       id: integrationId,
@@ -515,7 +515,7 @@ if (!databaseUrl) {
       url.password = password;
       const tenantPool = new Pool({ connectionString: url.toString(), max: 1 });
       try {
-        const result = await new HarnessDatabase(tenantPool).transaction(otherTenantId, (client) =>
+        const result = await new RuntimeDatabase(tenantPool).transaction(otherTenantId, (client) =>
           client.query<{ count: number }>(
             "SELECT count(*)::int AS count FROM pr_agent_harness.model_calls",
           ));

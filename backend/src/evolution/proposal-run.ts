@@ -1,20 +1,20 @@
-import { canonicalJson, fingerprint } from "../harness/versions.js";
-import { currentReviewRunContext } from "../harness/review-run-context.js";
-import type { RunLease } from "../harness/run-contracts.js";
+import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
+import { currentRunExecutionContext } from "../agent-runtime/execution/run-context.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import { createStructuredModel } from "../review/structured-model.js";
 import {
   evolutionCandidateJsonSchema, evolutionCandidateSchema, evolutionProposalRunInputSchema,
 } from "./candidate-contracts.js";
 import { PgEvolutionCandidateStore } from "./candidate-store.js";
-import { getHarnessServices } from "../harness/runtime.js";
+import { getAgentRuntimeServices } from "../agent-runtime/runtime.js";
 
 const MODEL_STEP_KEY = "evolution.proposal.model";
 
 export async function executeEvolutionProposalRun(lease: RunLease): Promise<void> {
-  const context = currentReviewRunContext();
+  const context = currentRunExecutionContext();
   if (!context || context.lease.runId !== lease.runId) throw new EvolutionProposalFailedError("durable_context_missing");
   const input = evolutionProposalRunInputSchema.parse(lease.input);
-  const services = await getHarnessServices(); const store = new PgEvolutionCandidateStore(services.db);
+  const services = await getAgentRuntimeServices(); const store = new PgEvolutionCandidateStore(services.db);
   const source = await store.loadSource(lease);
   if (input.datasetId !== source.datasetId || input.datasetVersion !== source.datasetVersion
       || input.datasetManifestHash !== source.datasetManifestHash || input.sourceHash !== source.sourceHash) {

@@ -1,5 +1,5 @@
-import { fingerprint } from "../harness/versions.js";
-import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../harness/run-contracts.js";
+import { fingerprint } from "../agent-runtime/versions.js";
+import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../agent-runtime/runs/contracts.js";
 import type {
   CoverageStatus,
   DeepReviewArtifact,

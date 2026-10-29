@@ -1,5 +1,5 @@
 import type { ApplicationFunction } from "probot";
-import { requireOnlinePublicationAuthority } from "./harness/runtime.js";
+import { requireOnlinePublicationAuthority } from "./agent-runtime/runtime.js";
 import { createHash } from "node:crypto";
 import { assertRuntimeStateBackendReady } from "#core";
 import {

@@ -4,13 +4,13 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { PublicationBatchStore } from "../src/harness/publication-batches.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore, type CreateRunInput } from "../src/harness/postgres/run-store.js";
-import type { RunCommand, RunPrincipal } from "../src/harness/run-control-contracts.js";
-import { RunControlStore } from "../src/harness/run-control-store.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
+import { PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore, type CreateRunInput } from "../src/agent-runtime/postgres/run-store.js";
+import type { RunCommand, RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import { RunControlStore } from "../src/agent-runtime/runs/control-store.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -25,7 +25,7 @@ if (!databaseUrl) {
   const roleName = `run_command_${randomUUID().replaceAll("-", "")}`;
   const password = randomUUID();
   let pool: Pool;
-  let runStore: HarnessRunStore;
+  let runStore: RunStore;
   let commandStore: RunControlStore;
   let executionStore: RunExecutionStore;
   let batchStore: PublicationBatchStore;
@@ -33,7 +33,7 @@ if (!databaseUrl) {
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
@@ -56,8 +56,8 @@ if (!databaseUrl) {
     appUrl.username = roleName;
     appUrl.password = password;
     pool = new Pool({ connectionString: appUrl.toString(), max: 8 });
-    const db = new HarnessDatabase(pool);
-    runStore = new HarnessRunStore(db);
+    const db = new RuntimeDatabase(pool);
+    runStore = new RunStore(db);
     commandStore = new RunControlStore(db);
     executionStore = new RunExecutionStore(db);
     batchStore = new PublicationBatchStore(db);

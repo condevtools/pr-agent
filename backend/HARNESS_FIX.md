@@ -40,6 +40,6 @@ PostgreSQL 已在根 `docker-compose.yml`。`harness-migrate` 管理迁移和最
 
 ## 保留与验证
 
-先按现有 `retention` 管理 DB 内容；再以 admin 身份执行 `node dist/harness/cli.js snapshot-retention --action preview` 或 `--action apply`（可选 `--days`、`--limit`）。GC 检查所有 tenant 的 queued Run、未清理 proposal/job、未消费审批及活动 publish child；不会跟随 symlink。Docker 临时资源另带 job/epoch/数据库 deadline 标签，由 verifier 启动及周期扫尾；只清理 deadline+grace 已过的资源，使用有界游标防止长期遗漏，失败会报告。生产 retention 容器需要挂载对应 snapshot volume。
+先按现有 `retention` 管理 DB 内容；再以 admin 身份执行 `node dist/agent-runtime/cli.js snapshot-retention --action preview` 或 `--action apply`（可选 `--days`、`--limit`）。GC 检查所有 tenant 的 queued Run、未清理 proposal/job、未消费审批及活动 publish child；不会跟随 symlink。Docker 临时资源另带 job/epoch/数据库 deadline 标签，由 verifier 启动及周期扫尾；只清理 deadline+grace 已过的资源，使用有界游标防止长期遗漏，失败会报告。生产 retention 容器需要挂载对应 snapshot volume。
 
 验证命令：`npm --prefix backend run check`、`build`、`test`、`test:harness:pg`。真实 Docker sandbox 测试另需 `FIX_VERIFIER_SANDBOX_IMAGE_DIGEST`，默认单测中的 skip 不代表该隔离验证已经运行。阶段证据见 `validation/p2-verification.json`。

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { buildCodeManifest, fingerprint, reviewVersionManifest } from "../src/harness/versions.js";
+import { buildCodeManifest, fingerprint, runtimeVersionManifest } from "../src/agent-runtime/versions.js";
 
 test("checkpoint fingerprints survive PostgreSQL JSONB object key ordering", () => {
   assert.equal(fingerprint({ b: [{ x: 1, a: 2 }], a: true }),
@@ -18,7 +18,7 @@ test("dependency and migration changes invalidate the built runtime manifest", a
   try {
     await mkdir(join(root, "backend/src"), { recursive: true });
     await mkdir(join(root, "backend/scripts"));
-    for (const file of ["backend/package.json", "backend/tsconfig.json", "backend/scripts/copy-harness-assets.mjs", "backend/scripts/fix-sandbox-runner.mjs",
+    for (const file of ["backend/package.json", "backend/tsconfig.json", "backend/scripts/build.mjs", "backend/scripts/copy-agent-runtime-assets.mjs", "backend/scripts/fix-sandbox-runner.mjs",
       "package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "backend/src/main.ts", "backend/src/001.sql"]) {
       await writeFile(join(root, file), "original");
     }
@@ -31,7 +31,10 @@ test("dependency and migration changes invalidate the built runtime manifest", a
     const changedMigration = await buildCodeManifest(source);
     assert.notEqual(changedMigration.sourceHash, changedDependencies.sourceHash);
     await writeFile(join(root, "backend/scripts/fix-sandbox-runner.mjs"), "changed-sandbox-protocol");
-    assert.notEqual((await buildCodeManifest(source)).sourceHash, changedMigration.sourceHash);
+    const changedSandbox = await buildCodeManifest(source);
+    assert.notEqual(changedSandbox.sourceHash, changedMigration.sourceHash);
+    await writeFile(join(root, "backend/scripts/build.mjs"), "changed-build-pipeline");
+    assert.notEqual((await buildCodeManifest(source)).sourceHash, changedSandbox.sourceHash);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -45,18 +48,18 @@ test("runtime fingerprints include review policy and locale but exclude credenti
     process.env.PR_AGENT_LOCALE = "en";
     process.env.REVIEW_CODE_EXTENSIONS = ".ts";
     process.env.OPENAI_API_KEY = "fixture-one";
-    const baseline = await reviewVersionManifest({ version: "test" });
+    const baseline = await runtimeVersionManifest({ version: "test" });
     process.env.OPENAI_API_KEY = "fixture-two";
-    assert.deepEqual(await reviewVersionManifest({ version: "test" }), baseline);
+    assert.deepEqual(await runtimeVersionManifest({ version: "test" }), baseline);
     process.env.PR_AGENT_LOCALE = "zh";
-    assert.notEqual((await reviewVersionManifest({ version: "test" })).runtimeVersionHash, baseline.runtimeVersionHash);
+    assert.notEqual((await runtimeVersionManifest({ version: "test" })).runtimeVersionHash, baseline.runtimeVersionHash);
     process.env.PR_AGENT_LOCALE = "en";
     process.env.REVIEW_CODE_EXTENSIONS = ".py";
-    assert.notEqual((await reviewVersionManifest({ version: "test" })).runtimeVersionHash, baseline.runtimeVersionHash);
+    assert.notEqual((await runtimeVersionManifest({ version: "test" })).runtimeVersionHash, baseline.runtimeVersionHash);
     for (const name of names.slice(3)) {
-      const before = (await reviewVersionManifest({ version: "test" })).runtimeVersionHash;
+      const before = (await runtimeVersionManifest({ version: "test" })).runtimeVersionHash;
       process.env[name] = process.env[name] === "123" ? "124" : "123";
-      assert.notEqual((await reviewVersionManifest({ version: "test" })).runtimeVersionHash, before);
+      assert.notEqual((await runtimeVersionManifest({ version: "test" })).runtimeVersionHash, before);
     }
   } finally {
     for (const name of names) {

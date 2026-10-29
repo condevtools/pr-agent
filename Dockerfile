@@ -11,7 +11,8 @@ RUN pnpm install --filter backend --frozen-lockfile
 
 COPY backend/tsconfig.json ./backend/
 COPY backend/src ./backend/src
-COPY backend/scripts/copy-harness-assets.mjs ./backend/scripts/copy-harness-assets.mjs
+COPY backend/scripts/copy-agent-runtime-assets.mjs ./backend/scripts/copy-agent-runtime-assets.mjs
+COPY backend/scripts/build.mjs ./backend/scripts/build.mjs
 COPY backend/scripts/fix-sandbox-runner.mjs ./backend/scripts/fix-sandbox-runner.mjs
 
 RUN pnpm --filter backend build

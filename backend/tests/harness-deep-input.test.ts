@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addedLineNumbers } from "../src/harness/deep-review-run.js";
-import { freezeDeepBudget, deepRolePrefix } from "../src/harness/deep-budget.js";
-import { createReviewRequestSchema, reviewApiSourceHash } from "../src/harness/run-api-input.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { addedLineNumbers } from "../src/review/deep/run.js";
+import { freezeDeepBudget, deepRolePrefix } from "../src/review/deep/budget.js";
+import { createReviewRequestSchema, reviewApiSourceHash } from "../src/http/runs/input.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 
 test("new workflow selector preserves legacy single review API request identity", () => {
   const single = createReviewRequestSchema.parse({ number: 42 });

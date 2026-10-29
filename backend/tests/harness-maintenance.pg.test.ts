@@ -4,14 +4,14 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { PublicationAuthorityStore } from "../src/harness/authority.js";
-import { HarnessMaintenanceStore } from "../src/harness/maintenance.js";
-import { HarnessMetricsStore } from "../src/harness/metrics.js";
-import { PublicationBatchStore } from "../src/harness/publication-batches.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { RunCursorExpiredError, RunQueryStore } from "../src/harness/run-query-store.js";
+import { PublicationAuthorityStore } from "../src/agent-runtime/authority/publication-authority.js";
+import { RuntimeMaintenanceStore } from "../src/agent-runtime/maintenance.js";
+import { RuntimeMetricsStore } from "../src/agent-runtime/metrics.js";
+import { PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunCursorExpiredError, RunQueryStore } from "../src/agent-runtime/runs/query-store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -21,9 +21,9 @@ if (!databaseUrl) {
   const databaseName = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
   if (!databaseName.startsWith("harness_test_")) throw new Error("maintenance tests require a disposable database");
   const pool = new Pool({ connectionString: databaseUrl, max: 8 });
-  const db = new HarnessDatabase(pool);
-  const runs = new HarnessRunStore(db);
-  const maintenance = new HarnessMaintenanceStore(pool);
+  const db = new RuntimeDatabase(pool);
+  const runs = new RunStore(db);
+  const maintenance = new RuntimeMaintenanceStore(pool);
   const tenantId = randomUUID();
   const otherTenantId = randomUUID();
   const integrationId = randomUUID();
@@ -32,7 +32,7 @@ if (!databaseUrl) {
   let runtimePool: Pool;
 
   before(async () => {
-    await migrateHarness(pool);
+    await migrateRuntime(pool);
     await activate(tenantId, integrationId, "acme/retention");
     await activate(otherTenantId, otherIntegrationId, "other/retention");
     const role = `retention_runtime_${randomUUID().replaceAll("-", "")}`;
@@ -92,7 +92,7 @@ if (!databaseUrl) {
     );
 
     await assert.rejects(
-      new HarnessMaintenanceStore(runtimePool).apply({ tenantId, olderThanDays: 30 }),
+      new RuntimeMaintenanceStore(runtimePool).apply({ tenantId, olderThanDays: 30 }),
       /administrative PostgreSQL role/,
     );
     await assert.rejects(maintenance.preview({ tenantId, olderThanDays: 6 }), /between 7 and 3650/);
@@ -160,7 +160,7 @@ if (!databaseUrl) {
     assert.equal(audit.rows[0]!.actor_id, "postgres");
     assert.equal(typeof audit.rows[0]!.details_json.cutoff, "string");
     assert.equal(audit.rows[0]!.details_json.previousEventRetentionFloor, 1);
-    const metrics = await new HarnessMetricsStore(db).snapshot(tenantId, integrationId);
+    const metrics = await new RuntimeMetricsStore(db).snapshot(tenantId, integrationId);
     assert.equal(metrics.runs.succeeded, 4);
     assert.equal(metrics.runs.queued, 1);
     assert.equal(metrics.claimableJobs, 1);
@@ -260,7 +260,7 @@ if (!databaseUrl) {
   });
 
   async function activate(tenant: string, integration: string, repository: string): Promise<void> {
-    const store = new HarnessRunStore(db);
+    const store = new RunStore(db);
     const authority = new PublicationAuthorityStore(db);
     await store.registerIntegration({ tenantId: tenant, id: integration, platform: "github",
       origin: "https://github.example.test", repository });

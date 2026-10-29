@@ -6,18 +6,18 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { PublicationAuthorityStore, type PublicationBinding } from "../src/harness/authority.js";
-import { ModelBudgetStore, getModelExecutionPolicy } from "../src/harness/model-budget-store.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { closeHarnessRuntime, executeHarnessRun } from "../src/harness/runtime.js";
-import type { RunPrincipal } from "../src/harness/run-control-contracts.js";
-import { RunControlError } from "../src/harness/run-control-contracts.js";
-import { fingerprint, reviewVersionManifest } from "../src/harness/versions.js";
-import { resolveReviewModelConfiguration } from "../src/review/ai-reviewer.js";
+import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { ModelBudgetStore, getModelExecutionPolicy } from "../src/agent-runtime/budget/model-budget-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { closeAgentRuntime, executeAgentRun } from "../src/agent-runtime/runtime.js";
+import type { RunPrincipal } from "../src/agent-runtime/runs/control-contracts.js";
+import { RunControlError } from "../src/agent-runtime/runs/control-contracts.js";
+import { fingerprint, runtimeVersionManifest } from "../src/agent-runtime/versions.js";
+import { resolveModelConfiguration } from "../src/review/ai-reviewer.js";
 import { DatasetStore } from "../src/evolution/dataset-store.js";
 import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../src/evolution/dataset-fixture.js";
 import { FeedbackStore } from "../src/evolution/feedback-store.js";
@@ -39,7 +39,7 @@ if (!databaseUrl) {
   if (!databaseName.startsWith("harness_test_")) throw new Error("evolution replay requires a disposable database");
 
   const adminPool = new Pool({ connectionString: databaseUrl, max: 4 });
-  const adminDb = new HarnessDatabase(adminPool);
+  const adminDb = new RuntimeDatabase(adminPool);
   const appPassword = randomUUID(); const tenantId = randomUUID();
   const developmentIntegrationId = randomUUID(); const holdoutIntegrationId = randomUUID();
   const developmentRunId = randomUUID(); const holdoutRunId = randomUUID();
@@ -51,7 +51,7 @@ if (!databaseUrl) {
     completeness: "complete", expectedFindings: [{ path: "src/a.ts", startLine: 1, endLine: 1,
       severity: "high", title: secretFindingTitle }] };
   const calls: Array<{ method: string; path: string; body: string }> = [];
-  let origin = ""; let server: Server; let appPool: Pool; let appDb: HarnessDatabase;
+  let origin = ""; let server: Server; let appPool: Pool; let appDb: RuntimeDatabase;
   let developmentBinding: PublicationBinding; let holdoutBinding: PublicationBinding;
   let datasetId = ""; let candidateId = ""; let proposalRunId = "";
   let execution: RunExecutionStore; let budget: ModelBudgetStore;
@@ -88,7 +88,7 @@ if (!databaseUrl) {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("mock server did not bind");
     origin = `http://127.0.0.1:${address.port}`;
 
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     const role = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
     const ddl = await adminPool.query<{ sql: string }>(role.rowCount
       ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql"
@@ -98,14 +98,14 @@ if (!databaseUrl) {
     process.env.AI_PROVIDER = "openai-compatible"; process.env.AI_MODEL = "p3b-model";
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-model-key";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing();
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
     });
     if (configured.status !== 0) throw new Error(`runtime grants failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     process.env.HARNESS_DATABASE_URL = appUrl.toString();
-    appPool = new Pool({ connectionString: appUrl.toString(), max: 16 }); appDb = new HarnessDatabase(appPool);
+    appPool = new Pool({ connectionString: appUrl.toString(), max: 16 }); appDb = new RuntimeDatabase(appPool);
     execution = new RunExecutionStore(appDb); budget = new ModelBudgetStore(appDb);
     developmentBinding = await bind(developmentIntegrationId, "acme/development-sentinel", 501);
     holdoutBinding = await bind(holdoutIntegrationId, "acme/HOLDOUT_SECRET_SENTINEL", 502);
@@ -117,7 +117,7 @@ if (!databaseUrl) {
   });
 
   after(async () => {
-    await closeHarnessRuntime(); await appPool?.end(); await adminPool.end();
+    await closeAgentRuntime(); await appPool?.end(); await adminPool.end();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   });
 
@@ -184,7 +184,7 @@ if (!databaseUrl) {
 
     await adminPool.query(`GRANT INSERT,UPDATE,DELETE ON pr_agent_harness.evolution_proposal_sources,
       pr_agent_harness.evolution_candidates,pr_agent_harness.eval_runs,pr_agent_harness.eval_results TO pr_agent_app`);
-    const repaired = spawnSync(process.execPath, ["--import", "tsx", "src/harness/cli.ts", "migrate"], {
+    const repaired = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
       cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
       env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
     });
@@ -508,7 +508,7 @@ if (!databaseUrl) {
   }
 
   async function runCoordinatorToTerminal(evaluationId: string, coordinator: EvaluationCoordinator,
-    worker: ReviewRunWorker, errors: unknown[]): Promise<void> {
+    worker: RunWorker, errors: unknown[]): Promise<void> {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await adminPool.query("UPDATE pr_agent_harness.eval_runs SET available_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2",
         [tenantId, evaluationId]);
@@ -523,11 +523,11 @@ if (!databaseUrl) {
     throw new Error(`evaluation did not finish: ${formatErrors(errors)}`);
   }
 
-  function workerFor(errors: unknown[]): ReviewRunWorker {
-    return new ReviewRunWorker({ store: execution, budget, bindings: async () => [developmentBinding, holdoutBinding],
-      runtimeHash: async () => reviewVersionManifest(getModelExecutionPolicy(
-        resolveReviewModelConfiguration().provider, resolveReviewModelConfiguration().model)).then(({ runtimeVersionHash }) => runtimeVersionHash),
-      execute: executeHarnessRun,
+  function workerFor(errors: unknown[]): RunWorker {
+    return new RunWorker({ store: execution, budget, bindings: async () => [developmentBinding, holdoutBinding],
+      runtimeHash: async () => runtimeVersionManifest(getModelExecutionPolicy(
+        resolveModelConfiguration().provider, resolveModelConfiguration().model)).then(({ runtimeVersionHash }) => runtimeVersionHash),
+      execute: executeAgentRun,
       onError: (error) => errors.push(error) }, 1);
   }
 
@@ -556,7 +556,7 @@ if (!databaseUrl) {
   }
 
   async function bind(id: string, repository: string, providerRepositoryId: number): Promise<PublicationBinding> {
-    const runs = new HarnessRunStore(adminDb); const authority = new PublicationAuthorityStore(adminDb);
+    const runs = new RunStore(adminDb); const authority = new PublicationAuthorityStore(adminDb);
     await runs.registerIntegration({ tenantId, id, platform: "github", origin, repository });
     await authority.configure({ tenantId, integrationId: id, providerRepositoryId, providerActorId: 7,
       credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });

@@ -10,7 +10,7 @@ import {
   type PreparedPublication,
   type PublicationOperation,
   type PublicationStore,
-} from "../src/harness/publication.js";
+} from "../src/agent-runtime/publication/publication.js";
 import { createRestBackedOctokit } from "../src/integrations/github/github-rest-client.js";
 import { publishGitHubIssueCommentDurably } from "../src/integrations/github/github-publication.js";
 import type { GitHubReviewContext } from "../src/integrations/github/github-review-types.js";

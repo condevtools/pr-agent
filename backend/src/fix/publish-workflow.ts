@@ -1,11 +1,11 @@
 import { z } from "zod";
 
-import type { PublicationBinding } from "../harness/authority.js";
-import { PendingPublicationError, PublicationDefiniteFailureError } from "../harness/publication.js";
-import type { RunLease } from "../harness/run-contracts.js";
-import { currentReviewRunContext } from "../harness/review-run-context.js";
-import { getHarnessServices, publicationRuntimeForBinding } from "../harness/runtime.js";
-import { fingerprint } from "../harness/versions.js";
+import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
+import { PendingPublicationError, PublicationDefiniteFailureError } from "../agent-runtime/publication/publication.js";
+import type { RunLease } from "../agent-runtime/runs/contracts.js";
+import { currentRunExecutionContext } from "../agent-runtime/execution/run-context.js";
+import { getAgentRuntimeServices, publicationRuntimeForBinding } from "../agent-runtime/runtime.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import { consumeFixApprovalInTransaction, FixStoreError } from "./fix-store.js";
 
 const inputSchema = z.object({ workflow: z.literal("fix.publish.v1"), approvalId: z.string().uuid(),
@@ -18,13 +18,13 @@ const operationsSchema = z.array(z.object({
 /** A distinct child Run consumes one immutable approval before any provider dispatch. */
 export async function executeFixPublicationRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
   const input = inputSchema.parse(lease.input);
-  const context = currentReviewRunContext();
+  const context = currentRunExecutionContext();
   if (!context || context.lease.runId !== lease.runId || lease.tenantId !== binding.tenantId
       || lease.integrationId !== binding.id || lease.authorityGeneration !== binding.generation) {
     throw new FixStoreError("publish_run_scope_mismatch");
   }
   await context.assertActive();
-  const services = await getHarnessServices();
+  const services = await getAgentRuntimeServices();
   const intent = await services.db.transaction(lease.tenantId, async (client) => {
     const result = await client.query<{ intent_json: Record<string, unknown>; intent_hash: string }>(
       `SELECT intent_json,intent_hash FROM pr_agent_harness.fix_approval_requests

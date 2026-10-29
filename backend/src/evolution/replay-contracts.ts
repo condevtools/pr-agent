@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { DeepReviewArtifact } from "../agents/contracts.js";
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 export const REPLAY_VERIFIER_HASH = fingerprint({ scorer: "eval-replay-scorer.v2", matching: "exact-location-severity.v1",

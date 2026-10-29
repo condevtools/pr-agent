@@ -17,16 +17,17 @@
   },
   "scripts": {
     "dev": "node --watch --env-file=../.env --import tsx src/main.ts",
-    "build": "tsc -p tsconfig.json && node scripts/copy-harness-assets.mjs",
+    "build": "node scripts/build.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
+    "test:build": "node --import tsx scripts/verify-build.mjs",
     "start": "node dist/main.js",
     "test": "node --import ./scripts/test-environment.mjs --import tsx --test --test-force-exit tests/*.test.ts",
     "test:coverage": "node --import ./scripts/test-environment.mjs --import tsx --test --experimental-test-coverage --test-force-exit tests/*.test.ts",
     "test:harness:pg": "node scripts/test-harness-postgres.mjs",
     "test:harness:backup": "node scripts/harness-backup-drill.mjs",
     "test:harness:capacity": "node scripts/test-harness-capacity.mjs",
-    "harness:migrate": "node --import tsx src/harness/cli.ts migrate",
-    "harness:bind": "node --import tsx src/harness/cli.ts bind"
+    "harness:migrate": "node --import tsx src/agent-runtime/cli.ts migrate",
+    "harness:bind": "node --import tsx src/agent-runtime/cli.ts bind"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

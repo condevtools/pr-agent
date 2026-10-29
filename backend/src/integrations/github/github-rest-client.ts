@@ -12,7 +12,7 @@ import {
   type MinimalGitHubOctokit,
 } from "./github-review.js";
 import { buildGitHubHttpRetryOptions } from "../shared/http-retry-options.js";
-import { assertPublicationWriteAllowed } from "../../harness/write-boundary.js";
+import { assertPublicationWriteAllowed } from "../../agent-runtime/authority/write-boundary.js";
 
 const MAX_LIST_FILES_TRUNCATED_RECORDS = 500;
 

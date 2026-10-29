@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { VerificationPolicy } from "./contracts.js";
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 
 const safeRelativePath = z.string().min(1).max(512).refine((value) =>
   !value.startsWith("/") && !value.includes("\\") && !value.includes("\0")

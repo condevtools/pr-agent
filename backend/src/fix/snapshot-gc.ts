@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
-import type { HarnessDatabase } from "../harness/postgres/database.js";
+import type { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
 
 /** Shared by admission and GC. Provider reads happen before taking this short filesystem/DB lock. */
 export async function lockFixSnapshots(client: PoolClient): Promise<void> {
@@ -11,7 +11,7 @@ export async function lockFixSnapshots(client: PoolClient): Promise<void> {
 }
 
 export async function collectFixSnapshots(input: {
-  db: HarnessDatabase; root: string; apply: boolean; olderThanDays?: number; limit?: number;
+  db: RuntimeDatabase; root: string; apply: boolean; olderThanDays?: number; limit?: number;
 }): Promise<{ examined: number; eligible: number; removed: number; retained: number }> {
   const days = input.olderThanDays ?? 30;
   const limit = input.limit ?? 100;

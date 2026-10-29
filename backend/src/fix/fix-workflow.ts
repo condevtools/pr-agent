@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { canonicalJson, fingerprint } from "../harness/versions.js";
+import { canonicalJson, fingerprint } from "../agent-runtime/versions.js";
 import type {
   FixArtifact,
   FixProposal,

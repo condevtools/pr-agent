@@ -3,11 +3,11 @@ import type { Request } from "express";
 import { PgEvolutionReleaseStore } from "../../evolution/release-store.js";
 import { decideReleaseSchema, qualifyCandidateSchema, requestReleaseSchema,
   revokeReleaseSchema, rollbackReleaseSchema } from "../../evolution/release-contracts.js";
-import { getModelExecutionPolicy } from "../../harness/model-budget-store.js";
-import { RunControlError } from "../../harness/run-control-contracts.js";
-import { getHarnessServices } from "../../harness/runtime.js";
-import { reviewVersionManifest } from "../../harness/versions.js";
-import { resolveReviewModelConfiguration } from "../../review/ai-reviewer.js";
+import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget-store.js";
+import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { runtimeVersionManifest } from "../../agent-runtime/versions.js";
+import { resolveModelConfiguration } from "../../review/ai-reviewer.js";
 import { RunsService } from "../harness/runs.service.js";
 
 @Injectable()
@@ -15,8 +15,8 @@ export class ReleasesService {
   constructor(@Inject(RunsService) private readonly runs: RunsService) {}
   async qualify(request: Request, body: unknown) {
     const input = qualifyCandidateSchema.parse(withCommand(body, request));
-    const model = resolveReviewModelConfiguration();
-    const manifest = await reviewVersionManifest(getModelExecutionPolicy(model.provider, model.model));
+    const model = resolveModelConfiguration();
+    const manifest = await runtimeVersionManifest(getModelExecutionPolicy(model.provider, model.model));
     return (await store()).qualify(this.runs.authenticate(request), input, manifest);
   }
   async request(request: Request, body: unknown) {
@@ -36,10 +36,10 @@ export class ReleasesService {
   }
   async read(request: Request) { return (await store()).read(this.runs.authenticate(request)); }
 }
-async function store(): Promise<PgEvolutionReleaseStore> { return new PgEvolutionReleaseStore((await getHarnessServices()).db); }
+async function store(): Promise<PgEvolutionReleaseStore> { return new PgEvolutionReleaseStore((await getAgentRuntimeServices()).db); }
 async function currentManifest() {
-  const model = resolveReviewModelConfiguration();
-  return reviewVersionManifest(getModelExecutionPolicy(model.provider, model.model));
+  const model = resolveModelConfiguration();
+  return runtimeVersionManifest(getModelExecutionPolicy(model.provider, model.model));
 }
 function withCommand(body: unknown, request: Request): Record<string, unknown> {
   if (!body || typeof body !== "object" || Array.isArray(body) || "commandKey" in body) {

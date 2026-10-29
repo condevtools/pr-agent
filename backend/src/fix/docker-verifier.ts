@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { FixProposal, VerificationPolicy, VerificationResult } from "./contracts.js";
 import { assertVerifierPolicy, expectedSandboxPolicyHash, isAllowedAddedTest } from "./sandbox-policy.js";
 import { evaluateVerificationResult, sandboxCommandResultSchema, sandboxRunnerResultSchema } from "./sandbox-result.js";
-import { fingerprint } from "../harness/versions.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 
 const MAX_SNAPSHOT_FILES = 2_000;
 const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;

@@ -2,28 +2,28 @@ import { Injectable, type BeforeApplicationShutdown } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { z } from "zod";
 
-import { DeepReviewStore } from "../../harness/deep-review-store.js";
-import { RunApiAuthenticator } from "../../harness/run-api-auth.js";
-import { createReviewRequestSchema, resolveApiReviewInput, reviewApiSourceHash } from "../../harness/run-api-input.js";
-import { requireRunPermission, runCommandSchema, runConflict, runNotFound, RunControlError, type RunPrincipal } from "../../harness/run-control-contracts.js";
-import { RunControlStore } from "../../harness/run-control-store.js";
-import { RunQueryStore } from "../../harness/run-query-store.js";
-import { RunEventStreamHub } from "../../harness/run-sse.js";
-import { buildReviewRunCreationInput } from "../../harness/review-run-intake.js";
-import { reviewCreationRequestHash, reviewRunInputSchema } from "../../harness/review-run-input.js";
-import { getHarnessServices } from "../../harness/runtime.js";
-import { HarnessRunStore } from "../../harness/postgres/run-store.js";
-import { fingerprint, reviewVersionManifest } from "../../harness/versions.js";
-import { getModelExecutionPolicy } from "../../harness/model-budget-store.js";
-import { resolveReviewModelConfiguration } from "../../review/ai-reviewer.js";
-import type { PublicationBinding } from "../../harness/authority.js";
+import { DeepReviewStore } from "../../review/deep/persistence/store.js";
+import { RunApiAuthenticator } from "../../http/common/run-auth.js";
+import { createReviewRequestSchema, resolveApiReviewInput, reviewApiSourceHash } from "../../http/runs/input.js";
+import { requireRunPermission, runCommandSchema, runConflict, runNotFound, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
+import { RunControlStore } from "../../agent-runtime/runs/control-store.js";
+import { RunQueryStore } from "../../agent-runtime/runs/query-store.js";
+import { RunEventStreamHub } from "../../http/runs/event-stream.js";
+import { buildReviewRunCreationInput } from "../../review/intake/run-intake.js";
+import { reviewCreationRequestHash, reviewRunInputSchema } from "../../review/intake/run-input.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { RunStore } from "../../agent-runtime/postgres/run-store.js";
+import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
+import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget-store.js";
+import { resolveModelConfiguration } from "../../review/ai-reviewer.js";
+import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import type { FixArtifact } from "../../fix/contracts.js";
 import { approveFixApprovalInTransaction, createApprovalInTransaction, PgFixStore, revokeApprovalInTransaction } from "../../fix/fix-store.js";
 import { fixRunInputSchema } from "../../fix/fix-input.js";
 import { buildFixPublicationPlan } from "../../fix/publication-plan.js";
 import { readSnapshotBundle } from "../../fix/snapshot-bundle.js";
-import { admitFixProposalRun } from "../../harness/fix-run-intake.js";
-import { createRunInTransaction } from "../../harness/postgres/run-store.js";
+import { admitFixProposalRun } from "../../fix/proposal/intake.js";
+import { createRunInTransaction } from "../../agent-runtime/postgres/run-store.js";
 import { isFixDifferentialEligible } from "../../fix/verification-gate.js";
 
 @Injectable()
@@ -43,7 +43,7 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "runs:create");
     const commandKey = z.string().min(1).max(200).parse(key);
     const request = createReviewRequestSchema.parse(body);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const binding = await this.binding(principal);
     const source = { key: `api:${binding.id}:${commandKey}`, hash: reviewApiSourceHash(request) };
     const requestHash = reviewCreationRequestHash({ source, platform: binding.platform,
@@ -65,7 +65,7 @@ export class RunsService implements BeforeApplicationShutdown {
     }
     const input = await resolveApiReviewInput(binding, request, source);
     const creation = await buildReviewRunCreationInput(binding, input, { actorType: principal.actorType, actorId: principal.subjectId });
-    const run = await new HarnessRunStore(services.db).createRun(creation);
+    const run = await new RunStore(services.db).createRun(creation);
     return { id: run.id, status: run.status, version: run.version, created: run.created };
   }
 
@@ -87,7 +87,7 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "runs:read");
     const includeRaw = z.enum(["true", "false"]).optional().parse(raw) === "true";
     const id = validRunId(runId);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const type = await services.db.transaction(principal.tenantId, (client) => client.query<{ run_type: string }>(
       `SELECT run_type FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND integration_id=$2 AND id=$3`,
       [principal.tenantId, principal.integrationId, id]));
@@ -101,7 +101,7 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "fixes:create");
     const commandKey = z.string().min(1).max(200).parse(key);
     const request = z.object({ findingId: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(body);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const binding = await this.binding(principal);
     if (binding.reviewExecutionMode !== "harness_async" || binding.state !== "active") {
       throw runConflict("Asynchronous fix admission is not active for this integration");
@@ -116,7 +116,7 @@ export class RunsService implements BeforeApplicationShutdown {
     z.object({}).strict().parse(body);
     const commandKey = z.string().min(1).max(200).parse(key);
     const id = validRunId(proposalRunId);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const material = await this.fixApprovalMaterial(principal, id);
     if (material.input.original.platform === "gitlab") {
       throw runConflict("GitLab fix publication is suggestion-only because conditional branch creation is unsupported");
@@ -143,7 +143,7 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "fixes:approve");
     const runId = validRunId(proposalRunId);
     const request = fixRelevanceSchema.parse(body);
-    return new PgFixStore((await getHarnessServices()).db).attestRelevance({
+    return new PgFixStore((await getAgentRuntimeServices()).db).attestRelevance({
       tenantId: principal.tenantId, integrationId: principal.integrationId, proposalRunId: runId,
       ...request, actor: { type: principal.actorType, id: principal.subjectId },
     });
@@ -153,11 +153,11 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "fixes:approve");
     const runId = validRunId(proposalRunId); const approval = validRunId(approvalId);
     const request = fixApprovalDecisionSchema.parse(body);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const material = await this.fixApprovalMaterial(principal, runId);
     await assertFixHeadCurrent(await this.binding(principal), material.input.original);
-    const { provider, model } = resolveReviewModelConfiguration();
-    const currentRuntimeHash = (await reviewVersionManifest(getModelExecutionPolicy(provider,model))).runtimeVersionHash;
+    const { provider, model } = resolveModelConfiguration();
+    const currentRuntimeHash = (await runtimeVersionManifest(getModelExecutionPolicy(provider,model))).runtimeVersionHash;
     return services.db.transaction(principal.tenantId, async (client) => {
       await assertApprovalIntent(client, principal, runId, approval, request.intentHash);
       return approveFixApprovalInTransaction(client, {
@@ -198,7 +198,7 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "fixes:revoke");
     const runId = validRunId(proposalRunId); const approval = validRunId(approvalId);
     const request = fixApprovalDecisionSchema.parse(body);
-    const services = await getHarnessServices(); await this.binding(principal);
+    const services = await getAgentRuntimeServices(); await this.binding(principal);
     return services.db.transaction(principal.tenantId, async (client) => {
       await assertApprovalIntent(client, principal, runId, approval, request.intentHash);
       return revokeApprovalInTransaction(client, { tenantId: principal.tenantId,
@@ -214,7 +214,7 @@ export class RunsService implements BeforeApplicationShutdown {
     if ("kind" in fields) throw new RunControlError("INVALID_REQUEST", 422, "Command kind is selected by the route");
     const command = runCommandSchema.parse({ ...fields, kind });
     requireRunPermission(principal, `runs:${command.kind}`);
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const store = new RunControlStore(services.db);
     if (command.kind !== "rerun") return store.apply(principal, runId, command);
     const previous = await store.lookupReceipt(principal, runId, command);
@@ -236,9 +236,9 @@ export class RunsService implements BeforeApplicationShutdown {
   }
 
   async beforeApplicationShutdown(): Promise<void> { await this.hub?.stop(); }
-  private async queries(): Promise<RunQueryStore> { return new RunQueryStore((await getHarnessServices()).db); }
+  private async queries(): Promise<RunQueryStore> { return new RunQueryStore((await getAgentRuntimeServices()).db); }
   private async binding(principal: RunPrincipal) {
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const authorized = await services.db.transaction(principal.tenantId, (client) => client.query(
       "SELECT 1 FROM pr_agent_harness.integration_bindings WHERE tenant_id=$1 AND id=$2 AND active",
       [principal.tenantId, principal.integrationId],
@@ -251,7 +251,7 @@ export class RunsService implements BeforeApplicationShutdown {
     input: z.infer<typeof fixRunInputSchema>; artifact: FixArtifact;
     relevance: { kind: "human"; testPatchHash: string; attestationHash: string };
   }> {
-    const services = await getHarnessServices();
+    const services = await getAgentRuntimeServices();
     const selected = await services.db.transaction(principal.tenantId, (client) => client.query<{
       input_json: unknown; artifact_json: FixArtifact; content_hash: string;
       relevance_test_patch_hash: string; relevance_attestation_hash: string;

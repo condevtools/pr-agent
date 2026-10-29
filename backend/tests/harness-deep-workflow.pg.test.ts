@@ -7,22 +7,22 @@ import { Pool } from "pg";
 import { createDeepReviewWorkflow } from "../src/agents/deep-workflow.js";
 import type { DeepReviewArtifact, DeepReviewSource, DeepReviewStore as DeepReviewStorePort,
   DeepWorkflowContext, DeepWorkflowPolicy, StructuredModel, StructuredModelRequest } from "../src/agents/contracts.js";
-import { PublicationAuthorityStore, type PublicationBinding } from "../src/harness/authority.js";
-import { DeepReviewEvidenceError, DeepReviewStore } from "../src/harness/deep-review-store.js";
-import { ModelBudgetStore, type ModelExecutionPolicy } from "../src/harness/model-budget-store.js";
-import { executeModelRequest, modelRequestHash } from "../src/harness/model-execution-context.js";
-import { PublicationBatchStore } from "../src/harness/publication-batches.js";
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
-import { currentReviewRunContext } from "../src/harness/review-run-context.js";
-import { enqueueReviewRun } from "../src/harness/review-run-intake.js";
-import type { ReviewRunInput } from "../src/harness/review-run-input.js";
-import { ReviewRunWorker } from "../src/harness/review-run-worker.js";
-import type { RunLease } from "../src/harness/run-contracts.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
-import { closeHarnessRuntime } from "../src/harness/runtime.js";
-import { fingerprint } from "../src/harness/versions.js";
+import { PublicationAuthorityStore, type PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
+import { DeepReviewEvidenceError, DeepReviewStore } from "../src/review/deep/persistence/store.js";
+import { ModelBudgetStore, type ModelExecutionPolicy } from "../src/agent-runtime/budget/model-budget-store.js";
+import { executeModelRequest, modelRequestHash } from "../src/model/execution-context.js";
+import { PublicationBatchStore } from "../src/agent-runtime/publication/batches.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
+import { currentRunExecutionContext } from "../src/agent-runtime/execution/run-context.js";
+import { enqueueReviewRun } from "../src/review/intake/run-intake.js";
+import type { ReviewRunInput } from "../src/review/intake/run-input.js";
+import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
+import type { RunLease } from "../src/agent-runtime/runs/contracts.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
+import { closeAgentRuntime } from "../src/agent-runtime/runtime.js";
+import { fingerprint } from "../src/agent-runtime/versions.js";
 import { RepositoryReadToolRegistry } from "../src/integrations/shared/repository-read-tools.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -34,7 +34,7 @@ if (!databaseUrl) {
   if (!databaseName.startsWith("harness_test_")) throw new Error("Disposable harness_test_* database required");
 
   const adminPool = new Pool({ connectionString: databaseUrl, max: 4 });
-  const adminDb = new HarnessDatabase(adminPool);
+  const adminDb = new RuntimeDatabase(adminPool);
   const role = `deep_workflow_${randomUUID().replaceAll("-", "")}`;
   const password = randomUUID();
   const tenantId = randomUUID();
@@ -42,7 +42,7 @@ if (!databaseUrl) {
   const origin = "https://capacity.example.test";
   const repository = "acme/deep-review";
   let appPool: Pool;
-  let appDb: HarnessDatabase;
+  let appDb: RuntimeDatabase;
   let execution: RunExecutionStore;
   let budget: ModelBudgetStore;
   let binding: PublicationBinding;
@@ -50,7 +50,7 @@ if (!databaseUrl) {
   let publicationBaseline: { operations: number; batches: number };
 
   before(async () => {
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS`);
     await grantRuntime(adminPool, role);
     const appUrl = new URL(databaseUrl); appUrl.username = role; appUrl.password = password;
@@ -59,10 +59,10 @@ if (!databaseUrl) {
     process.env.AI_MODEL = "deep-fixture-model";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing();
     appPool = new Pool({ connectionString: appUrl.toString(), max: 16 });
-    appDb = new HarnessDatabase(appPool);
+    appDb = new RuntimeDatabase(appPool);
     execution = new RunExecutionStore(appDb, { leaseTtlMs: 60_000, initialRetryMs: 10, maxRetryMs: 100 });
     budget = new ModelBudgetStore(appDb);
-    const adminRuns = new HarnessRunStore(adminDb);
+    const adminRuns = new RunStore(adminDb);
     const authority = new PublicationAuthorityStore(adminDb);
     await adminRuns.registerIntegration({ tenantId, id: integrationId, platform: "github", origin, repository });
     await authority.configure({ tenantId, integrationId, providerRepositoryId: 8080, providerActorId: 99,
@@ -84,7 +84,7 @@ if (!databaseUrl) {
   });
 
   after(async () => {
-    await closeHarnessRuntime();
+    await closeAgentRuntime();
     await appPool?.end();
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
     await adminPool.query(`DROP ROLE IF EXISTS ${role}`);
@@ -209,7 +209,7 @@ if (!databaseUrl) {
     let revoked = false;
     let repositoryReads = 0;
     const worker = makeWorker(async (lease) => {
-      const workerContext = currentReviewRunContext();
+      const workerContext = currentRunExecutionContext();
       assert.ok(workerContext);
       const guardedStep: DeepWorkflowContext["step"] = async (key, kind, inputHash, action) => {
         const result = await workerContext.step(key, kind, inputHash, action);
@@ -262,7 +262,7 @@ if (!databaseUrl) {
 
   function makeWorker(executor: (lease: RunLease) => Promise<void>,
     errors: unknown[]) {
-    return new ReviewRunWorker({ store: execution, budget, bindings: async () => [binding], runtimeHash: async () => runtimeHash,
+    return new RunWorker({ store: execution, budget, bindings: async () => [binding], runtimeHash: async () => runtimeHash,
       execute: executor, onError: (error) => errors.push(error) }, 1);
   }
 
@@ -278,7 +278,7 @@ if (!databaseUrl) {
   }
 
   async function execute(lease: RunLease, store: DeepReviewStorePort, model: StructuredModel, deepSource: DeepReviewSource) {
-    const workerContext = currentReviewRunContext();
+    const workerContext = currentRunExecutionContext();
     assert.ok(workerContext);
     const context: DeepWorkflowContext = { lease, step: workerContext.step, signal: workerContext.signal, model, store,
       tools: new RepositoryReadToolRegistry({ identity: deepSource.identity,

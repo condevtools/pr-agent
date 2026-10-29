@@ -5,12 +5,12 @@ import {
   currentModelOutputLimit,
   executeModelRequest,
   withModelExecutionContext,
-} from "../src/harness/model-execution-context.js";
+} from "../src/model/execution-context.js";
 import {
   calculateActualModelUsage,
   getModelExecutionPolicy as loadPolicy,
   type ModelPriceRates,
-} from "../src/harness/model-budget-store.js";
+} from "../src/agent-runtime/budget/model-budget-store.js";
 
 const rates: ModelPriceRates = {
   inputMicrosPerMillion: 1_000_000,

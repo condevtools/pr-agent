@@ -45,9 +45,9 @@ function databaseUrl(port, database) {
 function migrate(url) {
   const code = `
     import { Pool } from "pg";
-    import { migrateHarness } from "./src/harness/postgres/migrations.ts";
+    import { migrateRuntime } from "./src/agent-runtime/postgres/migrations.ts";
     const pool = new Pool({ connectionString: process.env.DRILL_DATABASE_URL });
-    try { await migrateHarness(pool); } finally { await pool.end(); }
+    try { await migrateRuntime(pool); } finally { await pool.end(); }
   `;
   command(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", code], {
     cwd: new URL("../", import.meta.url),

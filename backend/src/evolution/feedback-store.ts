@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { z } from "zod";
 
-import { addedLineNumbers } from "../harness/deep-review-run.js";
-import type { HarnessDatabase } from "../harness/postgres/database.js";
-import type { RunPrincipal } from "../harness/run-control-contracts.js";
-import { runConflict, runNotFound } from "../harness/run-control-contracts.js";
-import { fingerprint } from "../harness/versions.js";
+import { addedLineNumbers } from "../review/deep/run.js";
+import type { RuntimeDatabase } from "../agent-runtime/postgres/database.js";
+import type { RunPrincipal } from "../agent-runtime/runs/control-contracts.js";
+import { runConflict, runNotFound } from "../agent-runtime/runs/control-contracts.js";
+import { fingerprint } from "../agent-runtime/versions.js";
 import { redactRepositoryText } from "../integrations/shared/repository-read-tools.js";
 import {
   annotationRequestSchema, arbitrationRequestSchema, canonicalizeLabelSet, feedbackObservationSchema,
@@ -25,7 +25,7 @@ interface EligibleSource {
 }
 
 export class FeedbackStore {
-  constructor(private readonly db: HarnessDatabase) {}
+  constructor(private readonly db: RuntimeDatabase) {}
 
   async recordObservation(principal: RunPrincipal, sourceRunId: string, commandKey: string,
     raw: unknown): Promise<FeedbackReceipt> {

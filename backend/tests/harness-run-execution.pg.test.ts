@@ -4,16 +4,16 @@ import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
 
-import { HarnessDatabase } from "../src/harness/postgres/database.js";
-import { migrateHarness } from "../src/harness/postgres/migrations.js";
-import { HarnessRunStore } from "../src/harness/postgres/run-store.js";
+import { RuntimeDatabase } from "../src/agent-runtime/postgres/database.js";
+import { migrateRuntime } from "../src/agent-runtime/postgres/migrations.js";
+import { RunStore } from "../src/agent-runtime/postgres/run-store.js";
 import {
   RunCheckpointCompatibilityError,
   RunLeaseLostError,
   RunStepConflictError,
   type ClaimableBinding,
-} from "../src/harness/run-contracts.js";
-import { RunExecutionStore } from "../src/harness/run-execution-store.js";
+} from "../src/agent-runtime/runs/contracts.js";
+import { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -30,13 +30,13 @@ if (!databaseUrl) {
   const rolePassword = randomUUID();
   let poolA: Pool;
   let poolB: Pool;
-  let runStore: HarnessRunStore;
+  let runStore: RunStore;
   let storeA: RunExecutionStore;
   let storeB: RunExecutionStore;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
-    await migrateHarness(adminPool);
+    await migrateRuntime(adminPool);
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA pr_agent_harness TO ${roleName}`);
@@ -52,11 +52,11 @@ if (!databaseUrl) {
     appUrl.password = rolePassword;
     poolA = new Pool({ connectionString: appUrl.toString(), max: 3 });
     poolB = new Pool({ connectionString: appUrl.toString(), max: 3 });
-    runStore = new HarnessRunStore(new HarnessDatabase(poolA));
-    storeA = new RunExecutionStore(new HarnessDatabase(poolA), {
+    runStore = new RunStore(new RuntimeDatabase(poolA));
+    storeA = new RunExecutionStore(new RuntimeDatabase(poolA), {
       leaseTtlMs: 60_000, initialRetryMs: 10, maxRetryMs: 100,
     });
-    storeB = new RunExecutionStore(new HarnessDatabase(poolB), {
+    storeB = new RunExecutionStore(new RuntimeDatabase(poolB), {
       leaseTtlMs: 60_000, initialRetryMs: 10, maxRetryMs: 100,
     });
   });
@@ -280,7 +280,7 @@ if (!databaseUrl) {
     binding: ClaimableBinding;
     runId: string;
     runtimeHash: string;
-    input: Parameters<HarnessRunStore["createRun"]>[0];
+    input: Parameters<RunStore["createRun"]>[0];
   }> {
     const tenantId = randomUUID();
     const integrationId = randomUUID();
@@ -295,7 +295,7 @@ if (!databaseUrl) {
       [integrationId, tenantId, `https://${key}.example.test`, `acme/${key}`,
         JSON.stringify({ verifiedBy: "test", at: new Date().toISOString() })],
     );
-    const input: Parameters<HarnessRunStore["createRun"]>[0] = {
+    const input: Parameters<RunStore["createRun"]>[0] = {
       tenantId, integrationId, actorType: "service", actorId: "test-intake",
       createScope: "test:run:v1", createKey: key, requestHash: hash(`request:${key}`),
       runType: "review", baseSha: "base", headSha: "head",
