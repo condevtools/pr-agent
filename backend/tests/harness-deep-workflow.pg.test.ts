@@ -412,7 +412,16 @@ async function grantRuntime(pool: Pool, role: string): Promise<void> {
     GRANT SELECT,INSERT ON pr_agent_harness.checkpoints,pr_agent_harness.run_publication_batches,
       pr_agent_harness.dead_letter_jobs,pr_agent_harness.usage_records,pr_agent_harness.model_pricing_snapshots,
       pr_agent_harness.run_wait_decisions,pr_agent_harness.evidence_records,pr_agent_harness.finding_candidates,
-      pr_agent_harness.finding_decisions,pr_agent_harness.review_artifacts TO ${role}`);
+      pr_agent_harness.finding_decisions,pr_agent_harness.review_artifacts TO ${role};
+    GRANT SELECT ON pr_agent_harness.evolution_release_assignments,
+      pr_agent_harness.evolution_release_qualifications,pr_agent_harness.evolution_candidates,
+      pr_agent_harness.evolution_proposal_sources,pr_agent_harness.eval_runs,pr_agent_harness.eval_results,
+      pr_agent_harness.eval_cases,pr_agent_harness.trusted_review_label_sets,
+      pr_agent_harness.evolution_release_receipts,pr_agent_harness.evolution_run_assignments TO ${role};
+    GRANT INSERT (tenant_id,integration_id,run_id,assignment_version,routing,selection,bucket,candidate_id,
+      qualification_id,release_receipt_id,review_text_json,review_text_hash,prompt_hash,tool_hash,selection_hash)
+      ON pr_agent_harness.evolution_run_assignments TO ${role};
+    GRANT UPDATE (updated_at) ON pr_agent_harness.evolution_release_assignments TO ${role}`);
 }
 
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }

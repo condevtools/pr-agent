@@ -141,6 +141,33 @@ try {
           ON pr_agent_harness.eval_runs TO pr_agent_app;
         GRANT UPDATE (child_run_id,status,artifact_hash,score_json,score_hash,usage_json,latency_ms,error_code,updated_at,completed_at)
           ON pr_agent_harness.eval_results TO pr_agent_app;
+        REVOKE INSERT, UPDATE, DELETE ON pr_agent_harness.evolution_release_qualifications,
+          pr_agent_harness.evolution_release_assignments, pr_agent_harness.evolution_release_requests,
+          pr_agent_harness.evolution_release_decisions, pr_agent_harness.evolution_release_receipts,
+          pr_agent_harness.evolution_run_assignments FROM pr_agent_app;
+        GRANT SELECT ON pr_agent_harness.evolution_release_qualifications,
+          pr_agent_harness.evolution_release_assignments, pr_agent_harness.evolution_release_requests,
+          pr_agent_harness.evolution_release_decisions, pr_agent_harness.evolution_release_receipts,
+          pr_agent_harness.evolution_run_assignments TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,integration_id,candidate_id,dataset_id,dataset_version,validation_evaluation_id,
+          holdout_evaluation_id,policy_json,policy_hash,evidence_json,evidence_hash,created_by_actor_type,created_by_actor_id,command_key,request_hash)
+          ON pr_agent_harness.evolution_release_qualifications TO pr_agent_app;
+        GRANT INSERT (tenant_id,integration_id,state,routing,candidate_id,qualification_id,version,fraction_bps,salt,activated_at,promoted_at)
+          ON pr_agent_harness.evolution_release_assignments TO pr_agent_app;
+        GRANT UPDATE (state,routing,candidate_id,qualification_id,version,fraction_bps,activated_at,promoted_at,updated_at)
+          ON pr_agent_harness.evolution_release_assignments TO pr_agent_app;
+        GRANT INSERT (id,tenant_id,integration_id,target,candidate_id,qualification_id,expected_assignment_version,candidate_bps,
+          maker_actor_type,maker_actor_id,command_key,request_hash,expires_at)
+          ON pr_agent_harness.evolution_release_requests TO pr_agent_app;
+        GRANT UPDATE (status,consumed_at,updated_at,revoke_command_key,revoke_request_hash)
+          ON pr_agent_harness.evolution_release_requests TO pr_agent_app;
+        GRANT INSERT (tenant_id,integration_id,request_id,decision,checker_actor_type,checker_actor_id,command_key,request_hash)
+          ON pr_agent_harness.evolution_release_decisions TO pr_agent_app;
+        GRANT INSERT (tenant_id,integration_id,request_id,kind,assignment_version,before_json,after_json,evidence_json,evidence_hash,actor_type,actor_id,command_key,request_hash)
+          ON pr_agent_harness.evolution_release_receipts TO pr_agent_app;
+        GRANT INSERT (tenant_id,integration_id,run_id,assignment_version,routing,selection,bucket,candidate_id,qualification_id,
+          release_receipt_id,review_text_json,review_text_hash,prompt_hash,tool_hash,selection_hash)
+          ON pr_agent_harness.evolution_run_assignments TO pr_agent_app;
     `);
     let verifier = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_verifier'");
     const verifierPassword = process.env.HARNESS_VERIFIER_PASSWORD;

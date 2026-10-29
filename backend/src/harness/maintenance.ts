@@ -50,6 +50,9 @@ export class HarnessMaintenanceStore {
     try {
       await client.query("BEGIN");
       const administrator = await administrativeIdentity(client);
+      // Qualification and release selection hold the shared form of this lock.
+      // Preserve their source and operational evidence before scrubbing any Run.
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,1830))", [normalized.tenantId]);
       const cutoff = await databaseCutoff(client, normalized.olderThanDays);
       const candidates = await selectCandidates(client, normalized, cutoff, true);
       let applied = 0;
@@ -163,6 +166,22 @@ async function selectCandidates(
      WHERE r.tenant_id=$1 AND r.status IN ('succeeded','failed','cancelled')
        AND r.content_purged_at IS NULL
        AND r.finished_at<$2
+       AND NOT EXISTS (
+         SELECT 1 FROM pr_agent_harness.evolution_run_assignments era
+         WHERE era.tenant_id=r.tenant_id AND era.run_id=r.id AND era.selection<>'baseline'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM pr_agent_harness.eval_cases ec
+         JOIN pr_agent_harness.evolution_release_qualifications eq
+           ON eq.tenant_id=ec.tenant_id AND eq.dataset_id=ec.dataset_id
+         WHERE ec.tenant_id=r.tenant_id AND ec.source_run_id=r.id
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM pr_agent_harness.evolution_candidates candidate
+         JOIN pr_agent_harness.evolution_release_qualifications eq
+           ON eq.tenant_id=candidate.tenant_id AND eq.candidate_id=candidate.id
+         WHERE candidate.tenant_id=r.tenant_id AND candidate.proposal_run_id=r.id
+       )
        AND NOT EXISTS (
          SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
          JOIN pr_agent_harness.publication_batches pb

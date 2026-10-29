@@ -46,6 +46,15 @@ export interface CreateRunInput {
   parentRunId?: string;
   executionModeGeneration?: number;
   admission?: (client: PoolClient, runId: string) => Promise<void>;
+  /** Runs only for a new idempotency identity, inside the Run creation transaction. */
+  prepareNewRun?: (client: PoolClient) => Promise<PreparedRunConfiguration>;
+}
+
+export interface PreparedRunConfiguration {
+  promptVersionHash: string;
+  toolVersionHash: string;
+  runtimeConfig: Record<string, unknown>;
+  admission?: (client: PoolClient, runId: string) => Promise<void>;
 }
 
 export interface CreatedRun {
@@ -115,7 +124,7 @@ export class HarnessRunStore {
     input: CreateRunInput,
   ): Promise<CreatedRun> {
     validateCreateRunInput(input);
-    const execution = normalizeRunExecutionConfig(input);
+    let execution = normalizeRunExecutionConfig(input);
       const binding = await client.query(
         `
           SELECT 1
@@ -127,18 +136,22 @@ export class HarnessRunStore {
       if (binding.rowCount !== 1) {
         throw new Error("active integration binding not found for tenant");
       }
-      if (input.executionModeGeneration !== undefined) {
-        const duplicate = await client.query<{ integration_id: string; request_hash: string }>(
+      if (input.prepareNewRun) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,2002))",
+          [JSON.stringify([input.tenantId, input.createScope, input.createKey])]);
+      }
+      const duplicate = input.executionModeGeneration !== undefined || input.prepareNewRun
+        ? (await client.query<{ integration_id: string; request_hash: string }>(
           `SELECT integration_id,request_hash
            FROM pr_agent_harness.agent_runs
            WHERE tenant_id=$1 AND create_scope=$2 AND create_key=$3`,
           [input.tenantId, input.createScope, input.createKey],
-        );
-        if (duplicate.rows[0]) {
-          if (duplicate.rows[0].integration_id !== input.integrationId
-              || duplicate.rows[0].request_hash !== input.requestHash) {
-            throw new RunCreateConflictError();
-          }
+        )).rows[0] : undefined;
+      if (duplicate && (duplicate.integration_id !== input.integrationId || duplicate.request_hash !== input.requestHash)) {
+        throw new RunCreateConflictError();
+      }
+      if (input.executionModeGeneration !== undefined) {
+        if (duplicate) {
           const resumable = await client.query<{ allowed: boolean }>(
             `SELECT pr_agent_harness.lock_resumable_review_execution_authority(
                $1::uuid,$2::uuid,$3::bigint,$4::bigint
@@ -161,6 +174,19 @@ export class HarnessRunStore {
             throw new Error("active asynchronous review execution authority not found");
           }
         }
+      }
+
+      if (input.prepareNewRun && !duplicate) {
+        const prepared = await input.prepareNewRun(client);
+        const baseAdmission = input.admission;
+        input = { ...input, promptVersionHash: prepared.promptVersionHash,
+          toolVersionHash: prepared.toolVersionHash, runtimeConfig: prepared.runtimeConfig,
+          admission: async (transaction, runId) => {
+            await baseAdmission?.(transaction, runId);
+            await prepared.admission?.(transaction, runId);
+          } };
+        validateCreateRunInput(input);
+        execution = normalizeRunExecutionConfig(input);
       }
 
       const inserted = await client.query<{

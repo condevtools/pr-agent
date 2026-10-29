@@ -46,7 +46,8 @@ if (!databaseUrl) {
       pr_agent_harness.run_events,pr_agent_harness.publication_batches,pr_agent_harness.run_publication_batches,pr_agent_harness.run_waits,
       pr_agent_harness.agent_steps,pr_agent_harness.step_attempts,pr_agent_harness.model_calls,
       pr_agent_harness.tool_calls,pr_agent_harness.checkpoints,pr_agent_harness.usage_records,
-      pr_agent_harness.audit_logs,pr_agent_harness.run_command_receipts,pr_agent_harness.review_artifacts TO ${role}`);
+      pr_agent_harness.audit_logs,pr_agent_harness.run_command_receipts,pr_agent_harness.review_artifacts,
+      pr_agent_harness.evolution_run_assignments TO ${role}`);
     // FOR SHARE serializes the event retention floor with its history page.
     await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${role}`);
     const appUrl = new URL(databaseUrl); appUrl.username = role; appUrl.password = password;

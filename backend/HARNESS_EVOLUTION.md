@@ -1,6 +1,6 @@
 # 受控 Evolution
 
-Evolution 将真实 review 的反馈变成可追溯评测数据，再对受限文本候选作离线比较。数据库队列复用现有 PostgreSQL Harness；无需 Redis/Kafka。P3a 交付反馈与数据底座，P3b 交付候选回放；P3c 继续交付受控发布。工程验收不能替代真实模型质量验收。
+Evolution 将真实 review 的反馈变成可追溯评测数据，再对受限文本候选作离线比较。数据库队列复用现有 PostgreSQL Harness；无需 Redis/Kafka。P3a 提供反馈与数据底座，P3b 提供候选回放，P3c 提供受控发布。工程验收不能替代真实模型质量验收。
 
 ## P3a：反馈、标注与隔离数据集
 
@@ -32,4 +32,35 @@ Evolution 将真实 review 的反馈变成可追溯评测数据，再对受限�
 
 只有子 Run 终态后，评分器才读取独立标签。超时会取消未完成子 Run 并保存最终计数、指标哈希及已观察/尚未确定的费用。失败与取消保留在样本分母，记录逐次得分、方差、成本、延迟和高严重度误报/漏报；缺失用量、失败或可观测模型版本漂移会阻止可比性判断。模型未暴露的供应商内部版本变化无法据此证明不存在。
 
-当前候选保持 `research_draft`，完成测试或 synthetic 回放都不代表实际质量改善。数据集存在提案或评测引用时，退休/清理会拒绝操作以保护复现证据。真实质量门槛与发布审批在 P3c 接入；本阶段没有自动上线入口。
+候选内容始终保持不可变的 `research_draft`；每个仓库的发布状态单独管理，完成测试或 synthetic 回放都不代表实际质量改善。数据集存在提案或评测引用时，退休/清理会拒绝操作以保护复现证据。
+
+## P3c：按仓库发布、灰度与回滚
+
+发布范围由已认证 principal 的 tenant/integration 决定，HTTP body 不能选择其他租户或仓库。全局候选不因一个仓库上线而变成全局生产版本。`evolution_release_assignments` 管理每仓库 CAS 版本和 `evaluated_experimental → approved_canary → promoted` 状态；回滚进入 `rolled_back`。所有审批、版本前后快照、证据哈希和 Run 实际选用文本均留下不可变记录。
+
+发布默认关闭，只有服务端明确设置 `EVOLUTION_RELEASE_ACTIVATION_ENABLED=true` 才能启用；仓库 Compose 不设置该开关。开关只是工程前提，不能跳过数据、评测和审批门槛。所有 deep Run 继续遵守既有只读、shadow 执行边界，发布选择不授予 provider 写权限。
+
+离线资格要求冻结数据集至少 300 cases、30 个仓库，高/中/低严重度各至少 30 cases，TypeScript 和 JavaScript 各至少 30 cases。validation 与 holdout 必须使用同一候选、数据版本、组件和可观测供应商模型版本，分别完成 baseline/candidate 各三次独立回放。两个 split 的严重度加权 F1 都至少为非零基线的 1.03 倍；候选高严重度误报/漏报、安全回归、不完整分析为零；成本 p50 不超过非零基线的 1.2 倍。失败、缺失用量、待确认费用、版本漂移、无效标签会阻止资格。当前产品基线与提案冻结基线也必须相同。
+
+API 均位于 `/evolution/releases`，写操作要求 `Idempotency-Key`，权限按动作拆分为 `evolution:release:qualify|request|approve|revoke|rollback`，查询要求 `evolution:release:read`：
+
+| 接口 | 请求内容与作用 |
+| --- | --- |
+| `POST /qualify` | `{candidateId,datasetId,validationEvaluationId,holdoutEvaluationId}`，服务端计算资格证据 |
+| `POST /request` | `{target,candidateId,qualificationId,expectedVersion,candidateBps?}`；target 为 shadow、canary、promote |
+| `POST /approve` | `{requestId,decision:"approve"|"reject"}`；独立人工身份决策 |
+| `POST /revoke` | `{requestId}`；申请人在消费前撤回 |
+| `POST /rollback` | `{expectedVersion,reason}`；持专用权限的身份紧急回滚 |
+| `GET /` | 读取当前认证仓库的发布状态 |
+
+shadow/canary/promote 每次升级都要求两位不同人工身份，申请 24 小时过期，消费审批与 assignment CAS、receipt 写入同一事务。shadow 为候选影子执行；canary 的 `candidateBps` 范围 1–500，即最多 5%，其余使用固定基线作为 control。晋级 full 需同一 assignment 版本至少运行 24 小时，并具有至少 100 个终态 candidate 和 100 个终态 control，错误率、不完整率、成本 p50、延迟 p95 不劣于 control，且不存在未知发布结果或缺失费用证据。
+
+Run 创建时使用租户、仓库、事件身份、head SHA、assignment 版本和 salt 确定 bucket，冻结实际文本、prompt/tool hashes 和发布 receipt。模型、工作流、权限策略与 runtime hashes 不随文本选择改变。Run、预算和选择记录同事务提交；重复投递返回原 Run，回滚只影响新 Run。失效资格、标签更正或组件漂移会让新 Run 回到基线。
+
+`GET /runs/:id/trace` 在 `runs:trace` 权限下返回不可变的 `release_selection` 条目，包括 assignment 版本、routing、selection、candidate/qualification/receipt ID、实际文本哈希及 prompt/tool/selection hashes。候选执行时 `reviewTextHash` 等于候选内容哈希；control/baseline 展示其实际基线文本哈希。trace 不返回完整提示词或工具说明文本。
+
+当前离线比较固定为产品基线，因此禁止在已上线候选 A 上直接叠加候选 B；回滚目标就是该已知产品基线。支持任意 A/B 连续演进及恢复历史候选需要先扩展评测的 control 身份，不能用 B 对旧产品基线的结果冒充 B 对 A 的验证。
+
+发布引用的候选、提案、数据集，以及资格来源 Run 和 candidate/control 观测 Run 保留复现证据，不能由普通 retention 清理；历史发布元数据不删除。这是保守保留策略，目前没有解除发布证据保留的管理接口，需要容量规划。
+
+发布门槛测试使用明确标识的合成工程数据，模型与 provider 使用本地替身；不产生真实发布资格，也没有开启生产激活。真实质量结论仍为 **NOT_VERIFIED**。

@@ -94,7 +94,7 @@ export class RunQueryStore {
     return this.db.transaction(principal.tenantId, async (client) => {
       const run = await selectScopedRun(client, principal, runId);
       const union = TRACE_SOURCES.map((source) =>
-        `SELECT '${source.kind}' AS kind,id,${source.time} AS recorded_at,
+        `SELECT '${source.kind}' AS kind,${source.id ?? "id"} AS id,${source.time} AS recorded_at,
            jsonb_build_object(${source.fields.map(([key, column]) => `'${key}',${column}`).join(",")}) AS metadata
          FROM pr_agent_harness.${source.table} WHERE tenant_id=$1 AND run_id=$2`).join(" UNION ALL ");
       const result = await client.query<{ kind: string; id: string; recorded_at: Date; cursor_time: string; metadata: Record<string, unknown> }>(
@@ -189,7 +189,17 @@ export class RunCursorExpiredError extends RunControlError {
   }
 }
 
-const TRACE_SOURCES: Array<{ kind: string; table: string; time: string; fields: Array<[string, string]> }> = [
+const TRACE_SOURCES: Array<{ kind: string; table: string; id?: string; time: string; fields: Array<[string, string]> }> = [
+  {
+    kind: "release_selection",
+    table: "evolution_run_assignments",
+    id: "run_id",
+    time: "created_at",
+    fields: [["assignmentVersion", "assignment_version"], ["routing", "routing"], ["selection", "selection"],
+      ["candidateId", "candidate_id"], ["qualificationId", "qualification_id"], ["releaseReceiptId", "release_receipt_id"],
+      ["reviewTextHash", "review_text_hash"], ["promptHash", "prompt_hash"], ["toolHash", "tool_hash"],
+      ["selectionHash", "selection_hash"]],
+  },
   {
     kind: "step",
     table: "agent_steps",

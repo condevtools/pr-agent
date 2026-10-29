@@ -10,7 +10,9 @@ import { EvolutionProposalsController } from "../evolution/proposals.controller.
 import { EvolutionProposalsService } from "../evolution/proposals.service.js";
 import { EvaluationsController } from "../evolution/evaluations.controller.js";
 import { EvaluationsService } from "../evolution/evaluations.service.js";
+import { ReleasesController } from "../evolution/releases.controller.js";
+import { ReleasesService } from "../evolution/releases.service.js";
 
-@Module({ controllers: [RunsController, EvolutionFeedbackController, DatasetsController, EvolutionProposalsController, EvaluationsController],
-  providers: [RunsService, EvolutionFeedbackService, DatasetsService, EvolutionProposalsService, EvaluationsService] })
+@Module({ controllers: [RunsController, EvolutionFeedbackController, DatasetsController, EvolutionProposalsController, EvaluationsController, ReleasesController],
+  providers: [RunsService, EvolutionFeedbackService, DatasetsService, EvolutionProposalsService, EvaluationsService, ReleasesService] })
 export class HarnessModule {}

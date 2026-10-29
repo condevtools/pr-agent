@@ -8,6 +8,7 @@ import { currentReviewRunContext } from "./review-run-context.js";
 import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./review-run-input.js";
 import { REVIEW_RUNTIME_CONFIG, reviewVersionManifest } from "./versions.js";
 import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../agents/text-components.js";
+import { recordDeepReleaseSelection, resolveDeepReleaseSelection } from "../evolution/release-selection.js";
 
 export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {
   if (!binding || currentReviewRunContext()) return false;
@@ -43,6 +44,8 @@ export async function buildReviewRunCreationInput(
   const policy = getModelExecutionPolicy(provider, model);
   const baseManifest = await reviewVersionManifest(policy);
   const manifest = parsed.workflow === "review.deep.v1" ? withReviewTextVersions(baseManifest, BASELINE_REVIEW_TEXT) : baseManifest;
+  const runtimeConfig = { ...REVIEW_RUNTIME_CONFIG, modelPolicy: policy,
+    ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits), reviewText: BASELINE_REVIEW_TEXT } : {}) };
   return {
     tenantId: binding.tenantId, integrationId: binding.id,
     actorType: identity?.actorType ?? "service", actorId: identity?.actorId ?? `integration:${binding.id}`,
@@ -53,10 +56,21 @@ export async function buildReviewRunCreationInput(
     runType: parsed.workflow, baseSha: parsed.revision.baseSha, headSha: parsed.revision.headSha,
     ...manifest, input: parsed, authorityGeneration: binding.generation,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
-    runtimeConfig: { ...REVIEW_RUNTIME_CONFIG, modelPolicy: policy,
-      ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits), reviewText: BASELINE_REVIEW_TEXT } : {}) },
+    runtimeConfig,
     limits: { maxRunMs: REVIEW_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: REVIEW_RUNTIME_CONFIG.maxJobAttempts,
       maxStepAttempts: REVIEW_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
     admission: (client, runId) => reserveRunBudgetInTransaction(client, { tenantId: binding.tenantId, runId, policy }),
+    ...(parsed.workflow === "review.deep.v1" ? { prepareNewRun: async (client) => {
+      const selected = await resolveDeepReleaseSelection(client, { binding, reviewInput: parsed, baseManifest });
+      if (selected.manifest.runtimeVersionHash !== baseManifest.runtimeVersionHash
+          || selected.manifest.workflowVersionHash !== baseManifest.workflowVersionHash
+          || selected.manifest.modelVersionHash !== baseManifest.modelVersionHash
+          || selected.manifest.policyVersionHash !== baseManifest.policyVersionHash) {
+        throw new Error("Review text selection changed a fixed runtime component");
+      }
+      return { promptVersionHash: selected.manifest.promptVersionHash, toolVersionHash: selected.manifest.toolVersionHash,
+        runtimeConfig: { ...runtimeConfig, reviewText: selected.reviewText, releaseSelection: selected.releaseSelection },
+        admission: (transaction, runId) => recordDeepReleaseSelection(transaction, runId, selected.record) };
+    } } : {}),
   };
 }

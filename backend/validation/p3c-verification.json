@@ -1,0 +1,56 @@
+{
+  "stage": "P3c",
+  "status": "engineering_verified",
+  "scope": "Repository-scoped release qualifications, independent approvals, pinned Run selection, canary promotion, rollback and hash-only traces",
+  "unit": {
+    "command": "npm --prefix backend test",
+    "passed": 344,
+    "conditionalSkipped": 30,
+    "failed": 0
+  },
+  "postgres": {
+    "command": "npm --prefix backend run test:harness:pg",
+    "environment": "Fresh Docker PostgreSQL 17 database per suite; actual CLI application role for release lifecycle",
+    "suites": 28,
+    "passed": 198,
+    "failed": 0,
+    "skipped": 0
+  },
+  "releaseIntegration": {
+    "passed": 27,
+    "failed": 0,
+    "coverage": [
+      "300 cases / 30 repositories and severity/language coverage boundaries",
+      "Validation/holdout component pins, quality, cost, critical-error and default-disabled gates",
+      "Actual Nest HTTP authentication, strict body scope and independent maker-checker",
+      "Qualification/request/decision/revocation/rollback idempotency, expiry and CAS",
+      "Exact 5% routing, 24-hour and 100-per-arm thresholds, pending cohort denial",
+      "Actual production worker model prompts and frozen prompt/tool hashes",
+      "Immutable promotion evidence snapshot after late data",
+      "Duplicate and in-flight Run selection survives rollback; new Run uses baseline",
+      "Authenticated candidate/control/baseline hash-only trace and cross-scope denial",
+      "FORCE RLS, exact column grants, composite scope foreign keys and evidence retention"
+    ]
+  },
+  "checks": [
+    "TypeScript check",
+    "Backend build",
+    "git diff --check",
+    "Compiled Docker Compose migration, default-disabled release, FORCE RLS and exact column grants",
+    "Bounded cleanup removed unused dual-name selection input; existing runtime and PostgreSQL queue reused"
+  ],
+  "dockerImage": "sha256:9c370ab8d8ac89891b8598e47fbf398612551387c0894cf15335e0786fd87c63",
+  "independentReview": {
+    "codeReview": "APPROVE",
+    "architecture": "CLEAR"
+  },
+  "quality": "NOT_VERIFIED: synthetic engineering fixtures do not establish real model quality or production release qualification",
+  "activation": "Disabled by default; no real provider writes or production activation performed",
+  "remainingEngineeringStages": [],
+  "limitations": [
+    "Deep review remains an explicitly triggered, read-only shadow workflow",
+    "Offline comparison uses the product baseline; chained candidate B-versus-A releases are rejected and rollback restores the product baseline",
+    "Release evidence is conservatively retained; no release-evidence unpin/purge administration interface is provided",
+    "Unexposed provider-internal model drift cannot be detected"
+  ]
+}

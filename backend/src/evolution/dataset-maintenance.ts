@@ -68,9 +68,10 @@ async function assertUnreferenced(client: PoolClient, request: { tenantId: strin
   const references = await client.query<{ referenced: boolean }>(`SELECT
     EXISTS(SELECT 1 FROM pr_agent_harness.evolution_proposal_sources WHERE tenant_id=$1 AND dataset_id=$2)
     OR EXISTS(SELECT 1 FROM pr_agent_harness.evolution_candidates WHERE tenant_id=$1 AND dataset_id=$2)
-    OR EXISTS(SELECT 1 FROM pr_agent_harness.eval_runs WHERE tenant_id=$1 AND dataset_id=$2) AS referenced`,
+    OR EXISTS(SELECT 1 FROM pr_agent_harness.eval_runs WHERE tenant_id=$1 AND dataset_id=$2)
+    OR EXISTS(SELECT 1 FROM pr_agent_harness.evolution_release_qualifications WHERE tenant_id=$1 AND dataset_id=$2) AS referenced`,
   [request.tenantId, request.datasetId]);
-  if (references.rows[0]?.referenced) throw new Error("Dataset has durable proposal or evaluation references");
+  if (references.rows[0]?.referenced) throw new Error("Dataset has durable proposal, evaluation, or release references");
 }
 async function admin(client: PoolClient): Promise<string> {
   const result = await client.query<{ allowed: boolean; actor: string }>(

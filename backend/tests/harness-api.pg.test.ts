@@ -96,6 +96,15 @@ if (!databaseUrl) {
       GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO ${role};
       GRANT SELECT, INSERT ON pr_agent_harness.evidence_records,pr_agent_harness.finding_candidates,
         pr_agent_harness.finding_decisions,pr_agent_harness.review_artifacts TO ${role};
+      GRANT SELECT ON pr_agent_harness.evolution_release_assignments,
+        pr_agent_harness.evolution_release_qualifications,pr_agent_harness.evolution_candidates,
+        pr_agent_harness.evolution_proposal_sources,pr_agent_harness.eval_runs,pr_agent_harness.eval_results,
+        pr_agent_harness.eval_cases,pr_agent_harness.trusted_review_label_sets,
+        pr_agent_harness.evolution_release_receipts,pr_agent_harness.evolution_run_assignments TO ${role};
+      GRANT INSERT (tenant_id,integration_id,run_id,assignment_version,routing,selection,bucket,candidate_id,
+        qualification_id,release_receipt_id,review_text_json,review_text_hash,prompt_hash,tool_hash,selection_hash)
+        ON pr_agent_harness.evolution_run_assignments TO ${role};
+      GRANT UPDATE (updated_at) ON pr_agent_harness.evolution_release_assignments TO ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
         pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role};
     `);
