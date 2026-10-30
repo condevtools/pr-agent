@@ -439,6 +439,14 @@ export class PgPublicationRecoverySchedule {
   ): Promise<PublicationRecoveryClaim | undefined> {
     const claimOwner = requiredOwner(owner);
     return this.db.transaction(binding.tenantId, async (client) => {
+      // A provider revocation must also fence prepared batches recovered without
+      // a running worker. Reconciliation of already-sent operations stays open.
+      const authority = await client.query<{ allowed: boolean }>(
+        `SELECT pr_agent_harness.lock_dispatchable_publication_authority(
+          $1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::bigint) AS allowed`,
+        [binding.tenantId, binding.id, binding.platform, binding.origin, binding.repository, binding.generation],
+      );
+      if (authority.rows[0]?.allowed !== true) return undefined;
       await exhaustExpiredRecoveryClaims(
         client,
         binding,

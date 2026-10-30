@@ -16,6 +16,7 @@ test("application Compose isolates credentials, process roles, and container pri
     app: "sentinel-app-only",
     verifier: "sentinel-verifier-only",
     maintenance: "sentinel-maintenance-only",
+    onboarding: "sentinel-onboarding-web-and-postgres-only",
   };
   const result = spawnSync("docker",
     ["compose", "--env-file", "/dev/null", "-f", "docker-compose.yml",
@@ -30,6 +31,7 @@ test("application Compose isolates credentials, process roles, and container pri
         HARNESS_APP_PASSWORD: secrets.app,
         HARNESS_VERIFIER_PASSWORD: secrets.verifier,
         HARNESS_MAINTENANCE_PASSWORD: secrets.maintenance,
+        HARNESS_ONBOARDING_PASSWORD: secrets.onboarding,
         APP_ID: "runtime-app-id",
         PRIVATE_KEY: "runtime-inline-private-key",
         WEBHOOK_SECRET: "runtime-webhook-secret",
@@ -63,6 +65,7 @@ test("application Compose isolates credentials, process roles, and container pri
   assert.deepEqual(servicesContaining(services, secrets.app), ["postgres", "pr-agent", "recovery", "worker"]);
   assert.deepEqual(servicesContaining(services, secrets.verifier), ["postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.maintenance), ["maintenance", "postgres"]);
+  assert.deepEqual(servicesContaining(services, secrets.onboarding), ["postgres", "pr-agent"]);
 
   const app = services["pr-agent"]!.environment!;
   assert.equal(app.APP_ID, "runtime-app-id");
@@ -75,6 +78,10 @@ test("application Compose isolates credentials, process roles, and container pri
   assert.equal(app.HTTP_TIMEOUT_MS, "12345");
   assert.equal(app.HARNESS_MODEL_PRICING_JSON, '{"version":"runtime-pricing"}');
   assert.equal(app.HARNESS_PG_PASSWORD, secrets.app);
+  assert.equal(app.HARNESS_ONBOARDING_PG_PASSWORD, secrets.onboarding);
+  assert.equal(app.FEATURE_GITHUB_ONBOARDING, "off");
+  assert.equal(services.worker!.environment!.HARNESS_ONBOARDING_PG_PASSWORD, undefined);
+  assert.equal(services.recovery!.environment!.HARNESS_ONBOARDING_PG_PASSWORD, undefined);
   assert.equal(services["database-init"]!.environment!.HARNESS_PG_PASSWORD, secrets.migration);
   assert.equal(services["pr-agent"]!.environment!.PR_AGENT_PROCESS_ROLE, "web");
   assert.equal(services.worker!.environment!.PR_AGENT_PROCESS_ROLE, "worker");

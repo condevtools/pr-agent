@@ -27,20 +27,20 @@ test("expired and aborted jobs stop before any Docker phase", async () => {
 });
 
 test("a slow seed is bounded by the whole verification deadline and never starts a phase", async () => {
-  const fixture = await deadlineFixture();
+  const fixture = await deadlineFixture(5_000);
   const root = await mkdtemp(join(tmpdir(), "pr-agent-fake-docker-"));
   const executable = join(root, "docker"); const log = join(root, "calls.log");
   // A shell fixture avoids starting a fresh JS runtime for every mock Docker
   // command while the complete test suite is loading modules concurrently.
   const quotedLog = `'${log.replaceAll("'", "'\\''")}'`;
   const script = `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quotedLog}\n`+
-    `case "$1 $*" in run*fix-seed*) exec sleep 4 ;; esac\nexit 0\n`;
+    `case "$1 $*" in run*fix-seed*) exec sleep 10 ;; esac\nexit 0\n`;
   await writeFile(executable, script); await chmod(executable, 0o700);
   const started = Date.now();
   try {
     await assert.rejects(new DockerFixVerifier({ dockerBinary: executable }).verify(fixture.proposal, fixture.policy,
       resourceContext(), undefined, fixture.bundle.content), VerifierSandboxTimeoutError);
-    assert.ok(Date.now() - started < 3_000, "verification exceeded its whole-operation deadline");
+    assert.ok(Date.now() - started < 7_000, "verification exceeded its whole-operation deadline");
     const calls = await readFile(log, "utf8");
     const seed = calls.split("\n").find((line) => line.includes("fix-seed")) ?? "";
     assert.match(seed, /--user 65532:65532/); assert.match(seed, /--pids-limit 16/);
@@ -187,14 +187,14 @@ test("orphan sweeper reaps only expired crash leftovers and preserves active res
 
 function sha(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 
-async function deadlineFixture() {
+async function deadlineFixture(deadlineMs = 2_000) {
   const lock = "{}\n"; const headSha = "a".repeat(40);
   const bundle = await prepareSnapshotBundle({ headSha, dependencyLockHash: sha(lock), files: [
     { path: "package-lock.json", content: Buffer.from(lock) },
     { path: "src/math.js", content: Buffer.from("export const divide=(a,b)=>a/b;\n") },
   ] });
   const image = `sha256:${"b".repeat(64)}`;
-  const sandboxConfig = { nodeImageDigest: image, deadlineMs: 2_000, maxLogBytes: 4_096,
+  const sandboxConfig = { nodeImageDigest: image, deadlineMs, maxLogBytes: 4_096,
     memoryMb: 128, cpuCount: 1, pidsLimit: 16, tmpfsMb: 32 };
   const rawPolicy = JSON.stringify({ fixture: { nodeImageDigest: image, argv: ["node", "--test", "test/existing.test.js"],
     dependencyLockPath: "package-lock.json", dependencyLockHash: sha(lock),

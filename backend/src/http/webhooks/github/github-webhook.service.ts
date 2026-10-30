@@ -41,7 +41,7 @@ export class GithubWebhookService {
     if (params.trustReplay) {
       return await handlePlainGitHubWebhook({
         payload: params.payload, rawBody, headers: normalizedHeaders, logger: this.serviceLogger,
-        skipSignatureVerification: true, sourceHash: params.sourceHash,
+        skipSignatureVerification: true, allowLifecycleMutation: false, sourceHash: params.sourceHash,
       });
     }
     verifyWebhookSignature(rawBody, normalizedHeaders);
@@ -54,7 +54,7 @@ export class GithubWebhookService {
       rawBody,
       execute: ({ sourceHash }) => handlePlainGitHubWebhook({
         payload: params.payload, rawBody, headers: normalizedHeaders, logger: this.serviceLogger,
-        skipSignatureVerification: true, sourceHash,
+        skipSignatureVerification: true, allowLifecycleMutation: true, sourceHash,
       }),
     });
   }

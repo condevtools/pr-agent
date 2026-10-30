@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="robots" content="noindex, nofollow">
+    <title>GitHub 仓库接入 · PR Agent</title>
+    <link rel="stylesheet" href="/api/admin/github/assets/app.css">
+    <script src="/api/admin/github/assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+    <header class="site-header">
+      <a class="brand" href="/api/admin/github" aria-label="PR Agent 仓库接入首页">
+        <span class="brand-mark" aria-hidden="true">PR</span>
+        <span>
+          <strong>PR Agent</strong>
+          <small>GitHub repository onboarding</small>
+        </span>
+      </a>
+      <div class="connection-state" aria-live="polite">
+        <span id="connection-dot" class="status-dot" aria-hidden="true"></span>
+        <span id="connection-label">尚未连接</span>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="page-title">
+        <p class="eyebrow">管理员控制台</p>
+        <h1 id="page-title">把已授权的 GitHub 仓库接入评审服务</h1>
+        <p class="hero-copy">
+          选择 GitHub App 已经有权访问的仓库。身份信息由服务端向 GitHub 验证，
+          不需要复制 installation ID、repository ID 或 bot ID。
+        </p>
+        <div class="trust-row" aria-label="安全说明">
+          <span>令牌仅保存在当前页面内存</span>
+          <span>不会写入浏览器存储</span>
+          <span>接入前再次验证 GitHub 权限</span>
+        </div>
+      </section>
+
+      <section id="login-panel" class="panel login-panel" aria-labelledby="login-title">
+        <div>
+          <p class="section-kicker">01 · 身份验证</p>
+          <h2 id="login-title">连接管理 API</h2>
+          <p>输入部署管理员提供的接入令牌。刷新或关闭页面后需要重新输入。</p>
+        </div>
+        <form id="login-form" class="login-form">
+          <label for="token">管理员令牌</label>
+          <div class="input-row">
+            <input id="token" name="token" type="password" autocomplete="off"
+              spellcheck="false" required aria-describedby="token-help">
+            <button class="button button-primary" type="submit">连接</button>
+          </div>
+          <small id="token-help">令牌不会出现在 URL、日志或页面存储中。</small>
+        </form>
+      </section>
+
+      <div id="notice" class="notice" hidden role="status" aria-live="polite"></div>
+
+      <section id="workspace" class="workspace" hidden aria-labelledby="repositories-title">
+        <div class="workspace-heading">
+          <div>
+            <p class="section-kicker">02 · 仓库</p>
+            <h2 id="repositories-title">可接入仓库</h2>
+            <p id="app-summary">正在读取 GitHub App 信息…</p>
+          </div>
+          <div class="workspace-actions">
+            <button id="refresh-button" class="button button-secondary" type="button">刷新</button>
+            <button id="disconnect-button" class="button button-quiet" type="button">断开连接</button>
+          </div>
+        </div>
+
+        <div id="loading" class="loading-panel" hidden role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          <div>
+            <strong>正在核对 GitHub 授权</strong>
+            <p>仓库较多时，服务会分页读取完整清单。</p>
+          </div>
+        </div>
+        <div id="empty-state" class="empty-state" hidden>
+          <span aria-hidden="true">∅</span>
+          <h3>没有找到可接入的仓库</h3>
+          <p>请确认 GitHub App 已安装到允许的组织或个人账户，并授予目标仓库访问权限。</p>
+        </div>
+        <div id="repository-list" class="repository-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="panel next-step" aria-labelledby="next-step-title">
+        <div>
+          <p class="section-kicker">03 · 验收</p>
+          <h2 id="next-step-title">接入完成后创建一个真实 PR</h2>
+        </div>
+        <ol>
+          <li>从开发分支创建一个小改动的功能分支。</li>
+          <li>创建 PR 后等待自动评审；也可以在 PR 评论区发送 <code>/ai-review report</code>。</li>
+          <li>确认 GitHub 出现评审结果，并检查 Worker 没有待处理错误。</li>
+        </ol>
+      </section>
+    </main>
+
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-icon" aria-hidden="true">✓</div>
+        <p class="section-kicker">发布安全确认</p>
+        <h2 id="confirm-title">确认接入这个仓库</h2>
+        <p id="confirm-repository" class="dialog-repository"></p>
+        <label class="confirmation">
+          <input id="publisher-confirmation" type="checkbox">
+          <span>
+            <strong>确认当前仓库没有其他正在发布评审的旧实例</strong>
+            <small>这项确认用于避免新旧服务同时向同一个 PR 发布评论。</small>
+          </span>
+        </label>
+        <div class="dialog-actions">
+          <button class="button button-quiet" value="cancel">取消</button>
+          <button id="confirm-action" class="button button-primary" value="default" disabled>确认并继续</button>
+        </div>
+      </form>
+    </dialog>
+
+    <noscript>
+      <p class="noscript">此管理页面需要 JavaScript 才能读取 GitHub 仓库和执行接入操作。</p>
+    </noscript>
+  </body>
+</html>

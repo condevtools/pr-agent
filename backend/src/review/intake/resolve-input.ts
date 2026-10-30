@@ -5,12 +5,14 @@ import { reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
 import { publicationRuntimeForBinding } from "../../agent-runtime/runtime/publication.js";
 import { createRestBackedOctokit } from "../../integrations/github/api/http-client.js";
 import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
+import { assertGitHubBindingAccess } from "../../integrations/github/onboarding/provider.js";
 
 export type ReviewInputRequest = Pick<ReviewRunInput, "workflow" | "mode" | "options"> & { number: number };
 
 /** Only the trusted integration controls provider/repository/credentials. */
 export async function resolveReviewInput(binding: PublicationBinding, request: ReviewInputRequest,
   source: ReviewRunInput["source"]): Promise<ReviewRunInput> {
+  await assertGitHubBindingAccess(binding);
   const runtime = await publicationRuntimeForBinding(binding);
   const credential = await runtime.resolveCredential();
   const base = { schemaVersion: 1 as const, workflow: request.workflow, platform: binding.platform,

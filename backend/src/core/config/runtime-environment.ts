@@ -33,6 +33,7 @@ const criticalEnvironmentSchema = z.object({
   FEATURE_DEEP_REVIEW: value, FEATURE_FIX: value, FEATURE_EVOLUTION: value,
   FIX_DEFAULT_POLICY_ID: value, FIX_POLICY_REGISTRY_JSON: value,
   APP_ID: value, PRIVATE_KEY: value, PRIVATE_KEY_PATH: value, WEBHOOK_SECRET: value,
+  FEATURE_GITHUB_ONBOARDING: value, HARNESS_ONBOARDING_PG_PASSWORD: value,
   GITHUB_WEBHOOK_SECRET: value, GITHUB_WEBHOOK_TOKEN: value, GITHUB_WEBHOOK_SKIP_SIGNATURE: value,
   GITHUB_TOKEN: value, GITHUB_API_URL: value, GITLAB_WEBHOOK_SECRET: value,
   GITLAB_TOKEN: value, GITLAB_BASE_URL: value, HARNESS_API_PRINCIPALS_JSON: value,
@@ -134,6 +135,24 @@ function validateWeb(env: Record<string, string>): void {
   const principals = optional(env, "HARNESS_API_PRINCIPALS_FILE");
   if (principals && !isAbsolute(principals)) invalid("HARNESS_API_PRINCIPALS_FILE");
   boolean(env, "EXPOSE_ERROR_STACK", false);
+  const onboarding = feature(env, "FEATURE_GITHUB_ONBOARDING", false);
+  if (onboarding) {
+    if (!optional(env, "HARNESS_ONBOARDING_PG_PASSWORD")) invalid("HARNESS_ONBOARDING_PG_PASSWORD");
+    if (optional(env, "HARNESS_DATABASE_URL")) invalid("HARNESS_DATABASE_URL with FEATURE_GITHUB_ONBOARDING");
+    if (!optional(env, "APP_ID") || !(optional(env, "PRIVATE_KEY") || optional(env, "PRIVATE_KEY_PATH"))
+        || !optional(env, "WEBHOOK_SECRET")) {
+      invalid("APP_ID/PRIVATE_KEY/WEBHOOK_SECRET with FEATURE_GITHUB_ONBOARDING");
+    }
+    integer(env, "APP_ID", 0, 1, Number.MAX_SAFE_INTEGER);
+    const githubApiUrl = optional(env, "GITHUB_API_URL") ?? "https://api.github.com";
+    try {
+      const url = new URL(githubApiUrl);
+      if (url.origin !== "https://api.github.com" || url.username || url.password || url.search || url.hash
+          || (url.pathname !== "" && url.pathname !== "/")) {
+        invalid("GITHUB_API_URL with FEATURE_GITHUB_ONBOARDING");
+      }
+    } catch { invalid("GITHUB_API_URL with FEATURE_GITHUB_ONBOARDING"); }
+  }
   const skipGitHubSignature = boolean(env, "GITHUB_WEBHOOK_SKIP_SIGNATURE", false);
   if (skipGitHubSignature && optional(env, "NODE_ENV")?.toLowerCase() === "production") {
     invalid("GITHUB_WEBHOOK_SKIP_SIGNATURE");

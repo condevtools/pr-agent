@@ -16,13 +16,15 @@ const PULL_REQUEST_REVIEW_THREAD_EVENTS = [
   "pull_request_review_thread.resolved",
   "pull_request_review_thread.unresolved",
 ] as const;
+const INSTALLATION_RESTRICTION_EVENTS = ["installation.deleted", "installation.suspend"] as const;
 
 export const app: ApplicationFunction = (probot): void => {
   requireOnlinePublicationAuthority();
   probot.log.info("AI reviewer app loaded (GitHub + GitLab compatible)");
 
   const dispatchEvent = async (params: {
-    eventName: "issues" | "pull_request" | "pull_request_review_thread" | "issue_comment";
+    eventName: "issues" | "pull_request" | "pull_request_review_thread" | "issue_comment"
+      | "installation" | "installation_repositories";
     context: {
       payload: unknown;
       octokit: unknown;
@@ -78,5 +80,15 @@ export const app: ApplicationFunction = (probot): void => {
       eventName: "issue_comment",
       context,
     });
+  });
+
+  for (const installationEvent of INSTALLATION_RESTRICTION_EVENTS) {
+    probot.on(installationEvent, async (context) => {
+      await dispatchEvent({ eventName: "installation", context });
+    });
+  }
+
+  probot.on("installation_repositories.removed", async (context) => {
+    await dispatchEvent({ eventName: "installation_repositories", context });
   });
 };

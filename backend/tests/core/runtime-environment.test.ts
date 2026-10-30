@@ -54,6 +54,48 @@ test("web credential sources and numeric limits fail fast without exposing value
     /GITLAB_WEBHOOK_SECRET/u);
 });
 
+test("GitHub onboarding requires a dedicated password only in the enabled web role", () => {
+  const explicitWeb = { ...web, HARNESS_DATABASE_URL: undefined, HARNESS_PG_HOST: "postgres",
+    HARNESS_PG_DATABASE: "pr_agent", HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "app-password" };
+  const app = { APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret" };
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "off" }, "web"));
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "on" }, "web"), /HARNESS_ONBOARDING_PG_PASSWORD/u);
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb, ...app, FEATURE_GITHUB_ONBOARDING: "on",
+    HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password" }, "web"));
+  assert.throws(() => validateRuntimeEnvironment({ ...web, ...app, FEATURE_GITHUB_ONBOARDING: "on",
+    HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password" }, "web"), /HARNESS_DATABASE_URL/u);
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...worker,
+    FEATURE_GITHUB_ONBOARDING: "on" }, "worker"));
+});
+
+test("enabled GitHub onboarding requires a public-GitHub App credential set", () => {
+  const explicitWeb = { ...web, HARNESS_DATABASE_URL: undefined, HARNESS_PG_HOST: "postgres",
+    HARNESS_PG_DATABASE: "pr_agent", HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "app-password",
+    HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password", FEATURE_GITHUB_ONBOARDING: "on" };
+  const app = { APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret" };
+  for (const missing of ["APP_ID", "PRIVATE_KEY", "WEBHOOK_SECRET"] as const) {
+    assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app, [missing]: undefined }, "web"),
+      /APP_ID\/PRIVATE_KEY\/WEBHOOK_SECRET/u);
+  }
+  for (const appId of ["not-an-id", "0", String(Number.MAX_SAFE_INTEGER + 1)]) {
+    assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app, APP_ID: appId }, "web"),
+      /APP_ID/u);
+  }
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    GITHUB_API_URL: "https://github.example/api/v3" }, "web"), /GITHUB_API_URL/u);
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    GITHUB_API_URL: "https://api.github.com:8443" }, "web"), /GITHUB_API_URL/u);
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    GITHUB_API_URL: "https://api.github.com/" }, "web"));
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb, APP_ID: "123",
+    PRIVATE_KEY_PATH: "/run/secrets/github-app.pem", WEBHOOK_SECRET: "webhook-secret" }, "web"));
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "off", GITHUB_API_URL: "https://github.example/api/v3",
+    GITHUB_TOKEN: "pat-only" }, "web"));
+});
+
 test("maintenance policy is bounded, ordered, and preview by default", () => {
   const configuration = validateRuntimeEnvironment(database, "maintenance");
   assert.deepEqual(configuration.maintenance, { mode: "preview", intervalMs: 60_000,

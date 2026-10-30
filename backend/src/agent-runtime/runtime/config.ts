@@ -33,6 +33,27 @@ export function agentRuntimePoolConfig(
     password: database.password, port: database.port };
 }
 
+export function githubOnboardingPoolConfig(env: NodeJS.ProcessEnv = process.env): PoolConfig {
+  const enabled = githubOnboardingEnabled(env);
+  if (!enabled) throw new Error("GitHub repository onboarding is disabled");
+  const validated = validateRuntimeEnvironment(env, "web", { requireRoleDependencies: false });
+  const database = validated.database!;
+  if (database.connectionString) throw new Error("GitHub onboarding requires explicit PostgreSQL host configuration");
+  return {
+    max: 2, connectionTimeoutMillis: 5_000, idleTimeoutMillis: 30_000,
+    statement_timeout: 15_000, lock_timeout: 5_000, idle_in_transaction_session_timeout: 15_000,
+    host: database.host, database: database.database, port: database.port,
+    user: "pr_agent_onboarding", password: env.HARNESS_ONBOARDING_PG_PASSWORD?.trim(),
+  };
+}
+
+export function githubOnboardingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.FEATURE_GITHUB_ONBOARDING?.trim().toLowerCase();
+  if (!value) return false;
+  if (value !== "on" && value !== "off") throw new Error("FEATURE_GITHUB_ONBOARDING must be on or off");
+  return value === "on";
+}
+
 export function resolveWorkerSchedulingConfiguration(
   env: NodeJS.ProcessEnv = process.env,
 ): WorkerSchedulingConfiguration {

@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 
-import type { AgentProcessRole } from "./config.js";
+import { githubOnboardingEnabled, type AgentProcessRole } from "./config.js";
+import { checkGitHubOnboardingReadiness } from "./github-onboarding.js";
 import { resolveProcessHeartbeatConfiguration, ProcessHeartbeatStore,
   type DurableProcessRole } from "./heartbeat.js";
 import { resolveRuntimeCapabilities, type RuntimeCapabilityConfiguration } from "./capabilities.js";
@@ -17,6 +18,7 @@ export interface RuntimeReadinessStatus {
     postgres: boolean;
     runtimeRole: boolean;
     schema: boolean;
+    githubOnboarding?: boolean;
     heartbeats: Partial<Record<DurableProcessRole, boolean>>;
   };
 }
@@ -26,6 +28,7 @@ export async function checkRuntimeReadiness(input: {
   role: AgentProcessRole;
   env?: NodeJS.ProcessEnv;
   workerCompatibility?: WorkerCompatibility;
+  checkOnboarding?: () => Promise<boolean>;
 }): Promise<RuntimeReadinessStatus> {
   const env = input.env ?? process.env;
   const capabilities = resolveRuntimeCapabilities(env);
@@ -57,7 +60,7 @@ export async function checkRuntimeReadiness(input: {
       const schema = await input.pool.query<{ schema_ready: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM pr_agent_harness.schema_migrations
-           WHERE migration_name='030_maintenance_retention.sql'
+           WHERE migration_name='031_github_onboarding.sql'
          ) AS schema_ready`,
       );
       checks.schema = schema.rows[0]?.schema_ready === true;
@@ -83,8 +86,11 @@ export async function checkRuntimeReadiness(input: {
   } catch (error) {
     emitReadinessFailure(error);
   }
+  if ((input.role === "web" || input.role === "all") && githubOnboardingEnabled(env)) {
+    checks.githubOnboarding = await (input.checkOnboarding ?? checkGitHubOnboardingReadiness)();
+  }
   return {
-    ok: checks.postgres && checks.runtimeRole && checks.schema
+    ok: checks.postgres && checks.runtimeRole && checks.schema && checks.githubOnboarding !== false
       && Object.values(checks.heartbeats).every(Boolean),
     role: input.role,
     capabilities,

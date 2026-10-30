@@ -14,6 +14,10 @@ await import("#core");
 await import("#review");
 await import("#model");
 await access(new URL("../dist/main.js", import.meta.url));
+for (const asset of ["index.html", "app.js", "app.css"]) {
+  await access(new URL(`../dist/http/admin/github/assets/${asset}`, import.meta.url));
+}
+await access(new URL("../dist/agent-runtime/postgres/migrations/031_github_onboarding.sql", import.meta.url));
 await access(new URL("../dist/agent-runtime/postgres/migrations/020_release_control.sql", import.meta.url));
 for (const retired of ["harness", "agents", "modules", "common", "testing",
   "integrations/shared", "integrations/notify"]) {

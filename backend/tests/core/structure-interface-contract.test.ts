@@ -11,6 +11,9 @@ import { app as githubApp } from "../../src/bootstrap/probot-app.js";
 import { AppModule } from "../../src/app.module.js";
 
 const EXPECTED_HTTP_ROUTES = [
+  "GET /api/admin/github",
+  "GET /api/admin/github/assets/:filename",
+  "GET /api/admin/github/repositories",
   "GET /evaluation-datasets/:id",
   "GET /evaluation-datasets/:id/cases/:caseId/fixture",
   "GET /evolution/evaluations/:id",
@@ -27,6 +30,8 @@ const EXPECTED_HTTP_ROUTES = [
   "GET /runs/:id/events/stream",
   "GET /runs/:id/trace",
   "GET /webhook/events",
+  "POST /api/admin/github/repositories",
+  "POST /api/admin/github/repositories/revalidate",
   "POST /evaluation-datasets",
   "POST /evaluation-datasets/:id/cases",
   "POST /evaluation-datasets/:id/freeze",
@@ -55,6 +60,9 @@ const EXPECTED_HTTP_ROUTES = [
 ] as const;
 
 const EXPECTED_GITHUB_APP_EVENTS = [
+  "installation.deleted",
+  "installation.suspend",
+  "installation_repositories.removed",
   "issue_comment.created",
   "issues.edited",
   "issues.opened",

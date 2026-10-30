@@ -4,12 +4,13 @@ import { METHOD_METADATA } from "@nestjs/common/constants.js";
 import { DiscoveryService, MetadataScanner, Reflector } from "@nestjs/core";
 import type { Request } from "express";
 import { RUN_PERMISSIONS, RunControlError, requireRunPermission, type RunPermission } from "../../agent-runtime/runs/control-contracts.js";
+import { githubOnboardingEnabled } from "../../agent-runtime/runtime/config.js";
 import { incrementMetricCounter } from "../system/metrics-runtime.js";
 import { RunApiContextService } from "./run-api-context.service.js";
 import { logCore } from "#core";
 
 const ROUTE_ACCESS = Symbol("route-access");
-type AccessPolicy = RunPermission | "public" | "signed-webhook" | "runs:command";
+type AccessPolicy = RunPermission | "repositories:manage" | "public" | "signed-webhook" | "runs:command";
 /** Every HTTP method declares its boundary; there is deliberately no class-wide public default. */
 export const RouteAccess = (policy: AccessPolicy): MethodDecorator => SetMetadata(ROUTE_ACCESS, policy);
 
@@ -44,6 +45,11 @@ export class RouteAccessGuard implements CanActivate, OnModuleInit {
     if (policy === "public" || policy === "signed-webhook") return true;
     const request = context.switchToHttp().getRequest<Request>();
     try {
+      if (policy === "repositories:manage") {
+        if (!githubOnboardingEnabled()) throw new HttpException("Not found", 404);
+        this.context.authenticateRepositoryAdmin(request);
+        return true;
+      }
       const principal = this.context.authenticate(request);
       if (policy === "runs:command") {
         const kind = request.params.kind;
@@ -88,5 +94,6 @@ export class RouteAccessGuard implements CanActivate, OnModuleInit {
 }
 
 function validPolicy(policy: unknown): policy is AccessPolicy {
-  return typeof policy === "string" && (["public", "signed-webhook", "runs:command", ...RUN_PERMISSIONS] as string[]).includes(policy);
+  return typeof policy === "string"
+    && (["public", "signed-webhook", "runs:command", "repositories:manage", ...RUN_PERMISSIONS] as string[]).includes(policy);
 }

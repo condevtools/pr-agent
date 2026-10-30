@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { agentRuntimePoolConfig, resolveWorkerSchedulingConfiguration,
   validatePublicationCredentialOrigin, requireOnlinePublicationAuthority } from "../../src/agent-runtime/runtime.js";
+import { githubOnboardingPoolConfig } from "../../src/agent-runtime/runtime/config.js";
 
 test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL", () => {
   assert.throws(() => agentRuntimePoolConfig({ DATABASE_URL: "postgres://unrelated/private" }), /Configure HARNESS/);
@@ -39,6 +40,24 @@ test("runtime roles freeze independent bounded pool and scheduling capacities", 
   assert.throws(() => resolveWorkerSchedulingConfiguration({
     HARNESS_WORKER_CONCURRENCY: "4", HARNESS_WORKER_SPECIAL_CONCURRENCY: "4",
   }), /between 1 and 3/);
+});
+
+test("GitHub onboarding uses a separate small restricted-role pool", () => {
+  const environment = {
+    FEATURE_GITHUB_ONBOARDING: "on", HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password",
+    HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent", HARNESS_PG_PORT: "5432",
+    HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "app-password",
+  };
+  assert.deepEqual(githubOnboardingPoolConfig(environment), {
+    host: "postgres", database: "pr_agent", port: 5432,
+    user: "pr_agent_onboarding", password: "onboarding-password", max: 2,
+    connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000,
+    statement_timeout: 15000, lock_timeout: 5000, idle_in_transaction_session_timeout: 15000,
+  });
+  assert.throws(() => githubOnboardingPoolConfig({ ...environment,
+    FEATURE_GITHUB_ONBOARDING: "off" }), /disabled/u);
+  assert.throws(() => githubOnboardingPoolConfig({ ...environment,
+    HARNESS_DATABASE_URL: "postgres://app:secret@postgres/pr_agent" }), /explicit PostgreSQL/u);
 });
 
 test("a server credential cannot be sent to a different binding origin", () => {

@@ -45,6 +45,8 @@ jobs:
         run: pnpm --filter backend build
       - name: Run backend tests
         run: pnpm --filter backend test
+      - name: Test onboarding credential helper
+        run: node --test scripts/github-onboarding-admin.test.mjs
       - name: Verify production build
         run: pnpm --filter backend test:build
       - name: Reject tracked workspace mutations

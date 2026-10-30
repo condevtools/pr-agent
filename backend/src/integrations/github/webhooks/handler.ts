@@ -27,6 +27,7 @@ import { CommandAuthorizationError } from "../../../commands/authorization.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
 import { handleGitHubProviderFeedback } from "../../../evolution/feedback/provider-bridge.js";
+import { handleGitHubOnboardingLifecycle } from "../onboarding/lifecycle.js";
 export { createRestBackedOctokit } from "../api/http-client.js";
 export {
   handleGitHubIssueCommentCommand,
@@ -128,6 +129,7 @@ export async function handlePlainGitHubWebhook(params: {
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
   skipSignatureVerification?: boolean;
+  allowLifecycleMutation?: boolean;
   sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
   verifyGitHubWebhookBodySize(params.rawBody);
@@ -139,6 +141,17 @@ export async function handlePlainGitHubWebhook(params: {
   if (!params.skipSignatureVerification) {
     verifyWebhookSignature(params.rawBody, params.headers);
   }
+
+  const isLifecycleEvent = eventName === "installation" || eventName === "installation_repositories";
+  if (isLifecycleEvent && params.skipSignatureVerification && params.allowLifecycleMutation !== true) {
+    return { ok: true, message: "ignored GitHub App lifecycle event during replay" };
+  }
+  const lifecycleResult = await handleGitHubOnboardingLifecycle({
+    eventName,
+    payload: params.payload,
+    deliveryId: params.headers["x-github-delivery"],
+  });
+  if (lifecycleResult) return lifecycleResult;
 
   const token =
     readOptionalStringEnv("GITHUB_WEBHOOK_TOKEN") ??
@@ -198,6 +211,12 @@ export async function handleGitHubWebhookEvent(params: {
   deliveryId?: string;
   sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
+  const lifecycleResult = await handleGitHubOnboardingLifecycle({
+    eventName: params.eventName,
+    payload: params.payload,
+    deliveryId: params.deliveryId,
+  });
+  if (lifecycleResult) return lifecycleResult;
   const handler = plainGitHubWebhookEventHandlers[params.eventName];
   if (!handler) {
     return { ok: true, message: `ignored event ${params.eventName}` };

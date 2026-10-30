@@ -11,10 +11,11 @@ import { GithubModule } from "./http/webhooks/github/github.module.js";
 import { GitlabModule } from "./http/webhooks/gitlab/gitlab.module.js";
 import { ShutdownCoordinatorService } from "./bootstrap/shutdown-coordinator.service.js";
 import { AgentRuntimeModule } from "./http/runs/agent-runtime.module.js";
+import { GitHubAdminModule } from "./http/admin/github/github-admin.module.js";
 
 @Module({
   imports: [GithubModule, GitlabModule, GithubAppModule, AgentRuntimeModule,
-    FixesModule, EvolutionModule, SystemModule, WebhookEventsModule],
+    FixesModule, EvolutionModule, SystemModule, WebhookEventsModule, GitHubAdminModule],
   providers: [
     ShutdownCoordinatorService,
     {

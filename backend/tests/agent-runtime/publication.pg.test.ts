@@ -47,6 +47,7 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_dispatchable_publication_authority(uuid,uuid,text,text,text,bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
@@ -76,6 +77,83 @@ if (!databaseUrl) {
     assert.deepEqual(new Set(prepared.map((item) => item.operation.attemptCount)), new Set([1]));
     assert.deepEqual(prepared[0]?.operation.payload, request.payload);
     assert.equal(Object.isFrozen(prepared[0]?.operation.payload), true);
+  });
+
+  test("an undispatched access-check failure defers the exact claim without a hot retry loop", async () => {
+    const request = await createRequest("access-check-defer");
+    const identity = buildPublicationIdentity(request);
+    const claimed = await store.prepareAndClaim(identity);
+    assert.equal(claimed.action, "dispatch");
+    const claimVersion = claimed.operation.version;
+    const deferredAt = Date.now();
+
+    const deferred = await store.deferUndispatched(
+      request.scope.tenantId,
+      identity.businessOperationId,
+      claimVersion,
+      30_000,
+      "provider_access_check_unavailable",
+    );
+    assert.equal(deferred?.status, "prepared");
+    assert.equal(deferred?.attemptCount, 0);
+    assert.equal(deferred?.version, claimVersion + 1);
+
+    const row = await adminPool.query<{
+      status: string;
+      attempt_count: number;
+      dispatched_at: Date | null;
+      next_reconcile_at: Date | null;
+      last_error_code: string | null;
+    }>(
+      `SELECT status,attempt_count,dispatched_at,next_reconcile_at,last_error_code
+       FROM pr_agent_harness.repository_operations
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [request.scope.tenantId, identity.businessOperationId],
+    );
+    assert.deepEqual({
+      status: row.rows[0]?.status,
+      attemptCount: row.rows[0]?.attempt_count,
+      dispatchedAt: row.rows[0]?.dispatched_at,
+      lastErrorCode: row.rows[0]?.last_error_code,
+    }, {
+      status: "prepared",
+      attemptCount: 0,
+      dispatchedAt: null,
+      lastErrorCode: "provider_access_check_unavailable",
+    });
+    assert.ok(row.rows[0]?.next_reconcile_at);
+    assert.ok(row.rows[0].next_reconcile_at.getTime() > deferredAt);
+
+    assert.equal(await store.deferUndispatched(
+      request.scope.tenantId,
+      identity.businessOperationId,
+      claimVersion,
+      1_000,
+      "stale_claim",
+    ), undefined, "a stale claim version must not alter the deferred operation");
+    assert.equal(await store.deferUndispatched(
+      request.scope.tenantId,
+      identity.businessOperationId,
+      deferred!.version,
+      1_000,
+      "not_in_flight",
+    ), undefined, "a prepared operation must not be deferred again");
+
+    const premature = await store.prepareAndClaim(identity);
+    assert.equal(premature.action, "pending", "the retry deadline prevents a hot dispatch loop");
+    assert.equal(premature.operation.attemptCount, 0);
+
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET next_reconcile_at=clock_timestamp()-interval '1 millisecond'
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [request.scope.tenantId, identity.businessOperationId],
+    );
+    const reclaimed = await store.prepareAndClaim(identity);
+    assert.equal(reclaimed.action, "dispatch");
+    assert.equal(reclaimed.operation.attemptCount, 1,
+      "the deferred attempt is restored rather than double-counted");
+    assert.equal(reclaimed.operation.version, deferred!.version + 1);
   });
 
   test("frozen payload survives caller mutation and is used for dispatch", async () => {
