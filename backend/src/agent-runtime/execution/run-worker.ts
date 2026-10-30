@@ -90,12 +90,16 @@ export class RunWorker {
     if (this.sweeping || this.stopped) return;
     this.sweeping = true;
     try {
-      for (const binding of await this.dependencies.bindings()) {
+      const bindings = await this.dependencies.bindings();
+      for (const binding of bindings) {
         if (binding.reviewExecutionMode === "harness_async") {
           await this.dependencies.store.sweep(claimBinding(binding));
           await this.dependencies.coordinateOutcomes?.(binding);
         }
-        await this.dependencies.budget.closeTerminalBudgets(binding.tenantId);
+      }
+      for (const tenantId of await this.dependencies.budget.listDueTenantIds()) {
+        await this.dependencies.budget.reconcilePending(tenantId);
+        await this.dependencies.budget.closeTerminalBudgets(tenantId);
       }
     } finally {
       this.sweeping = false;
@@ -190,6 +194,7 @@ export class RunWorker {
                 stepId: step.id,
                 stepAttemptId: step.attemptId,
                 policy,
+                stepKey: key,
               }),
               signal: controller.signal,
             },
@@ -230,12 +235,13 @@ export class RunWorker {
       await store.latestCheckpoint(lease, { schemaVersion: 1, runtimeVersionHash: lease.runtimeVersionHash });
       await withRunExecutionContext(context, () => this.dependencies.execute(lease, binding));
       await assertActive();
-      if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
       await store.transition(lease, { to: "succeeded", outcomeCode: lease.input.workflow === "review.deep.v1"
         ? "deep_review_artifact_completed" : lease.input.workflow === "fix.propose.v1"
           ? "fix_proposal_completed" : lease.input.workflow === "fix.publish.v1" ? "fix_publication_completed"
             : lease.input.workflow === "evolution.propose.v1" ? "evolution_proposal_completed"
-              : lease.input.workflow === "eval.replay.v1" ? "evaluation_replay_completed" : "review_completed" });
+              : lease.input.workflow === "eval.replay.v1" ? "evaluation_replay_completed" : "review_completed" },
+      lease.input.workflow === "fix.publish.v1" ? undefined
+        : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
     } catch (error) {
       if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
       if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
@@ -260,11 +266,11 @@ export class RunWorker {
         error instanceof RunCheckpointCompatibilityError ||
         lease.jobAttempt >= AGENT_RUNTIME_CONFIG.maxJobAttempts
       ) {
-        if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
         await store.transition(lease, {
           to: "failed",
           reasonCode: error instanceof Error ? error.name : "review_failed",
-        });
+        }, lease.input.workflow === "fix.publish.v1" ? undefined
+          : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
       } else {
         await store.transition(lease, {
           to: "retry_wait",

@@ -90,7 +90,8 @@ if (!databaseUrl) {
         pr_agent_harness.run_budget_envelopes, pr_agent_harness.model_budget_reservations TO ${role};
       GRANT SELECT, INSERT ON pr_agent_harness.checkpoints,
         pr_agent_harness.run_publication_batches, pr_agent_harness.dead_letter_jobs,
-        pr_agent_harness.usage_records, pr_agent_harness.model_pricing_snapshots TO ${role};
+        pr_agent_harness.model_pricing_snapshots, pr_agent_harness.model_usage_adjustments TO ${role};
+      GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.usage_records TO ${role};
       GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.run_command_receipts,
         pr_agent_harness.run_waits TO ${role};
       GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO ${role};
@@ -117,14 +118,12 @@ if (!databaseUrl) {
     const authority = new PublicationAuthorityStore(adminDb);
     await authority.configure({ tenantId, integrationId, providerRepositoryId, providerActorId: 99,
       credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });
+    await adminPool.query(
+      `UPDATE pr_agent_harness.integration_bindings SET execution_mode_generation=1
+       WHERE tenant_id=$1 AND id=$2`, [tenantId, integrationId]);
     await authority.transition({ tenantId, integrationId, expectedVersion: 1, action: "activate",
       actor: "api-test", actorType: "service", quiescenceEvidence: "isolated Docker fixture" });
-    await adminPool.query(
-      `UPDATE pr_agent_harness.integration_bindings
-       SET review_execution_mode='harness_async',execution_mode_generation=1
-       WHERE tenant_id=$1 AND id=$2`,
-      [tenantId, integrationId],
-    );
+    await adminPool.query("UPDATE pr_agent_harness.integration_bindings SET review_execution_mode='harness_async' WHERE tenant_id=$1 AND id=$2", [tenantId, integrationId]);
     cancelRunId = await createFixtureRun("cancel");
     cursorRunId = await createFixtureRun("cursor");
 
@@ -135,7 +134,8 @@ if (!databaseUrl) {
     process.env.AI_MODEL = "fixture-model";
     process.env.HARNESS_MODEL_PRICING_JSON = pricingFixture();
     process.env.HARNESS_API_PRINCIPALS_JSON = JSON.stringify([
-      principal("full", fullToken, tenantId, integrationId, ["runs:create", "runs:read", "runs:trace", "runs:cancel"]),
+      principal("full", fullToken, tenantId, integrationId,
+        ["runs:create", "runs:read", "runs:trace", "runs:cancel", "usage:reconcile"]),
       principal("reader", readerToken, tenantId, integrationId, ["runs:read", "runs:trace"]),
       principal("cross", crossToken, tenantId, crossIntegrationId, ["runs:read", "runs:trace"]),
       principal("read-only", readOnlyToken, tenantId, integrationId, ["runs:read"]),
@@ -178,6 +178,22 @@ if (!databaseUrl) {
       idempotencyKey: "offline-replay", body: { number: 43, mode: "report" } });
     assert.equal(response.status, 409);
     assert.equal(errorCode(response.value), "RUN_CONFLICT");
+  });
+
+  test("model usage reconciliation is permission-gated before touching the ledger", async () => {
+    const callId = randomUUID();
+    const body = { providerUsageRevision: "provider-revision-1", supersedesProviderUsageRevision: null,
+      evidenceReference: "provider://usage/1",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, original: {} } };
+    const denied = await request(`/runs/${cancelRunId}/model-calls/${callId}/usage-reconciliations`,
+      { method: "POST", token: readOnlyToken, body });
+    assert.equal(denied.status, 403);
+    assert.equal(errorCode(denied.value), "FORBIDDEN");
+
+    const missing = await request(`/runs/${cancelRunId}/model-calls/${callId}/usage-reconciliations`,
+      { method: "POST", token: fullToken, body });
+    assert.equal(missing.status, 409);
+    assert.equal(errorCode(missing.value), "RUN_CONFLICT");
   });
 
   test("deep intake is explicit and cannot reuse the single workflow creation key", async () => {

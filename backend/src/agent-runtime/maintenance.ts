@@ -200,11 +200,6 @@ async function selectCandidates(
            AND mbr.status IN ('reserved','pending')
        )
        AND NOT EXISTS (
-         SELECT 1 FROM pr_agent_harness.model_calls mc
-         WHERE mc.tenant_id=r.tenant_id AND mc.run_id=r.id
-           AND mc.status IN ('prepared','in_flight','unknown')
-       )
-       AND NOT EXISTS (
          SELECT 1 FROM pr_agent_harness.run_budget_envelopes rbe
          WHERE rbe.tenant_id=r.tenant_id AND rbe.run_id=r.id
            AND rbe.status<>'closed'
@@ -271,6 +266,12 @@ async function scrubRunContent(
   await client.query(
     `UPDATE pr_agent_harness.usage_records
      SET original_usage_json='{}'::jsonb,content_purged_at=clock_timestamp()
+     WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
+    [tenantId, runId],
+  );
+  await client.query(
+    `UPDATE pr_agent_harness.model_usage_adjustments
+     SET evidence_reference='retained-ledger-only',content_purged_at=clock_timestamp()
      WHERE tenant_id=$1 AND run_id=$2 AND content_purged_at IS NULL`,
     [tenantId, runId],
   );

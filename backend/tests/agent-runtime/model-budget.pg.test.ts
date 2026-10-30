@@ -8,6 +8,7 @@ import {
   createBudgetedModelExecutionContext,
   getModelExecutionPolicy,
   ModelBudgetExceededError,
+  ModelCallConflictError,
   ModelBudgetStore,
   reserveRunBudgetInTransaction,
   type ModelExecutionPolicy,
@@ -64,8 +65,8 @@ if (!databaseUrl) {
     const rejected = results.filter((result) => result.status === "rejected");
     acceptedRunIds = accepted.map((result) => result.value.id);
 
-    assert.equal(accepted.length, 10);
-    assert.equal(rejected.length, 90);
+    assert.equal(accepted.length, 12);
+    assert.equal(rejected.length, 88);
     assert.ok(rejected.every((result) => result.reason instanceof ModelBudgetExceededError));
 
     const account = await pool.query<{
@@ -78,16 +79,16 @@ if (!databaseUrl) {
       [tenantId],
     );
     assert.deepEqual(account.rows[0], {
-      reserved_input_tokens: "1000",
-      reserved_output_tokens: "1000",
-      reserved_cost_micros: "10000",
+      reserved_input_tokens: "1200",
+      reserved_output_tokens: "1200",
+      reserved_cost_micros: "12000",
     });
     const count = await pool.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM pr_agent_harness.run_budget_envelopes
        WHERE tenant_id=$1`,
       [tenantId],
     );
-    assert.equal(count.rows[0]?.count, 10);
+    assert.equal(count.rows[0]?.count, 12);
   });
 
   test("known settlement is idempotent and parser-independent; missing usage remains pending", async () => {
@@ -194,6 +195,7 @@ if (!databaseUrl) {
       lease: replacementLease,
       stepId: replacementStep.id,
       stepAttemptId: replacementStep.attemptId,
+      stepKey: "model:known-reuse",
       policy,
     });
     const value = await recovered.execute(intent("response-loss"), async () => {
@@ -227,7 +229,8 @@ if (!databaseUrl) {
       inputHash: hash("known-reuse"),
     });
     const first = createBudgetedModelExecutionContext({
-      store: budgetStore, lease, stepId: step.id, stepAttemptId: step.attemptId, policy,
+      store: budgetStore, lease, stepId: step.id, stepAttemptId: step.attemptId,
+      stepKey: "model:known-reuse", policy,
     });
     const firstValue = await first.execute(intent("known-reuse"), async () => ({
       value: { persisted: true },
@@ -256,16 +259,18 @@ if (!databaseUrl) {
     });
     assert.deepEqual(reused, { persisted: true });
     assert.equal(transports, 0);
-    const ledger = await pool.query<{ calls: number; reservations: number; cost_micros: string }>(
+    const ledger = await pool.query<{ calls: number; reservations: number; cost_micros: string;
+      request_kind: string }>(
       `SELECT count(DISTINCT mc.id)::int AS calls,count(DISTINCT br.model_call_id)::int AS reservations,
-              max(ur.cost_micros)::text AS cost_micros
+              max(ur.cost_micros)::text AS cost_micros,max(mc.request_kind) AS request_kind
        FROM pr_agent_harness.model_calls mc
        JOIN pr_agent_harness.model_budget_reservations br ON br.model_call_id=mc.id
        LEFT JOIN pr_agent_harness.usage_records ur ON ur.model_call_id=mc.id
        WHERE mc.tenant_id=$1 AND mc.run_id=$2`,
       [tenantId, lease.runId],
     );
-    assert.deepEqual(ledger.rows[0], { calls: 1, reservations: 1, cost_micros: "10" });
+    assert.deepEqual(ledger.rows[0], { calls: 1, reservations: 1, cost_micros: "10",
+      request_kind: "review.single.v1:model:known-reuse:openai:chat-completion" });
   });
 
   test("pre-dispatch crashes release unused reservations before admitting a replacement attempt", async () => {
@@ -503,6 +508,168 @@ if (!databaseUrl) {
     assert.deepEqual(await budgetStore.closeTerminalBudgets(tenantId), { closed: 0, pending: 1 });
   });
 
+  test("unknown usage converges to an upper bound and later actual usage adjusts the original period once", async () => {
+    const lease = await activateRun(acceptedRunIds[8]!);
+    const step = await executionStore.beginStep(lease, {
+      stepKey: "model:reconcile", kind: "model", inputHash: hash("reconcile"),
+    });
+    const call = await budgetStore.prepare({ lease, stepId: step.id, stepAttemptId: step.attemptId,
+      physicalOrdinal: 1, intent: intent("reconcile"), policy });
+    await budgetStore.markDispatched(call, lease);
+    await budgetStore.settleUnknown({ call, lease, errorCode: "response_lost" });
+    await pool.query(
+      `UPDATE pr_agent_harness.model_budget_reservations
+       SET reconciliation_due_at=now()-interval '1 second',next_reconcile_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND model_call_id=$2`, [tenantId, call.id]);
+    await pool.query(
+      `UPDATE pr_agent_harness.integration_bindings SET publication_state='blocked'
+       WHERE tenant_id=$1 AND id=$2`, [tenantId, integrationId]);
+    assert.ok((await budgetStore.listDueTenantIds()).includes(tenantId));
+
+    assert.equal((await budgetStore.reconcilePending(tenantId)).estimated, 1);
+    assert.equal((await budgetStore.reconcilePending(tenantId)).estimated, 0);
+    const estimated = await pool.query<{ call_status: string; reservation_status: string;
+      settlement_kind: string; measurement_status: string; cost_micros: string }>(
+      `SELECT mc.status AS call_status,br.status AS reservation_status,br.settlement_kind,
+              ur.measurement_status,ur.cost_micros
+       FROM pr_agent_harness.model_calls mc
+       JOIN pr_agent_harness.model_budget_reservations br ON br.model_call_id=mc.id
+       JOIN pr_agent_harness.usage_records ur ON ur.model_call_id=mc.id
+       WHERE mc.tenant_id=$1 AND mc.id=$2`, [tenantId, call.id]);
+    assert.deepEqual(estimated.rows[0], { call_status: "unknown", reservation_status: "settled",
+      settlement_kind: "estimated_upper_bound", measurement_status: "estimated_upper_bound", cost_micros: "30" });
+
+    await executionStore.transition(lease, { to: "succeeded", outcomeCode: "test_complete" },
+      (client) => budgetStore.closeRunBudgetInTransaction(client, lease));
+    const reconciliation = {
+      tenantId, integrationId, runId: lease.runId, modelCallId: call.id,
+      providerUsageRevision: "provider-ledger-v1", supersedesProviderUsageRevision: null,
+      evidenceReference: "provider://usage/request-1",
+      usage: { inputTokens: 5, cachedInputTokens: 2, cacheWriteInputTokens: 1,
+        outputTokens: 2, reasoningOrThoughtTokens: 3, toolInputTokens: 4, totalTokens: 17,
+        original: { source: "provider" } },
+      actorType: "service" as const, actorId: "usage-reconciler",
+    };
+    assert.deepEqual(await budgetStore.reconcileActualUsage(reconciliation), {
+      providerUsageRevision: "provider-ledger-v1",
+      delta: { inputTokens: -15, outputTokens: -8, costMicros: -23 }, created: true,
+    });
+    assert.equal((await budgetStore.reconcileActualUsage(reconciliation)).created, false);
+    await assert.rejects(
+      budgetStore.reconcileActualUsage({ ...reconciliation,
+        usage: { inputTokens: 6, outputTokens: 2, original: { source: "changed" } } }),
+      ModelCallConflictError,
+    );
+    const second = { ...reconciliation, providerUsageRevision: "provider-ledger-v2",
+      supersedesProviderUsageRevision: "provider-ledger-v1",
+      evidenceReference: "provider://usage/request-2",
+      usage: { inputTokens: 6, cachedInputTokens: 1, cacheWriteInputTokens: 2,
+        outputTokens: 3, reasoningOrThoughtTokens: 4, toolInputTokens: 5, totalTokens: 21,
+        original: { source: "provider-v2" } } };
+    assert.equal((await budgetStore.reconcileActualUsage(second)).created, true);
+    await assert.rejects(budgetStore.reconcileActualUsage(reconciliation), ModelCallConflictError);
+    await assert.rejects(budgetStore.reconcileActualUsage({ ...second,
+      providerUsageRevision: "provider-ledger-v3", supersedesProviderUsageRevision: "provider-ledger-v1" }),
+    ModelCallConflictError);
+    const adjusted = await pool.query<{ settlement_kind: string; cost: string; adjustments: number;
+      revision: string; input_tokens: string; cached_input_tokens: string;
+      cache_write_input_tokens: string; output_tokens: string; reasoning_tokens: string;
+      tool_input_tokens: string; total_tokens: string }>(
+      `SELECT br.settlement_kind,br.actual_cost_micros::text AS cost,
+              br.current_provider_usage_revision AS revision,count(a.id)::int AS adjustments,
+              max(ur.input_tokens)::text AS input_tokens,
+              max(ur.cached_input_tokens)::text AS cached_input_tokens,
+              max(ur.cache_write_input_tokens)::text AS cache_write_input_tokens,
+              max(ur.output_tokens)::text AS output_tokens,
+              max(ur.reasoning_tokens)::text AS reasoning_tokens,
+              max(ur.tool_input_tokens)::text AS tool_input_tokens,
+              max(ur.total_tokens)::text AS total_tokens
+       FROM pr_agent_harness.model_budget_reservations br
+       LEFT JOIN pr_agent_harness.model_usage_adjustments a
+         ON a.tenant_id=br.tenant_id AND a.model_call_id=br.model_call_id
+       JOIN pr_agent_harness.usage_records ur
+         ON ur.tenant_id=br.tenant_id AND ur.model_call_id=br.model_call_id
+       WHERE br.tenant_id=$1 AND br.model_call_id=$2
+       GROUP BY br.settlement_kind,br.actual_cost_micros,br.current_provider_usage_revision`,
+      [tenantId, call.id]);
+    assert.deepEqual(adjusted.rows[0], { settlement_kind: "actual", cost: "9", adjustments: 2,
+      revision: "provider-ledger-v2", input_tokens: "6", cached_input_tokens: "1",
+      cache_write_input_tokens: "2", output_tokens: "3", reasoning_tokens: "4",
+      tool_input_tokens: "5", total_tokens: "21" });
+  });
+
+  test("terminal Run and budget closure roll back together", async () => {
+    const lease = await activateRun(acceptedRunIds[9]!);
+    await assert.rejects(
+      executionStore.transition(lease, { to: "succeeded", outcomeCode: "must_rollback" }, async (client) => {
+        await budgetStore.closeRunBudgetInTransaction(client, lease);
+        throw new Error("injected_terminal_failure");
+      }),
+      /injected_terminal_failure/,
+    );
+    const state = await pool.query<{ run_status: string; budget_status: string }>(
+      `SELECT r.status AS run_status,e.status AS budget_status
+       FROM pr_agent_harness.agent_runs r
+       JOIN pr_agent_harness.run_budget_envelopes e ON e.tenant_id=r.tenant_id AND e.run_id=r.id
+       WHERE r.tenant_id=$1 AND r.id=$2`, [tenantId, lease.runId]);
+    assert.deepEqual(state.rows[0], { run_status: "running", budget_status: "active" });
+  });
+
+  test("actual reconciliation and terminal closure serialize in both lock orders", async () => {
+    for (const [index, first] of (["actual", "terminal"] as const).entries()) {
+      const lease = await activateRun(acceptedRunIds[10 + index]!);
+      const step = await executionStore.beginStep(lease, {
+        stepKey: `model:lock-order:${first}`, kind: "model", inputHash: hash(`lock-order:${first}`),
+      });
+      const call = await budgetStore.prepare({ lease, stepId: step.id, stepAttemptId: step.attemptId,
+        physicalOrdinal: 1, intent: intent(`lock-order:${first}`), policy });
+      await budgetStore.markDispatched(call, lease);
+      await budgetStore.settleUnknown({ call, lease, errorCode: "lock_order_fixture" });
+      await pool.query(
+        `UPDATE pr_agent_harness.model_budget_reservations
+         SET reconciliation_due_at=now()-interval '1 second',next_reconcile_at=now()-interval '1 second'
+         WHERE tenant_id=$1 AND model_call_id=$2`, [tenantId, call.id]);
+      assert.ok((await budgetStore.reconcilePending(tenantId)).estimated >= 1);
+
+      const gate = await pool.connect();
+      await gate.query("BEGIN");
+      await gate.query(
+        `SELECT run_id FROM pr_agent_harness.run_budget_envelopes
+         WHERE tenant_id=$1 AND run_id=$2 FOR UPDATE`, [tenantId, lease.runId]);
+      const reconcile = () => budgetStore.reconcileActualUsage({
+        tenantId, integrationId, runId: lease.runId, modelCallId: call.id,
+        providerUsageRevision: `lock-order-${first}-v1`, supersedesProviderUsageRevision: null,
+        evidenceReference: `provider://lock-order/${first}`,
+        usage: { inputTokens: 4, outputTokens: 2, original: {} },
+        actorType: "service", actorId: "lock-order-test",
+      });
+      const finish = () => executionStore.transition(
+        lease,
+        { to: "succeeded", outcomeCode: `lock_order_${first}` },
+        (client) => budgetStore.closeRunBudgetInTransaction(client, lease),
+      );
+      const firstPromise = first === "actual" ? reconcile() : finish();
+      await waitForBudgetLock();
+      const secondPromise = first === "actual" ? finish() : reconcile();
+      await gate.query("COMMIT");
+      gate.release();
+      await Promise.all([firstPromise, secondPromise]);
+
+      const final = await pool.query<{ run_status: string; budget_status: string;
+        revision: string; actual_cost_micros: string }>(
+        `SELECT r.status AS run_status,e.status AS budget_status,
+                br.current_provider_usage_revision AS revision,
+                br.actual_cost_micros::text AS actual_cost_micros
+         FROM pr_agent_harness.agent_runs r
+         JOIN pr_agent_harness.run_budget_envelopes e ON e.tenant_id=r.tenant_id AND e.run_id=r.id
+         JOIN pr_agent_harness.model_budget_reservations br
+           ON br.tenant_id=r.tenant_id AND br.run_id=r.id
+         WHERE r.tenant_id=$1 AND r.id=$2`, [tenantId, lease.runId]);
+      assert.deepEqual(final.rows[0], { run_status: "succeeded", budget_status: "closed",
+        revision: `lock-order-${first}-v1`, actual_cost_micros: "6" });
+    }
+  });
+
   test("RLS does not expose another tenant model ledger", async () => {
     const role = `model_budget_${randomUUID().replaceAll("-", "")}`;
     const password = randomUUID();
@@ -510,6 +677,15 @@ if (!databaseUrl) {
     try {
       await pool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
       await pool.query(`GRANT SELECT ON ALL TABLES IN SCHEMA pr_agent_harness TO ${role}`);
+      await pool.query(
+        `UPDATE pr_agent_harness.model_budget_reservations
+         SET reconciliation_due_at=now()-interval '1 second',next_reconcile_at=now()-interval '1 second'
+         WHERE tenant_id=$1 AND model_call_id=(
+           SELECT model_call_id FROM pr_agent_harness.model_budget_reservations
+           WHERE tenant_id=$1 AND status='pending' LIMIT 1
+         )`, [tenantId]);
+      await pool.query(
+        `GRANT EXECUTE ON FUNCTION pr_agent_harness.list_due_model_budget_tenants(integer) TO ${role}`);
       const url = new URL(databaseUrl);
       url.username = role;
       url.password = password;
@@ -520,6 +696,11 @@ if (!databaseUrl) {
             "SELECT count(*)::int AS count FROM pr_agent_harness.model_calls",
           ));
         assert.equal(result.rows[0]?.count, 0);
+        const due = await new RuntimeDatabase(tenantPool).trustedTransaction((client) =>
+          client.query<{ tenant_id: string }>(
+            "SELECT tenant_id FROM pr_agent_harness.list_due_model_budget_tenants(100)",
+          ));
+        assert.ok(due.rows.some((row) => row.tenant_id === tenantId));
       } finally {
         await tenantPool.end();
       }
@@ -587,7 +768,7 @@ if (!databaseUrl) {
       toolVersionHash: version,
       policyVersionHash: policy.hash,
       runtimeVersionHash: version,
-      input: {},
+      input: { workflow: "review.single.v1" },
       limits: { maxStepAttempts: 10 },
       runtimeConfig: {},
       leaseExpiresAt: new Date(Date.now() + 300_000).toISOString(),
@@ -619,6 +800,21 @@ if (!databaseUrl) {
     };
   }
 
+  async function waitForBudgetLock(): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const blocked = await pool.query<{ blocked: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM pg_stat_activity
+           WHERE datname=current_database() AND pid<>pg_backend_pid()
+             AND wait_event_type='Lock' AND query LIKE '%run_budget_envelopes%'
+         ) AS blocked`,
+      );
+      if (blocked.rows[0]?.blocked) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("budget operation did not reach the envelope lock");
+  }
+
   function intent(name: string) {
     return {
       provider: "openai" as const,
@@ -637,7 +833,7 @@ function buildPolicy(): ModelExecutionPolicy {
       version: "test-pricing-v1",
       currency: "USD",
       periodKey: "test-period",
-      tenantLimits: { inputTokens: 1_000, outputTokens: 1_000, costMicros: 10_000 },
+      tenantLimits: { inputTokens: 1_200, outputTokens: 1_200, costMicros: 12_000 },
       runLimits: { inputTokens: 100, outputTokens: 100, costMicros: 1_000 },
       models: {
         "openai:model-a": {

@@ -38,6 +38,7 @@ try {
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(
           uuid, uuid, text, text, text, bigint) TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO pr_agent_app;
+        GRANT EXECUTE ON FUNCTION pr_agent_harness.list_due_model_budget_tenants(integer) TO pr_agent_app;
         GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
           pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
           pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
@@ -48,7 +49,11 @@ try {
           pr_agent_harness.run_budget_envelopes, pr_agent_harness.model_budget_reservations TO pr_agent_app;
         GRANT SELECT, INSERT ON pr_agent_harness.checkpoints,
           pr_agent_harness.run_publication_batches, pr_agent_harness.dead_letter_jobs,
-          pr_agent_harness.usage_records, pr_agent_harness.model_pricing_snapshots TO pr_agent_app;
+          pr_agent_harness.usage_records, pr_agent_harness.model_usage_adjustments,
+          pr_agent_harness.model_pricing_snapshots TO pr_agent_app;
+        GRANT UPDATE (measurement_status,input_tokens,cached_input_tokens,cache_write_input_tokens,
+          output_tokens,reasoning_tokens,tool_input_tokens,total_tokens,cost_micros,
+          original_usage_json,updated_at) ON pr_agent_harness.usage_records TO pr_agent_app;
         GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.run_command_receipts,
           pr_agent_harness.run_waits TO pr_agent_app;
         GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO pr_agent_app;

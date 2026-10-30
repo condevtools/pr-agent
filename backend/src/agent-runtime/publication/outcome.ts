@@ -125,19 +125,19 @@ export class PublicationOutcomeHandler {
 
   private async finishOutcome(lease: RunLease, batch: FrozenPublicationBatch): Promise<void> {
     if (batch.status === "succeeded") {
-      if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
       await this.dependencies.store.transition(lease, {
         to: "succeeded",
         outcomeCode: "publication_completed",
-      });
+      }, lease.input.workflow === "fix.publish.v1" ? undefined
+        : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
       return;
     }
     if (batch.status === "failed_definite") {
-      if (lease.input.workflow !== "fix.publish.v1") await this.dependencies.budget.closeRunBudget(lease);
       await this.dependencies.store.transition(lease, {
         to: "failed",
         reasonCode: "publication_failed_definite",
-      });
+      }, lease.input.workflow === "fix.publish.v1" ? undefined
+        : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
       return;
     }
     const manual = await firstOperationWithStatus(

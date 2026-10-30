@@ -44,6 +44,19 @@ export interface ModelExecutionPolicy {
   openAiTokenParameter?: "max_completion_tokens" | "max_tokens";
 }
 
+export interface ModelUsageReconciliationInput {
+  tenantId: string;
+  integrationId: string;
+  runId: string;
+  modelCallId: string;
+  providerUsageRevision: string;
+  supersedesProviderUsageRevision: string | null;
+  evidenceReference: string;
+  usage: NormalizedModelUsage;
+  actorType: "user" | "service";
+  actorId: string;
+}
+
 export interface PreparedModelCall {
   id: string;
   tenantId: string;
@@ -364,6 +377,251 @@ export class ModelBudgetStore {
     });
   }
 
+  async closeRunBudgetInTransaction(
+    client: PoolClient,
+    lease: RunLease,
+  ): Promise<"closed" | "pending_reconciliation"> {
+    await assertRunLease(client, lease, { lock: "update" });
+    return closeEnvelope(client, lease.tenantId, lease.runId);
+  }
+
+  async listDueTenantIds(limit = 100): Promise<string[]> {
+    positiveInteger(limit, "model reconciliation tenant limit");
+    return this.db.trustedTransaction(async (client) => {
+      const result = await client.query<{ tenant_id: string }>(
+        `SELECT tenant_id
+         FROM pr_agent_harness.list_due_model_budget_tenants($1)`,
+        [Math.min(1_000, limit)],
+      );
+      return result.rows.map((row) => row.tenant_id);
+    });
+  }
+
+  async reconcilePending(
+    tenantId: string,
+    limit = 100,
+  ): Promise<{ estimated: number; pending: number }> {
+    positiveInteger(limit, "model reconciliation limit");
+    return this.db.transaction(tenantId, async (client) => {
+      const candidates = await client.query<{
+        model_call_id: string; run_id: string; reserved_input_tokens: string;
+        reserved_output_tokens: string; reserved_cost_micros: string;
+      }>(
+        `SELECT br.model_call_id,br.run_id,br.reserved_input_tokens,
+                br.reserved_output_tokens,br.reserved_cost_micros
+         FROM pr_agent_harness.model_budget_reservations br
+         WHERE br.tenant_id=$1 AND br.status='pending'
+           AND br.reconciliation_due_at<=now() AND br.next_reconcile_at<=now()
+         ORDER BY br.next_reconcile_at,br.model_call_id
+         FOR UPDATE SKIP LOCKED LIMIT $2`,
+        [tenantId, Math.min(1_000, limit)],
+      );
+      let estimated = 0;
+      for (const row of candidates.rows) {
+        const actual = {
+          inputTokens: Number(row.reserved_input_tokens),
+          outputTokens: Number(row.reserved_output_tokens),
+          costMicros: Number(row.reserved_cost_micros),
+        };
+        await client.query(
+          `UPDATE pr_agent_harness.model_budget_reservations
+           SET status='settled',actual_input_tokens=$3,actual_output_tokens=$4,
+               actual_cost_micros=$5,settlement_kind='estimated_upper_bound',
+               next_reconcile_at=NULL,last_reconcile_error=NULL,updated_at=now()
+           WHERE tenant_id=$1 AND model_call_id=$2 AND status='pending'`,
+          [tenantId, row.model_call_id, actual.inputTokens, actual.outputTokens, actual.costMicros],
+        );
+        const envelope = await client.query<{ currency: string; pricing_hash: string }>(
+          `UPDATE pr_agent_harness.run_budget_envelopes
+           SET actual_input_tokens=actual_input_tokens+$3,
+               actual_output_tokens=actual_output_tokens+$4,
+               actual_cost_micros=actual_cost_micros+$5,
+               overdrawn=overdrawn OR actual_input_tokens+$3>input_token_limit
+                 OR actual_output_tokens+$4>output_token_limit
+                 OR actual_cost_micros+$5>cost_limit_micros,
+               updated_at=now()
+           WHERE tenant_id=$1 AND run_id=$2
+           RETURNING currency,pricing_hash`,
+          [tenantId, row.run_id, actual.inputTokens, actual.outputTokens, actual.costMicros],
+        );
+        const budget = envelope.rows[0];
+        if (!budget) throw new ModelCallConflictError();
+        await client.query(
+          `INSERT INTO pr_agent_harness.usage_records (
+             tenant_id,run_id,model_call_id,measurement_status,input_tokens,output_tokens,
+             total_tokens,cost_micros,currency,pricing_hash,original_usage_json
+           ) VALUES ($1,$2,$3,'estimated_upper_bound',$4,$5,$6,$7,$8,$9,'{}'::jsonb)
+           ON CONFLICT (tenant_id,model_call_id) DO UPDATE
+           SET measurement_status='estimated_upper_bound',input_tokens=EXCLUDED.input_tokens,
+               output_tokens=EXCLUDED.output_tokens,total_tokens=EXCLUDED.total_tokens,
+               cost_micros=EXCLUDED.cost_micros,updated_at=now()
+           WHERE pr_agent_harness.usage_records.measurement_status='unavailable'`,
+          [tenantId, row.run_id, row.model_call_id, actual.inputTokens, actual.outputTokens,
+            actual.inputTokens + actual.outputTokens, actual.costMicros, budget.currency, budget.pricing_hash],
+        );
+        estimated += 1;
+      }
+      const pending = await client.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM pr_agent_harness.model_budget_reservations
+         WHERE tenant_id=$1 AND status='pending'`, [tenantId]);
+      return { estimated, pending: pending.rows[0]?.count ?? 0 };
+    });
+  }
+
+  async reconcileActualUsage(input: ModelUsageReconciliationInput): Promise<{
+    providerUsageRevision: string;
+    delta: { inputTokens: number; outputTokens: number; costMicros: number };
+    created: boolean;
+  }> {
+    requiredText(input.providerUsageRevision, "provider usage revision");
+    if (input.supersedesProviderUsageRevision !== null) {
+      requiredText(input.supersedesProviderUsageRevision, "superseded provider usage revision");
+    }
+    requiredText(input.evidenceReference, "usage evidence reference");
+    requiredText(input.actorId, "usage reconciliation actor");
+    return this.db.transaction(input.tenantId, async (client) => {
+      const run = await client.query<{ integration_id: string; content_purged_at: Date | null }>(
+        `SELECT integration_id,content_purged_at
+         FROM pr_agent_harness.agent_runs
+         WHERE tenant_id=$1 AND id=$2
+         FOR UPDATE`,
+        [input.tenantId, input.runId],
+      );
+      if (run.rows[0]?.integration_id !== input.integrationId) {
+        throw new ModelCallConflictError();
+      }
+      const retainedEvidenceReference = run.rows[0].content_purged_at === null
+        ? input.evidenceReference : "retained-ledger-only";
+      const call = await client.query<{
+        provider: ModelProvider; pricing_hash: string; period_key: string; currency: string;
+        rates_json: ModelPriceRates; status: string; current_provider_usage_revision: string | null;
+        actual_input_tokens: string; actual_output_tokens: string; actual_cost_micros: string;
+      }>(
+        `SELECT mc.provider,e.pricing_hash,e.period_key,e.currency,p.rates_json,br.status,
+                br.current_provider_usage_revision,br.actual_input_tokens,
+                br.actual_output_tokens,br.actual_cost_micros
+         FROM pr_agent_harness.model_calls mc
+         JOIN pr_agent_harness.model_budget_reservations br
+           ON br.tenant_id=mc.tenant_id AND br.model_call_id=mc.id
+         JOIN pr_agent_harness.run_budget_envelopes e
+           ON e.tenant_id=mc.tenant_id AND e.run_id=mc.run_id
+         JOIN pr_agent_harness.model_pricing_snapshots p
+           ON p.tenant_id=e.tenant_id AND p.pricing_hash=e.pricing_hash
+         WHERE mc.tenant_id=$1 AND mc.run_id=$2 AND mc.id=$3
+         FOR UPDATE OF mc,br`,
+        [input.tenantId, input.runId, input.modelCallId],
+      );
+      const row = call.rows[0];
+      if (!row || row.status !== "settled") {
+        throw new ModelCallConflictError();
+      }
+      await client.query(
+        `SELECT run_id FROM pr_agent_harness.run_budget_envelopes
+         WHERE tenant_id=$1 AND run_id=$2 FOR UPDATE`,
+        [input.tenantId, input.runId],
+      );
+      const actual = calculateActualModelUsage(input.usage, row.rates_json, row.provider);
+      if (!actual) throw new Error("provider usage is invalid");
+      const payloadHash = hashJson({ usage: input.usage, evidenceReference: input.evidenceReference,
+        supersedesProviderUsageRevision: input.supersedesProviderUsageRevision });
+      const existing = await client.query<{ payload_hash: string; delta_input_tokens: string;
+        delta_output_tokens: string; delta_cost_micros: string }>(
+        `SELECT payload_hash,delta_input_tokens,delta_output_tokens,delta_cost_micros
+         FROM pr_agent_harness.model_usage_adjustments
+         WHERE tenant_id=$1 AND model_call_id=$2 AND provider_usage_revision=$3`,
+        [input.tenantId, input.modelCallId, input.providerUsageRevision],
+      );
+      if (row.current_provider_usage_revision === input.providerUsageRevision) {
+        if (existing.rows[0]?.payload_hash !== payloadHash) throw new ModelCallConflictError();
+        return { providerUsageRevision: input.providerUsageRevision, delta: {
+          inputTokens: Number(existing.rows[0].delta_input_tokens),
+          outputTokens: Number(existing.rows[0].delta_output_tokens),
+          costMicros: Number(existing.rows[0].delta_cost_micros),
+        }, created: false };
+      }
+      if (existing.rowCount || row.current_provider_usage_revision !== input.supersedesProviderUsageRevision) {
+        throw new ModelCallConflictError();
+      }
+      const delta = {
+        inputTokens: actual.inputTokens - Number(row.actual_input_tokens),
+        outputTokens: actual.outputTokens - Number(row.actual_output_tokens),
+        costMicros: actual.costMicros - Number(row.actual_cost_micros),
+      };
+      await client.query(
+        `INSERT INTO pr_agent_harness.model_usage_adjustments (
+           tenant_id,run_id,model_call_id,provider_usage_revision,supersedes_provider_usage_revision,
+           payload_hash,evidence_reference,
+           actual_input_tokens,actual_output_tokens,actual_cost_micros,
+           delta_input_tokens,delta_output_tokens,delta_cost_micros,actor_type,actor_id,
+           content_purged_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [input.tenantId, input.runId, input.modelCallId, input.providerUsageRevision,
+          input.supersedesProviderUsageRevision, payloadHash, retainedEvidenceReference,
+          actual.inputTokens, actual.outputTokens,
+          actual.costMicros, delta.inputTokens, delta.outputTokens, delta.costMicros,
+          input.actorType, input.actorId, run.rows[0].content_purged_at],
+      );
+      const reservation = await client.query(
+        `UPDATE pr_agent_harness.model_budget_reservations
+         SET actual_input_tokens=$3,actual_output_tokens=$4,actual_cost_micros=$5,
+             settlement_kind='actual',current_provider_usage_revision=$6,updated_at=now()
+         WHERE tenant_id=$1 AND model_call_id=$2
+           AND current_provider_usage_revision IS NOT DISTINCT FROM $7`,
+        [input.tenantId, input.modelCallId, actual.inputTokens, actual.outputTokens,
+          actual.costMicros, input.providerUsageRevision, input.supersedesProviderUsageRevision],
+      );
+      if (reservation.rowCount !== 1) throw new ModelCallConflictError();
+      const updatedEnvelope = await client.query<{ status: string }>(
+        `UPDATE pr_agent_harness.run_budget_envelopes
+         SET actual_input_tokens=actual_input_tokens+$3,
+             actual_output_tokens=actual_output_tokens+$4,
+             actual_cost_micros=actual_cost_micros+$5,
+             overdrawn=actual_input_tokens+$3>input_token_limit
+               OR actual_output_tokens+$4>output_token_limit
+               OR actual_cost_micros+$5>cost_limit_micros,
+             updated_at=now()
+         WHERE tenant_id=$1 AND run_id=$2
+           AND actual_input_tokens+$3>=0 AND actual_output_tokens+$4>=0 AND actual_cost_micros+$5>=0
+         RETURNING status`,
+        [input.tenantId, input.runId, delta.inputTokens, delta.outputTokens, delta.costMicros],
+      );
+      if (!updatedEnvelope.rows[0]) throw new ModelCallConflictError();
+      if (updatedEnvelope.rows[0].status === "closed") {
+        const account = await client.query(
+          `UPDATE pr_agent_harness.tenant_budget_accounts
+           SET spent_input_tokens=spent_input_tokens+$4,
+               spent_output_tokens=spent_output_tokens+$5,
+               spent_cost_micros=spent_cost_micros+$6,
+               overdrawn=spent_input_tokens+$4+reserved_input_tokens>input_token_limit
+                 OR spent_output_tokens+$5+reserved_output_tokens>output_token_limit
+                 OR spent_cost_micros+$6+reserved_cost_micros>cost_limit_micros,
+               updated_at=now()
+           WHERE tenant_id=$1 AND period_key=$2 AND currency=$3
+             AND spent_input_tokens+$4>=0 AND spent_output_tokens+$5>=0 AND spent_cost_micros+$6>=0`,
+          [input.tenantId, row.period_key, row.currency,
+            delta.inputTokens, delta.outputTokens, delta.costMicros],
+        );
+        if (account.rowCount !== 1) throw new ModelCallConflictError();
+      }
+      await client.query(
+        `UPDATE pr_agent_harness.usage_records
+         SET measurement_status='actual',input_tokens=$3,cached_input_tokens=$4,
+             cache_write_input_tokens=$5,output_tokens=$6,reasoning_tokens=$7,
+             tool_input_tokens=$8,total_tokens=$9,cost_micros=$10,
+             original_usage_json=CASE WHEN content_purged_at IS NULL THEN $11::jsonb ELSE '{}'::jsonb END,
+             updated_at=now()
+         WHERE tenant_id=$1 AND model_call_id=$2`,
+        [input.tenantId, input.modelCallId, input.usage.inputTokens,
+          input.usage.cachedInputTokens ?? null, input.usage.cacheWriteInputTokens ?? null,
+          input.usage.outputTokens, input.usage.reasoningOrThoughtTokens ?? null,
+          input.usage.toolInputTokens ?? null,
+          input.usage.totalTokens ?? actual.inputTokens + actual.outputTokens,
+          actual.costMicros, JSON.stringify(input.usage.original)],
+      );
+      return { providerUsageRevision: input.providerUsageRevision, delta, created: true };
+    });
+  }
+
   async closeTerminalBudgets(
     tenantId: string,
     limit = 100,
@@ -378,12 +636,19 @@ export class ModelBudgetStore {
          WHERE e.tenant_id=$1 AND e.status<>'closed'
            AND r.status IN ('succeeded','failed','cancelled')
          ORDER BY e.updated_at,e.run_id
-         FOR UPDATE OF e SKIP LOCKED LIMIT $2`,
+         LIMIT $2`,
         [tenantId, limit],
       );
       let closed = 0;
       let pending = 0;
       for (const candidate of candidates.rows) {
+        const locked = await client.query(
+          `SELECT id FROM pr_agent_harness.agent_runs
+           WHERE tenant_id=$1 AND id=$2 AND status IN ('succeeded','failed','cancelled')
+           FOR UPDATE SKIP LOCKED`,
+          [tenantId, candidate.run_id],
+        );
+        if (!locked.rowCount) continue;
         await releaseTerminalPreparedCalls(client, tenantId, candidate.run_id);
         await markTerminalInflightCallsUnknown(client, tenantId, candidate.run_id);
         if (await closeEnvelope(client, tenantId, candidate.run_id) === "closed") closed += 1;
@@ -469,12 +734,20 @@ export function createBudgetedModelExecutionContext(input: {
   stepId: string;
   stepAttemptId: string;
   policy: ModelExecutionPolicy;
+  stepKey?: string;
 }): ModelExecutionContext {
+  const workflow = text(input.lease.runType ?? input.lease.input.workflow, "model request workflow");
   let ordinal = 0;
   return {
     policy: input.policy,
     async execute<T>(intent: ModelRequestIntent, transport: () => Promise<ModelTransportResult<T>>): Promise<T> {
-      const bounded = { ...intent, maxOutputTokens: Math.min(intent.maxOutputTokens, input.policy.maxOutputTokens) };
+      const bounded = {
+        ...intent,
+        requestKind: `${workflow}:${input.stepKey ?? input.stepId}:${intent.provider}:${intent.requestKind}`,
+        metadata: { ...intent.metadata, workflow,
+          step: input.stepKey ?? input.stepId, provider: intent.provider },
+        maxOutputTokens: Math.min(intent.maxOutputTokens, input.policy.maxOutputTokens),
+      };
       ordinal += 1;
       const call = await input.store.prepare({ ...input, physicalOrdinal: ordinal, intent: bounded });
       if (call.status === "succeeded" || call.status === "failed_definite") {
@@ -520,7 +793,7 @@ export function getModelExecutionPolicy(
   const withoutHash = {
     version: text(root.version, "pricing version"),
     currency: currency(root.currency),
-    periodKey: text(root.periodKey, "budget period"),
+    periodKey: new Date().toISOString().slice(0, 7),
     provider,
     model,
     rates: rates(selected.rates),
@@ -645,7 +918,10 @@ async function reconcilePriorAttemptCalls(
   if (!calls.rowCount) return;
   await client.query(
     `UPDATE pr_agent_harness.model_budget_reservations
-     SET status='pending',updated_at=now()
+     SET status='pending',
+         reconciliation_due_at=COALESCE(reconciliation_due_at,now()+(reconciliation_grace_ms*interval '1 millisecond')),
+         next_reconcile_at=COALESCE(next_reconcile_at,now()+(reconciliation_grace_ms*interval '1 millisecond')),
+         updated_at=now()
      WHERE tenant_id=$1 AND model_call_id=ANY($2::uuid[]) AND status='reserved'`,
     [tenantId, calls.rows.map((row) => row.id)],
   );
@@ -743,7 +1019,8 @@ async function settleReservation(client: PoolClient, call: PreparedModelCall, ac
   await client.query(
     `UPDATE pr_agent_harness.model_budget_reservations
      SET status='settled',actual_input_tokens=$3,actual_output_tokens=$4,
-         actual_cost_micros=$5,updated_at=now()
+         actual_cost_micros=$5,settlement_kind='actual',next_reconcile_at=NULL,
+         last_reconcile_error=NULL,updated_at=now()
      WHERE tenant_id=$1 AND model_call_id=$2`,
     [call.tenantId, call.id, actual.inputTokens, actual.outputTokens, actual.costMicros],
   );
@@ -768,7 +1045,11 @@ async function settleReservation(client: PoolClient, call: PreparedModelCall, ac
 
 async function markReservationPending(client: PoolClient, call: PreparedModelCall) {
   await client.query(
-    `UPDATE pr_agent_harness.model_budget_reservations SET status='pending',updated_at=now()
+    `UPDATE pr_agent_harness.model_budget_reservations
+     SET status='pending',
+         reconciliation_due_at=COALESCE(reconciliation_due_at,now()+(reconciliation_grace_ms*interval '1 millisecond')),
+         next_reconcile_at=COALESCE(next_reconcile_at,now()+(reconciliation_grace_ms*interval '1 millisecond')),
+         updated_at=now()
      WHERE tenant_id=$1 AND model_call_id=$2 AND status='reserved'`,
     [call.tenantId, call.id],
   );
@@ -869,7 +1150,10 @@ async function markTerminalInflightCallsUnknown(
   if (!calls.rowCount) return;
   await client.query(
     `UPDATE pr_agent_harness.model_budget_reservations
-     SET status='pending',updated_at=now()
+     SET status='pending',
+         reconciliation_due_at=COALESCE(reconciliation_due_at,now()+(reconciliation_grace_ms*interval '1 millisecond')),
+         next_reconcile_at=COALESCE(next_reconcile_at,now()+(reconciliation_grace_ms*interval '1 millisecond')),
+         updated_at=now()
      WHERE tenant_id=$1 AND model_call_id=ANY($2::uuid[]) AND status='reserved'`,
     [tenantId, calls.rows.map((row) => row.id)],
   );

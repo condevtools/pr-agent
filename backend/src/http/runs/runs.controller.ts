@@ -51,4 +51,10 @@ export class RunsController {
   command(@Req() request: Request, @Param("id") id: string, @Param("kind") kind: string, @Body() body: unknown) {
     return this.service.command(this.context.authenticate(request), id, kind, body);
   }
+
+  @Post(":id/model-calls/:callId/usage-reconciliations")
+  reconcileModelUsage(@Req() request: Request, @Param("id") id: string,
+    @Param("callId") callId: string, @Body() body: unknown) {
+    return this.service.reconcileModelUsage(this.context.authenticate(request), id, callId, body);
+  }
 }

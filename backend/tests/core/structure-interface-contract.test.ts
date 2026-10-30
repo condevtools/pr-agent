@@ -48,6 +48,7 @@ const EXPECTED_HTTP_ROUTES = [
   "POST /runs/:id/fix-approvals/:approvalId/revoke",
   "POST /runs/:id/fix-relevance",
   "POST /runs/:id/fixes",
+  "POST /runs/:id/model-calls/:callId/usage-reconciliations",
 ] as const;
 
 const EXPECTED_GITHUB_APP_EVENTS = [

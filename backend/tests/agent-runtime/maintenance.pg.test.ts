@@ -12,6 +12,8 @@ import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
 import { RunCursorExpiredError, RunQueryStore } from "../../src/agent-runtime/runs/query-store.js";
+import { ModelBudgetStore } from "../../src/agent-runtime/budget/model-budget-store.js";
+import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -24,6 +26,7 @@ if (!databaseUrl) {
   const db = new RuntimeDatabase(pool);
   const runs = new RunStore(db);
   const maintenance = new RuntimeMaintenanceStore(pool);
+  const execution = new RunExecutionStore(db);
   const tenantId = randomUUID();
   const otherTenantId = randomUUID();
   const integrationId = randomUUID();
@@ -56,39 +59,48 @@ if (!databaseUrl) {
     const eligible = await createRun(tenantId, integrationId, "eligible");
     const eligibleSecond = await createRun(tenantId, integrationId, "eligible-second");
     const unknown = await createRun(tenantId, integrationId, "unknown-cost");
+    const estimatedUnknown = await createRun(tenantId, integrationId, "estimated-unknown-cost");
     const publicationUnknown = await createRun(tenantId, integrationId, "publication-unknown");
     const active = await createRun(tenantId, integrationId, "active");
     const foreign = await createRun(otherTenantId, otherIntegrationId, "foreign");
     await makeOldTerminal(tenantId, eligible.id);
     await makeOldTerminal(tenantId, eligibleSecond.id);
     await makeOldTerminal(tenantId, unknown.id);
-    await makeOldTerminal(tenantId, publicationUnknown.id);
+    await makeOldTerminal(tenantId, estimatedUnknown.id);
     await makeOldTerminal(otherTenantId, foreign.id);
     const metadata = await addTrace(tenantId, eligible.id, "succeeded");
-    await addTrace(tenantId, unknown.id, "unknown");
+    const pendingTrace = await addTrace(tenantId, unknown.id, "unknown");
+    await addBudgetReservation(tenantId, unknown.id, pendingTrace.modelCallId, "pending");
+    const estimatedTrace = await addTrace(tenantId, estimatedUnknown.id, "unknown");
+    await addBudgetReservation(tenantId, estimatedUnknown.id, estimatedTrace.modelCallId, "estimated");
+    const budget = new ModelBudgetStore(db);
+    await budget.reconcileActualUsage({
+      tenantId, integrationId, runId: estimatedUnknown.id, modelCallId: estimatedTrace.modelCallId,
+      providerUsageRevision: "retention-provider-v1", supersedesProviderUsageRevision: null,
+      evidenceReference: "provider://sensitive/pre-retention-evidence",
+      usage: { inputTokens: 4, outputTokens: 2, original: { secret: "purge-before-adjusting" } },
+      actorType: "service", actorId: "retention-reconciler",
+    });
+    await pool.query(
+      `UPDATE pr_agent_harness.job_queue SET available_at=now()+interval '1 day'
+       WHERE tenant_id=$1 AND run_id=$2`, [tenantId, active.id]);
+    const publicationLease = await execution.claim({ tenantId, integrationId,
+      authorityGeneration: 1, executionModeGeneration: 1 }, "retention-publication", v);
+    assert.ok(publicationLease);
     const unresolvedBatch = await new PublicationBatchStore(db).freeze({
+      runLease: publicationLease,
       scope: { tenantId, integrationId, platform: "github", origin: "https://github.example.test",
         repository: "acme/retention", target: "pull:99", revision: "head", authorityGeneration: 1 },
       sourceKey: "retention-publication-unknown", sourceHash: hash("retention-publication-unknown"),
       operations: [{ slot: "comment:unknown", payload: { body: "unknown publication" } }],
     });
+    await makeOldTerminal(tenantId, publicationUnknown.id);
     const unresolvedOperation = unresolvedBatch.operations[0]!.businessOperationId;
     await pool.query(
       `UPDATE pr_agent_harness.repository_operations
        SET status='unknown',attempt_count=1,dispatched_at=now(),last_error_code='response_lost'
        WHERE tenant_id=$1 AND business_operation_id=$2`,
       [tenantId, unresolvedOperation],
-    );
-    const batchHash = await pool.query<{ operation_set_hash: string }>(
-      `SELECT operation_set_hash FROM pr_agent_harness.publication_batches
-       WHERE tenant_id=$1 AND id=$2`,
-      [tenantId, unresolvedBatch.id],
-    );
-    await pool.query(
-      `INSERT INTO pr_agent_harness.run_publication_batches
-         (tenant_id,run_id,batch_id,lease_epoch,operation_set_hash)
-       VALUES ($1,$2,$3,1,$4)`,
-      [tenantId, publicationUnknown.id, unresolvedBatch.id, batchHash.rows[0]!.operation_set_hash],
     );
 
     await assert.rejects(
@@ -100,11 +112,37 @@ if (!databaseUrl) {
 
     const preview = await maintenance.preview({ tenantId, olderThanDays: 30, limit: 10 });
     assert.deepEqual(preview.candidates.map((candidate) => candidate.runId).sort(),
-      [eligible.id, eligibleSecond.id].sort());
+      [eligible.id, eligibleSecond.id, estimatedUnknown.id].sort());
     const applied = await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 });
     assert.equal(applied.applied, 1);
     assert.equal((await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })).applied, 1);
+    assert.equal((await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })).applied, 1);
     assert.equal((await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })).applied, 0);
+
+    await budget.reconcileActualUsage({
+      tenantId, integrationId, runId: estimatedUnknown.id, modelCallId: estimatedTrace.modelCallId,
+      providerUsageRevision: "retention-provider-v2",
+      supersedesProviderUsageRevision: "retention-provider-v1",
+      evidenceReference: "provider://sensitive/retention-evidence",
+      usage: { inputTokens: 2, outputTokens: 1, original: { secret: "must-not-return" } },
+      actorType: "service", actorId: "retention-reconciler",
+    });
+    const retainedUsage = await pool.query<{ original_usage_json: Record<string, unknown>;
+      adjustments: number; evidence_redacted: boolean; all_purged: boolean }>(
+      `SELECT ur.original_usage_json,count(a.id)::int AS adjustments,
+              bool_and(a.evidence_reference='retained-ledger-only') AS evidence_redacted,
+              bool_and(a.content_purged_at IS NOT NULL) AS all_purged
+       FROM pr_agent_harness.usage_records ur
+       JOIN pr_agent_harness.model_usage_adjustments a
+         ON a.tenant_id=ur.tenant_id AND a.model_call_id=ur.model_call_id
+       WHERE ur.tenant_id=$1 AND ur.model_call_id=$2
+       GROUP BY ur.original_usage_json`,
+      [tenantId, estimatedTrace.modelCallId],
+    );
+    assert.deepEqual(retainedUsage.rows[0]?.original_usage_json, {});
+    assert.equal(retainedUsage.rows[0]?.adjustments, 2);
+    assert.equal(retainedUsage.rows[0]?.evidence_redacted, true);
+    assert.equal(retainedUsage.rows[0]?.all_purged, true);
 
     const evidence = await pool.query<{
       input_json: Record<string, unknown>; run_purged: Date | null; event_retention_floor: string;
@@ -161,23 +199,27 @@ if (!databaseUrl) {
     assert.equal(typeof audit.rows[0]!.details_json.cutoff, "string");
     assert.equal(audit.rows[0]!.details_json.previousEventRetentionFloor, 1);
     const metrics = await new RuntimeMetricsStore(db).snapshot(tenantId, integrationId);
-    assert.equal(metrics.runs.succeeded, 4);
+    assert.equal(metrics.runs.succeeded, 5);
     assert.equal(metrics.runs.queued, 1);
-    assert.equal(metrics.claimableJobs, 1);
-    assert.equal(metrics.pendingBudgetReservations, 0);
+    assert.equal(metrics.claimableJobs, 0);
+    assert.equal(metrics.pendingBudgetReservations, 1);
     assert.equal("repository" in metrics, false);
   });
 
   test("retention waits for a concurrent operation revive and skips the newly unresolved Run", async () => {
     const revivedRun = await createRun(tenantId, integrationId, "revive-race");
-    await makeOldTerminal(tenantId, revivedRun.id);
+    const revivedLease = await execution.claim({ tenantId, integrationId,
+      authorityGeneration: 1, executionModeGeneration: 1 }, "retention-revive", v);
+    assert.ok(revivedLease);
     const batchStore = new PublicationBatchStore(db);
     const batch = await batchStore.freeze({
+      runLease: revivedLease,
       scope: { tenantId, integrationId, platform: "github", origin: "https://github.example.test",
         repository: "acme/retention", target: "pull:100", revision: "head", authorityGeneration: 1 },
       sourceKey: "retention-revive-race", sourceHash: hash("retention-revive-race"),
       operations: [{ slot: "comment:revive", payload: { body: "revivable publication" } }],
     });
+    await makeOldTerminal(tenantId, revivedRun.id);
     const operationId = batch.operations[0]!.businessOperationId;
     await pool.query(
       `UPDATE pr_agent_harness.repository_operations
@@ -187,17 +229,6 @@ if (!databaseUrl) {
       [tenantId, operationId],
     );
     await batchStore.refreshOutcome(tenantId, batch.id);
-    const batchHash = await pool.query<{ operation_set_hash: string }>(
-      `SELECT operation_set_hash FROM pr_agent_harness.publication_batches
-       WHERE tenant_id=$1 AND id=$2`,
-      [tenantId, batch.id],
-    );
-    await pool.query(
-      `INSERT INTO pr_agent_harness.run_publication_batches
-         (tenant_id,run_id,batch_id,lease_epoch,operation_set_hash)
-       VALUES ($1,$2,$3,1,$4)`,
-      [tenantId, revivedRun.id, batch.id, batchHash.rows[0]!.operation_set_hash],
-    );
     const before = await pool.query<{
       input_json: Record<string, unknown>; event_retention_floor: string; next_event_seq: string;
     }>(
@@ -284,9 +315,13 @@ if (!databaseUrl) {
     await authority.configure({ tenantId: tenant, integrationId: integration,
       providerRepositoryId: Math.floor(Math.random() * 1_000_000) + 1, providerActorId: 99,
       credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });
+    await pool.query(
+      `UPDATE pr_agent_harness.integration_bindings SET execution_mode_generation=1
+       WHERE tenant_id=$1 AND id=$2`, [tenant, integration]);
     await authority.transition({ tenantId: tenant, integrationId: integration, expectedVersion: 1,
       action: "activate", actor: "maintenance-test", actorType: "service",
       quiescenceEvidence: "isolated Docker database" });
+    await pool.query("UPDATE pr_agent_harness.integration_bindings SET review_execution_mode='harness_async' WHERE tenant_id=$1 AND id=$2", [tenant, integration]);
   }
 
   async function createRun(tenant: string, integration: string, key: string) {
@@ -295,13 +330,15 @@ if (!databaseUrl) {
       requestHash: hash(`request:${tenant}:${key}`), runType: "review.single.v1", baseSha: "base",
       headSha: "head", workflowVersionHash: v, promptVersionHash: v, modelVersionHash: v,
       toolVersionHash: v, policyVersionHash: v, runtimeVersionHash: v,
+      authorityGeneration: 1, executionModeGeneration: 1,
       input: { source: `sensitive:${key}` } });
   }
 
   async function makeOldTerminal(tenant: string, runId: string): Promise<void> {
     await pool.query(
       `UPDATE pr_agent_harness.agent_runs
-       SET status='succeeded',lease_epoch=1,finished_at=now()-interval '40 days',updated_at=now()-interval '40 days'
+       SET status='succeeded',lease_owner=NULL,lease_expires_at=NULL,lease_epoch=1,
+           finished_at=now()-interval '40 days',updated_at=now()-interval '40 days'
        WHERE tenant_id=$1 AND id=$2`,
       [tenant, runId],
     );
@@ -358,19 +395,74 @@ if (!databaseUrl) {
       [tenant, runId, step.rows[0]!.id, attempt.rows[0]!.id,
         hash(`tool-request:${runId}`), hash(`tool-result:${runId}`)],
     );
-    await pool.query(
+    const modelCall = await pool.query<{ id: string }>(
       `INSERT INTO pr_agent_harness.model_calls
          (tenant_id,run_id,step_id,step_attempt_id,physical_ordinal,provider,model,request_kind,
           request_hash,request_metadata_json,input_token_bound,output_token_bound,response_json,
           response_hash,status,lease_epoch,finished_at)
        VALUES ($1,$2,$3,$4,1,'openai','fixture','review',$5,$6,10,10,$7,$8,$9,1,
-         CASE WHEN $9='succeeded' THEN now() ELSE NULL END)`,
+         CASE WHEN $9='succeeded' THEN now() ELSE NULL END) RETURNING id`,
       [tenant, runId, step.rows[0]!.id, attempt.rows[0]!.id, requestHash,
         JSON.stringify({ raw: "sensitive request metadata" }),
         modelStatus === "succeeded" ? JSON.stringify({ raw: "sensitive response" }) : null,
         modelStatus === "succeeded" ? responseHash : null, modelStatus],
     );
-    return { outputHash, stateHash, requestHash, responseHash };
+    return { outputHash, stateHash, requestHash, responseHash,
+      modelCallId: modelCall.rows[0]!.id };
+  }
+
+  async function addBudgetReservation(
+    tenant: string,
+    runId: string,
+    modelCallId: string,
+    status: "pending" | "estimated",
+  ): Promise<void> {
+    const pricingHash = hash(`retention-pricing:${tenant}`);
+    const periodKey = "2026-01";
+    const rates = { inputMicrosPerMillion: 1_000_000, cachedInputMicrosPerMillion: 1_000_000,
+      cacheWriteInputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000,
+      thoughtOutputMicrosPerMillion: 1_000_000, toolInputMicrosPerMillion: 1_000_000 };
+    await pool.query(
+      `INSERT INTO pr_agent_harness.model_pricing_snapshots
+         (tenant_id,pricing_hash,pricing_version,provider,model,currency,rates_json,policy_json)
+       VALUES ($1,$2,'retention','openai','fixture','USD',$3::jsonb,'{}'::jsonb)
+       ON CONFLICT DO NOTHING`, [tenant, pricingHash, JSON.stringify(rates)]);
+    await pool.query(
+      `INSERT INTO pr_agent_harness.tenant_budget_accounts
+         (tenant_id,period_key,currency,input_token_limit,output_token_limit,cost_limit_micros)
+       VALUES ($1,$2,'USD',1000,1000,1000) ON CONFLICT DO NOTHING`, [tenant, periodKey]);
+    if (status === "estimated") await pool.query(
+      `UPDATE pr_agent_harness.tenant_budget_accounts
+       SET spent_input_tokens=spent_input_tokens+10,spent_output_tokens=spent_output_tokens+10,
+           spent_cost_micros=spent_cost_micros+20
+       WHERE tenant_id=$1 AND period_key=$2 AND currency='USD'`, [tenant, periodKey]);
+    await pool.query(
+      `INSERT INTO pr_agent_harness.run_budget_envelopes
+         (tenant_id,run_id,period_key,currency,pricing_hash,input_token_limit,output_token_limit,
+          cost_limit_micros,actual_input_tokens,actual_output_tokens,actual_cost_micros,status,closed_at)
+       VALUES ($1,$2,$3,'USD',$4,100,100,100,10,10,20,$5,
+         CASE WHEN $5='closed' THEN now() ELSE NULL END)`,
+      [tenant, runId, periodKey, pricingHash, status === "pending" ? "pending_reconciliation" : "closed"]);
+    await pool.query(
+      `INSERT INTO pr_agent_harness.model_budget_reservations
+         (tenant_id,run_id,model_call_id,reserved_input_tokens,reserved_output_tokens,reserved_cost_micros,
+          actual_input_tokens,actual_output_tokens,actual_cost_micros,status,reconciliation_due_at,
+          next_reconcile_at,settlement_kind)
+       VALUES ($1,$2,$3,10,10,20,
+         CASE WHEN $4='estimated' THEN 10 ELSE NULL END,
+         CASE WHEN $4='estimated' THEN 10 ELSE NULL END,
+         CASE WHEN $4='estimated' THEN 20 ELSE NULL END,
+         CASE WHEN $4='estimated' THEN 'settled' ELSE 'pending' END,
+         CASE WHEN $4='pending' THEN now()-interval '1 minute' ELSE NULL END,
+         CASE WHEN $4='pending' THEN now()-interval '1 minute' ELSE NULL END,
+         CASE WHEN $4='estimated' THEN 'estimated_upper_bound' ELSE NULL END)`,
+      [tenant, runId, modelCallId, status]);
+    if (status === "estimated") await pool.query(
+      `INSERT INTO pr_agent_harness.usage_records
+         (tenant_id,run_id,model_call_id,measurement_status,input_tokens,output_tokens,total_tokens,
+          cost_micros,currency,pricing_hash,original_usage_json)
+       VALUES ($1,$2,$3,'estimated_upper_bound',10,10,20,20,'USD',$4,$5::jsonb)`,
+      [tenant, runId, modelCallId, pricingHash, JSON.stringify({ secret: "purge-me" })]);
   }
 }
 

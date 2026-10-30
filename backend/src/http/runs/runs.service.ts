@@ -3,7 +3,7 @@ import type { Response } from "express";
 import { z } from "zod";
 
 import { DeepReviewStore } from "../../review/deep/persistence/store.js";
-import { createReviewRequestSchema, reviewApiSourceHash } from "./input.js";
+import { createReviewRequestSchema, reconcileModelUsageSchema, reviewApiSourceHash } from "./input.js";
 import { requireRunPermission, runCommandSchema, runConflict, runNotFound, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { RunControlStore } from "../../agent-runtime/runs/control-store.js";
 import { RunQueryStore } from "../../agent-runtime/runs/query-store.js";
@@ -16,6 +16,7 @@ import { RunStore } from "../../agent-runtime/postgres/run-store.js";
 import { fingerprint } from "../../agent-runtime/versions.js";
 import { PgFixStore } from "../../fix/persistence/store.js";
 import { RunApiContextService, validRunId } from "../common/run-api-context.service.js";
+import { ModelBudgetStore, ModelCallConflictError } from "../../agent-runtime/budget/model-budget-store.js";
 
 @Injectable()
 export class RunsService implements BeforeApplicationShutdown {
@@ -98,6 +99,37 @@ export class RunsService implements BeforeApplicationShutdown {
     const creation = await buildReviewRunCreationInput(binding, { ...original, source },
       { actorType: principal.actorType, actorId: principal.subjectId, parentRunId: runId });
     return store.apply(principal, runId, command, creation);
+  }
+
+  async reconcileModelUsage(
+    principal: RunPrincipal,
+    runId: string,
+    modelCallId: string,
+    body: unknown,
+  ) {
+    requireRunPermission(principal, "usage:reconcile");
+    const id = validRunId(runId);
+    const callId = z.string().uuid().parse(modelCallId);
+    const input = reconcileModelUsageSchema.parse(body);
+    try {
+      return await new ModelBudgetStore((await getAgentRuntimeServices()).db).reconcileActualUsage({
+        tenantId: principal.tenantId,
+        integrationId: principal.integrationId,
+        runId: id,
+        modelCallId: callId,
+        providerUsageRevision: input.providerUsageRevision,
+        supersedesProviderUsageRevision: input.supersedesProviderUsageRevision,
+        evidenceReference: input.evidenceReference,
+        usage: input.usage,
+        actorType: principal.actorType,
+        actorId: principal.subjectId,
+      });
+    } catch (error) {
+      if (error instanceof ModelCallConflictError) {
+        throw runConflict("Model usage reconciliation conflicts with the durable ledger");
+      }
+      throw error;
+    }
   }
 
   async stream(principal: RunPrincipal, runId: string, after: string | undefined, response: Response): Promise<void> {

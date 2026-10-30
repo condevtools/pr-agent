@@ -11,6 +11,7 @@ export interface RunLease {
   tenantId: string;
   runId: string;
   integrationId: string;
+  runType?: string;
   jobId: string;
   jobKind?: RunJobKind;
   jobPayload?: JsonObject;

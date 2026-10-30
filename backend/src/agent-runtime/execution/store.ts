@@ -38,6 +38,7 @@ interface ClaimRow {
   job_payload_json: JsonObject;
   id: string;
   integration_id: string;
+  run_type: string;
   lease_epoch: string;
   authority_generation: string;
   execution_mode_generation: string;
@@ -145,7 +146,7 @@ export class RunExecutionStore {
              lease_epoch=lease_epoch+1,execution_attempt_count=execution_attempt_count+1,
              version=version+1,updated_at=now()
          WHERE tenant_id=$1 AND id=$2
-         RETURNING id,integration_id,lease_epoch,authority_generation,
+         RETURNING id,integration_id,run_type,lease_epoch,authority_generation,
            execution_mode_generation,deadline_at,
            base_sha,head_sha,workflow_version_hash,prompt_version_hash,
            model_version_hash,tool_version_hash,policy_version_hash,
@@ -292,7 +293,7 @@ export class RunExecutionStore {
              lease_epoch=lease_epoch+1,execution_attempt_count=execution_attempt_count+1,
              version=version+1,updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND status=$5
-         RETURNING id,integration_id,lease_epoch,authority_generation,
+         RETURNING id,integration_id,run_type,lease_epoch,authority_generation,
            execution_mode_generation,deadline_at,base_sha,head_sha,
            workflow_version_hash,prompt_version_hash,model_version_hash,tool_version_hash,
            policy_version_hash,runtime_version_hash,input_json,limits_json,runtime_config_json,
@@ -612,6 +613,7 @@ export class RunExecutionStore {
       retryDelayMs?: number;
       retryAt?: string;
     },
+    beforeTransition?: (client: PoolClient) => Promise<unknown>,
   ): Promise<RunExecutionSnapshot> {
     return this.withLease(lease, async (client) => {
       const terminal = input.to === "succeeded" || input.to === "failed" || input.to === "cancelled";
@@ -620,6 +622,9 @@ export class RunExecutionStore {
       }
       if (input.retryDelayMs !== undefined) {
         positiveInteger(input.retryDelayMs, "retry delay");
+      }
+      if (beforeTransition && !terminal) {
+        throw new Error("transition transaction hook is allowed only for terminal Run states");
       }
       let waitingBatch: { batch_id: string; operation_set_hash: string } | undefined;
       if (input.to === "waiting_for_reconciliation") {
@@ -644,6 +649,7 @@ export class RunExecutionStore {
         lease.runId,
         input.reasonCode ?? `run_${input.to}`,
       );
+      await beforeTransition?.(client);
       const result = await client.query<{
         id: string; tenant_id: string; integration_id: string; status: RunStatus;
         version: string; lease_owner: string | null; lease_epoch: string;
@@ -1183,7 +1189,8 @@ async function checkpointForStep(client: PoolClient, lease: RunLease, stepId: st
 
 function mapLease(row: ClaimRow, tenantId: string, owner: string): RunLease {
   return {
-    tenantId, runId: row.id, integrationId: row.integration_id, jobId: row.job_id,
+    tenantId, runId: row.id, integrationId: row.integration_id, runType: row.run_type,
+    jobId: row.job_id,
     jobKind: row.job_kind, jobPayload: row.job_payload_json,
     owner, epoch: Number(row.lease_epoch), jobAttempt: row.job_attempt,
     authorityGeneration: Number(row.authority_generation), deadlineAt: row.deadline_at.toISOString(),
