@@ -424,16 +424,31 @@ docker run -d \
 
 应用镜像不内置 PostgreSQL，也不会为外部数据库创建角色。单独运行容器时，部署平台必须预先提供 PostgreSQL、受限 schema owner / 应用角色，并完成迁移。单容器 `all` 角色只适合本地验证；生产部署应分别运行 `web`、`worker`、`recovery` 和 `maintenance`，平台未托管这些进程时使用下方 Compose。
 
-发布到镜像仓库时，用 Buildx 生成同时包含两种架构的 manifest。verifier operator 需要 Docker CLI，因此使用独立 tag；普通应用镜像不会包含 Docker CLI：
+发布应用镜像到 GHCR 时，在项目根目录运行以下命令。需要先启动 Docker，并安装 Buildx：
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 --target default \
-  -t ghcr.io/OWNER/pr-agent:TAG --push .
-docker buildx build --platform linux/amd64,linux/arm64 --target verifier \
-  -t ghcr.io/OWNER/pr-agent-verifier:TAG --push .
+pnpm docker:login
+pnpm docker:image:push
+pnpm docker:image:inspect
+pnpm docker:image:ref
 ```
 
-使用 `docker buildx imagetools inspect` 检查 manifest。BuildKit provenance 显示的 `unknown/unknown` 是附属于两种运行时镜像的证明，不是第三种架构。
+登录命令使用 `Lemonadeccc`；密码处填写有 `write:packages` 权限、且有权发布目标包的 [GitHub Personal Access Token（classic）](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)。使用其他账号时，直接运行 `docker login ghcr.io -u YOUR_USERNAME`。默认镜像为 `ghcr.io/lemonadeccc/pr-agent:sha-<Git 提交号前 12 位>`。推送命令会构建并发布 `linux/amd64` 和 `linux/arm64` 两种架构，无需先单独构建。脚本会创建或复用名为 `pr-agent-builder` 的 builder，不改变当前选中的 builder。推送前需提交参与镜像构建的源码改动；脚本会拒绝带有未提交或未跟踪镜像源码的发布，本地 `.env`、`.codex`、`.omx` 不影响该检查。
+
+只想本地构建时，运行 `pnpm docker:image:build`。产物是 `dist/docker/` 下的双架构 OCI 文件，不会载入 `docker images`。构建和推送命令均支持 `--dry-run` 预览。需要覆盖仓库、标签或 builder 时，在执行前导出 `PR_AGENT_IMAGE`、`PR_AGENT_TAG` 或 `PR_AGENT_BUILDER`。脚本不读取 `.env`；应用密钥由部署环境注入，不进入构建上下文。
+
+`docker:image:inspect` 检查已发布镜像的 manifest。BuildKit provenance 显示的 `unknown/unknown` 是附属于两种运行时镜像的证明，不是第三种架构。Git push 本身不会发布镜像：当前 CI 只验证镜像构建，不推送到 GHCR。
+
+Coolify 使用拉取镜像的方式部署时，给 `pr-agent`、`worker`、`recovery`、`maintenance`、`database-init` 使用 `docker:image:ref` 输出的同一个完整镜像地址；PostgreSQL 保持独立镜像。Coolify 保存的 Compose 配置需要单独更新。发布镜像不会自动修改该配置，也不会升级已有数据库 volume；请继续遵循下方 Compose 和数据库升级说明。
+
+启用 Fix 验证后，再基于同一提交发布它的两个独立 target：
+
+```bash
+pnpm docker:image:push --target verifier
+pnpm docker:image:push --target verifier-sandbox
+```
+
+未设置 `PR_AGENT_IMAGE` 时，它们分别使用 `ghcr.io/lemonadeccc/pr-agent-verifier` 和 `ghcr.io/lemonadeccc/pr-agent-verifier-sandbox`。显式设置的 `PR_AGENT_IMAGE` 会原样用于每个 target，因此覆盖时需为各 target 指定不同地址。普通评审部署无需发布这两个镜像。应用镜像不包含 Docker CLI。
 
 ### Docker Compose
 

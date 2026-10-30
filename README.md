@@ -424,16 +424,31 @@ docker run -d \
 
 The application image does not embed PostgreSQL or initialize external database roles. A standalone container therefore requires a separately provisioned PostgreSQL database, restricted schema-owner/application roles, and a completed migration run. The one-container `all` role is for local evaluation. Production deployments run separate `web`, `worker`, `recovery`, and `maintenance` instances; use Compose below when the platform does not already manage those processes.
 
-For a registry release, Buildx creates one manifest containing both supported architectures. Publish the verifier operator under a separate tag because the normal application image intentionally has no Docker CLI:
+To publish an application image to GHCR, run these commands from the repository root with Docker running and Buildx installed:
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 --target default \
-  -t ghcr.io/OWNER/pr-agent:TAG --push .
-docker buildx build --platform linux/amd64,linux/arm64 --target verifier \
-  -t ghcr.io/OWNER/pr-agent-verifier:TAG --push .
+pnpm docker:login
+pnpm docker:image:push
+pnpm docker:image:inspect
+pnpm docker:image:ref
 ```
 
-Verify the manifest with `docker buildx imagetools inspect`. BuildKit provenance entries reported as `unknown/unknown` are attestations associated with the two images, not an additional runtime architecture.
+The login command uses `Lemonadeccc`; enter a [GitHub personal access token (classic)](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic) with `write:packages` and permission to publish the package. For a different account, run `docker login ghcr.io -u YOUR_USERNAME` directly. The default image is `ghcr.io/lemonadeccc/pr-agent:sha-<12-character Git commit>`. The push command builds and publishes both `linux/amd64` and `linux/arm64`; a separate build command is optional. It creates or reuses the named `pr-agent-builder` without changing your selected builder. Commit changes to Dockerfile inputs before pushing: the script rejects modified or untracked image source files. Local `.env`, `.codex`, and `.omx` files do not block this check.
+
+For a local build without uploading, use `pnpm docker:image:build`. This writes a multi-architecture OCI archive under `dist/docker/`; it does not load the image into `docker images`. Preview a build or push with `--dry-run`. To override the repository, tag, or builder, export `PR_AGENT_IMAGE`, `PR_AGENT_TAG`, or `PR_AGENT_BUILDER` before running the commands. The script does not read `.env`; application credentials stay in the deployment environment and are excluded from the build context.
+
+`docker:image:inspect` checks the published manifest. BuildKit provenance entries reported as `unknown/unknown` are attestations associated with the two images, not an additional runtime architecture. A Git push alone does not publish an image: the current CI validates builds without pushing to GHCR.
+
+For a Coolify deployment that pulls images, use the same reference printed by `docker:image:ref` for `pr-agent`, `worker`, `recovery`, `maintenance`, and `database-init`; PostgreSQL keeps its own image. Update Coolify's saved Compose configuration separately. Publishing an image does not update that configuration or upgrade an existing database volume; follow the Compose and database upgrade instructions below.
+
+When Fix verification is enabled, publish its two separate targets on the same commit:
+
+```bash
+pnpm docker:image:push --target verifier
+pnpm docker:image:push --target verifier-sandbox
+```
+
+Without `PR_AGENT_IMAGE`, these use `ghcr.io/lemonadeccc/pr-agent-verifier` and `ghcr.io/lemonadeccc/pr-agent-verifier-sandbox`. An explicit `PR_AGENT_IMAGE` is used exactly as supplied for every target, so choose a different value for each target when overriding it. Normal review deployments do not need these images. The application image contains no Docker CLI.
 
 ### Docker Compose
 
