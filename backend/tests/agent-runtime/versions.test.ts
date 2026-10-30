@@ -33,7 +33,9 @@ test("the build manifest separates full-source audit from executable component p
     await writeFile(join(root, "backend/src/integrations/github/publication/adapter.ts"),
       'import { retry } from "../../../core/http/retry-options.js"; export const adapter = retry;');
     const verifierFile = join(root, "backend/src/fix/verification/worker.ts");
-    await writeFile(verifierFile, 'export async function load() { return import /* host builtin */ ("node:sqlite"); }');
+    // This fictional node: specifier is parsed, never executed, and keeps classification independent of the host Node version.
+    await writeFile(verifierFile,
+      'export async function load() { return import /* host builtin */ ("node:future-runtime-builtin"); }');
     const source = pathToFileURL(join(root, "backend/src/"));
     const baseline = await buildCodeManifest(source);
     await writeFile(join(root, "backend/src/main.ts"), "unrelated application bootstrap");
@@ -41,7 +43,8 @@ test("the build manifest separates full-source audit from executable component p
     assert.notEqual(unrelated.sourceHash, baseline.sourceHash);
     assert.deepEqual(unrelated.componentHashes, baseline.componentHashes,
       "non-runtime source is audited without stranding queued Runs");
-    await writeFile(verifierFile, 'export async function load() { return import /* host builtin */ ("node:sqlite"); } export const revision = 2;');
+    await writeFile(verifierFile,
+      'export async function load() { return import /* host builtin */ ("node:future-runtime-builtin"); } export const revision = 2;');
     const verifierChanged = await buildCodeManifest(source);
     assert.notEqual(verifierChanged.componentHashes.verifier, baseline.componentHashes.verifier);
     assert.equal(verifierChanged.componentHashes.tool, baseline.componentHashes.tool,

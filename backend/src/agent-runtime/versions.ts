@@ -336,7 +336,9 @@ function resolveLocalImport(from: string, specifier: string, sources: Map<string
 }
 
 const NODE_BUILTINS = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
-function isNodeBuiltin(specifier: string): boolean { return NODE_BUILTINS.has(specifier); }
+function isNodeBuiltin(specifier: string): boolean {
+  return specifier.startsWith("node:") || NODE_BUILTINS.has(specifier);
+}
 
 function externalPackageName(specifier: string): string {
   const parts = specifier.split("/");
