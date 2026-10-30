@@ -4,6 +4,7 @@ import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { enqueueReviewRun } from "./run-intake.js";
 import type { ReviewRunInput } from "./run-input.js";
+import { bindingAllowsCapability, type ReviewWorkflow } from "../../agent-runtime/runtime/capabilities.js";
 
 function options(input: GitHubReviewRunParams | GitLabReviewRunParams): ReviewRunInput["options"] {
   return {
@@ -18,7 +19,7 @@ export async function enqueueGitHubReview(params: GitHubReviewRunParams, binding
   const { owner, repo } = params.context.repo();
   const { data: pull } = await params.context.octokit.pulls.get({ owner, repo, pull_number: params.pullNumber });
   const run = await enqueueReviewRun(binding, {
-    schemaVersion: 1, workflow: "review.single.v1", platform: "github",
+    schemaVersion: 1, workflow: providerReviewWorkflow(binding), platform: "github",
     target: { origin: binding.origin, repository: binding.repository, number: params.pullNumber, providerRepositoryId: binding.providerRepositoryId },
     source: { key: params.sourceKey, hash: params.sourceHash },
     revision: { baseSha: pull.base.sha, headSha: pull.head.sha },
@@ -46,7 +47,7 @@ export async function enqueueGitLabReview(
   if (!metadata.diff_refs?.base_sha || !metadata.diff_refs.head_sha) throw new Error("GitLab immutable review revisions are unavailable");
   const attributes = params.payload.object_attributes;
   const run = await enqueueReviewRun(binding, {
-    schemaVersion: 1, workflow: "review.single.v1", platform: "gitlab",
+    schemaVersion: 1, workflow: providerReviewWorkflow(binding), platform: "gitlab",
     target: { origin: binding.origin, repository: binding.repository, number, providerRepositoryId: binding.providerRepositoryId },
     source, revision: { baseSha: metadata.diff_refs.base_sha, headSha: metadata.diff_refs.head_sha },
     mode, trigger: params.trigger ?? "gitlab-webhook", options: options(params),
@@ -55,4 +56,11 @@ export async function enqueueGitLabReview(
       draft: Boolean(attributes.draft || attributes.work_in_progress) },
   }, params.runActor);
   return run.id;
+}
+
+export function providerReviewWorkflow(binding: PublicationBinding): ReviewWorkflow {
+  return binding.capabilities.defaultReviewWorkflow === "review.deep.v1"
+    && bindingAllowsCapability(binding, "review.deep")
+    ? "review.deep.v1"
+    : "review.single.v1";
 }

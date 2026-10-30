@@ -2,6 +2,8 @@
 
 PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖发布持久化、Run worker、checkpoint、模型预算，以及 Run API、命令回执、SSE 和发布结局恢复。生产评审统一使用持久异步执行；API 鉴权、路由和人工恢复契约见 [run-api.md](run-api.md)。
 
+Single、Deep、Fix 和 Evolution 的启用条件、绑定配置与 `/ready` 探针见 [capabilities.md](capabilities.md)。普通 PR 默认 Single，Fix 和 Evolution 默认关闭。
+
 ## 启动与账户
 
 ```sh
@@ -117,7 +119,7 @@ docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" database-ini
 
 Worker 每秒轮询，租约 60 秒、每 15 秒续租、每 5 秒清扫；过期和 deadline 使用 PostgreSQL 时钟。首版每 Run 最长 15 分钟、最多 3 次 Job/Step attempt。收集结果、模型结果及 publication-frozen checkpoint 持久化，恢复已完成 Step 不重复调用模型。发布 batch、Run 关联和 publication-frozen checkpoint 在同一事务封存。网络请求不持有数据库事务。
 
-模型调用必须先有明确的 `HARNESS_MODEL_PRICING_JSON`。它包含 `version`、`currency`、固定账期 `periodKey`、`tenantLimits`、`runLimits` 和按 `provider:model` 索引的 `models`。两类 limits 都包含 `inputTokens`、`outputTokens`、`costMicros`；每个 model 包含 `rates`、`maxOutputTokens`、`maxPhysicalCallsPerStep`，OpenAI 兼容服务还需显式 `openAiTokenParameter`（`max_completion_tokens` 或 `max_tokens`）。`rates` 包含以下每百万 token 的微货币单位费率，必须根据实际供应商合同配置，不从模型输出或请求中读取：
+模型调用必须先有明确的 `HARNESS_MODEL_PRICING_JSON`。它包含 `version`、`currency`、`tenantLimits`、`runLimits` 和按 `provider:model` 索引的 `models`。两类 limits 都包含 `inputTokens`、`outputTokens`、`costMicros`；每个 model 包含 `rates`、`maxOutputTokens`、`maxPhysicalCallsPerStep`，OpenAI 兼容服务还需显式 `openAiTokenParameter`（`max_completion_tokens` 或 `max_tokens`）。`rates` 包含以下每百万 token 的微货币单位费率，必须根据实际供应商合同配置，不从模型输出或请求中读取：
 
 - `inputMicrosPerMillion`
 - `cachedInputMicrosPerMillion`
@@ -126,9 +128,9 @@ Worker 每秒轮询，租约 60 秒、每 15 秒续租、每 5 秒清扫；过�
 - `thoughtOutputMicrosPerMillion`
 - `toolInputMicrosPerMillion`
 
-Run 入队先预留 tenant envelope，每次物理调用再从该 envelope 预留。供应商原始 usage 与统一账分开保存，缓存和推理 token 按供应商口径处理。已知结果可复用；响应丢失、无 usage 或无法证明未计费时保留费用预留，不按零费用结算。终态预算维护只释放尚未分配额度，未知调用继续待对账。账期与价格快照被冻结；更换账期或配置只影响新 Run。测试专用零费用开关同时要求 `NODE_ENV=test` 和 `HARNESS_ALLOW_ZERO_COST_MODEL_POLICY=isolated-test-only`。
+Run 入队先预留 tenant envelope，每次物理调用再从该 envelope 预留。供应商原始 usage 与统一账分开保存，缓存和推理 token 按供应商口径处理。已知结果可复用；响应丢失、无 usage 或无法证明未计费时保留费用预留，不按零费用结算。终态预算维护只释放尚未分配额度；未知调用在等待窗口后按已预留上限保守结算，并保留未知调用事实。拿到供应商实际用量后，通过受保护的 usage reconciliation API 以版本 CAS 做幂等差额更正。Run 入队时冻结 UTC 月账期和价格快照，跨月更正记回原账期；配置变化只影响新 Run。测试专用零费用开关同时要求 `NODE_ENV=test` 和 `HARNESS_ALLOW_ZERO_COST_MODEL_POLICY=isolated-test-only`。
 
-Durable 模式关闭 SDK/HTTP 隐藏重试；兼容回退也计为独立物理调用。源码、运行参数、模型/价格和评审环境配置进入版本 hash；不兼容的旧 Run 明确进入死信，不能用新实现猜测旧 checkpoint。编译时生成 `dist/agent-runtime/runtime-manifest.json`，缺失时拒绝执行。
+Durable 模式关闭 SDK/HTTP 隐藏重试；兼容回退也计为独立物理调用。完整源码 hash 用于审计；执行兼容性按工作流、步骤、生产依赖及任务冻结的模型策略判定。不兼容 Worker 不会领取、删除或终结别人的任务，任务等待兼容执行者；不会自动清空 checkpoint 重跑。编译时生成 `dist/agent-runtime/runtime-manifest.json`，缺失时拒绝执行。
 
 ## 验证、升级与后续范围
 
@@ -144,6 +146,6 @@ PG 测试命令自行创建隔离 Docker 容器、随机本地端口和密码，
 
 `docker compose run --rm database-init node dist/agent-runtime/cli.js migrate` 可以重复验证/应用迁移。已应用 SQL 有校验和保护；未来变更必须新增迁移，不能修改历史文件。升级前备份并验证恢复，回滚服务也必须保留同一发布账和权限协议，不能回到裸写旧版本。
 
-P0c 后续补齐 Run 控制 API、SSE 和发布结果回流；P0d 验证排空切换。P1 加入证据驱动的多 Agent 评审；FixRun 保持独立权限域和验证/审批流程；EvolutionRun 作为离线评测与候选改进控制面。当前不引入 Redis/Kafka：PG 已承担持久事实和恢复协调，暂没有证明需要额外队列的容量数据。不能据本阶段宣称 Harness 49 项全部达标或自动修复、自我演化已上线。
+当前提供 Run 控制 API、SSE、发布结果回流及显式启用的多 Agent Deep Review。Fix 保持独立权限域和验证/审批流程；Evolution 提供反馈、离线评测与候选策略控制面，两者默认关闭。PG 承担持久事实和恢复协调，当前没有额外引入 Redis/Kafka。能力开关和架构测试不代表真实模型质量已通过验收，也不代表已覆盖 Harness 原课全部 49 项能力。
 
 多 Agent 深审的创建、证据门和 shadow 报告见 [deep-review.md](deep-review.md)。

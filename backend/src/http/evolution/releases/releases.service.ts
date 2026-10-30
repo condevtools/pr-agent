@@ -15,24 +15,30 @@ export class ReleasesService {
   constructor(@Inject(RunApiContextService) private readonly context: RunApiContextService) {}
   async qualify(request: Request, body: unknown) {
     const input = qualifyCandidateSchema.parse(withCommand(body, request));
+    const principal = this.context.authenticate(request);
     const model = resolveModelConfiguration();
     const manifest = await runtimeVersionManifest(getModelExecutionPolicy(model.provider, model.model));
-    return (await store()).qualify(this.context.authenticate(request), input, manifest);
+    return (await store()).qualify(principal, input, manifest);
   }
   async request(request: Request, body: unknown) {
-    return (await store()).request(this.context.authenticate(request), requestReleaseSchema.parse(withCommand(body, request)),
+    const principal = this.context.authenticate(request);
+    return (await store()).request(principal, requestReleaseSchema.parse(withCommand(body, request)),
       await currentManifest());
   }
   async approve(request: Request, body: unknown) {
-    return (await store()).approve(this.context.authenticate(request), decideReleaseSchema.parse(withCommand(body, request)),
-      await currentManifest());
+    const principal = this.context.authenticate(request);
+    const input = decideReleaseSchema.parse(withCommand(body, request));
+    return (await store()).approve(principal, input,
+      input.decision === "approve" ? await currentManifest() : undefined);
   }
   async revoke(request: Request, body: unknown) {
     const input = revokeReleaseSchema.parse(withCommand(body, request));
-    return (await store()).revoke(this.context.authenticate(request), input.requestId, input.commandKey);
+    const principal = this.context.authenticate(request);
+    return (await store()).revoke(principal, input.requestId, input.commandKey);
   }
   async rollback(request: Request, body: unknown) {
-    return (await store()).rollback(this.context.authenticate(request), rollbackReleaseSchema.parse(withCommand(body, request)));
+    const principal = this.context.authenticate(request);
+    return (await store()).rollback(principal, rollbackReleaseSchema.parse(withCommand(body, request)));
   }
   async read(request: Request) { return (await store()).read(this.context.authenticate(request)); }
 }

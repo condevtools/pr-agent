@@ -65,7 +65,8 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.repository_operations, pr_agent_harness.publication_command_receipts TO ${runtimeRoleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(uuid, uuid, text, text, text, bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid, uuid, bigint) TO ${roleName}`);
-    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
+      pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
 
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;

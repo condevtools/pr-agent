@@ -443,7 +443,7 @@ The backend listens on port `3000` by default (configurable via `PORT`). The fro
 
 ```bash
 curl http://localhost:3000/health
-curl http://localhost:3000/health?deep=true   # Tests AI provider connectivity
+curl http://localhost:3000/ready              # Checks enabled runtime dependencies
 curl http://localhost:3000/github/health       # GitHub config status
 ```
 
@@ -527,7 +527,9 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `AI_SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000` (15s) | Graceful shutdown drain timeout for in-flight AI tasks |
 | `AI_DEBUG_LOGS` | `false` | Log AI request/response payloads for debugging |
 | `HEALTHCHECK_AI_TIMEOUT_MS` | `5000` (5s) | Timeout for deep health check AI probe |
-| `HEALTHCHECK_AI_LIVE_PROBE` | `false` | Perform actual API call for `GET /health?deep=true` instead of config-only check |
+| `FEATURE_DEEP_REVIEW` | `on` | Allow explicit Deep Review; PR webhooks still default to Single |
+| `FEATURE_FIX` | `off` | Enable Fix only with binding permission, policy and verifier dependencies |
+| `FEATURE_EVOLUTION` | `off` | Enable feedback and offline evaluation for authorized bindings |
 
 `AI_CONCURRENCY_LIMIT` is no longer used. Use `AI_MAX_CONCURRENCY` and `AI_MAX_QUEUE_SIZE` instead.
 
@@ -866,7 +868,7 @@ Prometheus-format metrics are exposed at `GET /metrics`:
 | Endpoint | Purpose |
 |---|---|
 | `GET /health` | Liveness probe |
-| `GET /health?deep=true` | Deep check (AI provider connectivity) |
+| `GET /ready` | Readiness for enabled capabilities and runtime dependencies |
 | `GET /github/health` | GitHub webhook config validation |
 | `GET /gitlab/health` | Legacy GitLab webhook config validation (unsupported in current beta) |
 

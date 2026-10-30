@@ -4,6 +4,9 @@ import { fingerprint } from "../versions.js";
 import { RuntimeDatabase } from "../postgres/database.js";
 import { appendRunFact } from "../runs/events.js";
 import type { RunStatus } from "../postgres/run-store.js";
+import { lockCurrentBindingCapability } from "../authority/capability-guard.js";
+import { workflowCapability, type ProductCapability } from "../runtime/capabilities.js";
+import { RunControlError } from "../runs/control-contracts.js";
 import {
   RunCheckpointCompatibilityError,
   RunLeaseLostError,
@@ -30,6 +33,7 @@ interface RunExecutionStoreOptions {
   leaseTtlMs?: number;
   initialRetryMs?: number;
   maxRetryMs?: number;
+  supportedWorkflows?: readonly string[];
 }
 
 interface ClaimRow {
@@ -94,6 +98,7 @@ export class RunExecutionStore {
   private readonly leaseTtlMs: number;
   private readonly initialRetryMs: number;
   private readonly maxRetryMs: number;
+  private readonly supportedWorkflows: readonly string[];
 
   constructor(
     private readonly db: RuntimeDatabase,
@@ -102,12 +107,18 @@ export class RunExecutionStore {
     this.leaseTtlMs = positiveInteger(options.leaseTtlMs ?? 60_000, "lease TTL");
     this.initialRetryMs = positiveInteger(options.initialRetryMs ?? 1_000, "initial retry delay");
     this.maxRetryMs = positiveInteger(options.maxRetryMs ?? 60_000, "maximum retry delay");
+    this.supportedWorkflows = options.supportedWorkflows ?? ["review", "review.single.v1", "review.deep.v1",
+      "fix.propose.v1", "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1"];
+    if (!this.supportedWorkflows.length || this.supportedWorkflows.some((workflow) => !workflow.trim())) {
+      throw new Error("supported workflows must be nonempty identifiers");
+    }
   }
 
   async claim(
     binding: ClaimableBinding,
     owner: string,
     runtimeVersionHash: string,
+    supportedWorkflows: readonly string[] = this.supportedWorkflows,
   ): Promise<RunLease | undefined> {
     requiredText(owner, "lease owner");
     requiredHash(runtimeVersionHash, "runtime version hash");
@@ -122,15 +133,23 @@ export class RunExecutionStore {
       if (!authority.rows[0]?.allowed) return undefined;
 
       const candidate = await client.query<{
-        job_id: string; run_id: string; job_kind: RunJobKind; job_payload_json: JsonObject;
+        job_id: string; run_id: string; run_type: string;
+        job_kind: RunJobKind; job_payload_json: JsonObject;
       }>(
-        `SELECT j.id AS job_id, r.id AS run_id,j.job_kind,j.job_payload_json
+        `SELECT j.id AS job_id,r.id AS run_id,r.run_type,j.job_kind,j.job_payload_json
          FROM pr_agent_harness.job_queue j
          JOIN pr_agent_harness.agent_runs r
            ON r.tenant_id=j.tenant_id AND r.id=j.run_id
+         JOIN pr_agent_harness.integration_bindings b
+           ON b.tenant_id=r.tenant_id AND b.id=r.integration_id AND b.active
          WHERE j.tenant_id=$1 AND r.integration_id=$2
            AND r.authority_generation=$3 AND r.execution_mode_generation=$4
            AND r.runtime_version_hash=$5
+           AND r.run_type=ANY($6::text[])
+           AND (r.run_type IN ('review','review.single.v1')
+             OR (r.run_type='review.deep.v1' AND b.review_deep_enabled)
+             OR (r.run_type IN ('fix.propose.v1','fix.publish.v1') AND b.fix_enabled)
+             OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1') AND b.evolution_enabled))
            AND j.job_kind IN ('start','retry','recover')
            AND r.status IN ('queued','retry_wait')
            AND r.cancel_requested_at IS NULL AND r.deadline_at > now()
@@ -138,10 +157,12 @@ export class RunExecutionStore {
          ORDER BY j.priority DESC,j.available_at,j.id
          FOR UPDATE OF j,r SKIP LOCKED LIMIT 1`,
         [binding.tenantId, binding.integrationId, binding.authorityGeneration,
-          binding.executionModeGeneration, runtimeVersionHash],
+          binding.executionModeGeneration, runtimeVersionHash, supportedWorkflows],
       );
       const selected = candidate.rows[0];
       if (!selected) return undefined;
+      const capability = capabilityForWorkflow(selected.run_type);
+      if (capability && !await capabilityEnabled(client, binding, capability)) return undefined;
 
       const run = await client.query<Omit<ClaimRow, "job_id" | "job_attempt" | "job_kind" | "job_payload_json">>(
         `UPDATE pr_agent_harness.agent_runs
@@ -215,16 +236,18 @@ export class RunExecutionStore {
     binding: ClaimableBinding,
     owner: string,
     runtimeVersionHash: string,
+    supportedWorkflows: readonly string[] = this.supportedWorkflows,
   ): Promise<RunLease | undefined> {
-    return this.claimSpecialJob(binding, owner, runtimeVersionHash, "publication_outcome");
+    return this.claimSpecialJob(binding, owner, runtimeVersionHash, "publication_outcome", supportedWorkflows);
   }
 
   async claimManualResume(
     binding: ClaimableBinding,
     owner: string,
     runtimeVersionHash: string,
+    supportedWorkflows: readonly string[] = this.supportedWorkflows,
   ): Promise<RunLease | undefined> {
-    return this.claimSpecialJob(binding, owner, runtimeVersionHash, "manual_resume");
+    return this.claimSpecialJob(binding, owner, runtimeVersionHash, "manual_resume", supportedWorkflows);
   }
 
   private async claimSpecialJob(
@@ -232,6 +255,7 @@ export class RunExecutionStore {
     owner: string,
     runtimeVersionHash: string,
     kind: "publication_outcome" | "manual_resume",
+    supportedWorkflows: readonly string[],
   ): Promise<RunLease | undefined> {
     requiredText(owner, "lease owner");
     requiredHash(runtimeVersionHash, "runtime version hash");
@@ -296,9 +320,10 @@ export class RunExecutionStore {
                AND c.status='accepted' AND c.id=j.command_receipt_id
            )`;
       const candidate = await client.query<{
-        job_id: string; run_id: string; job_kind: RunJobKind; job_payload_json: JsonObject;
+        job_id: string; run_id: string; run_type: string;
+        job_kind: RunJobKind; job_payload_json: JsonObject;
       }>(
-        `SELECT j.id AS job_id,r.id AS run_id,j.job_kind,
+        `SELECT j.id AS job_id,r.id AS run_id,r.run_type,j.job_kind,
                 j.job_payload_json || jsonb_strip_nulls(jsonb_build_object(
                   'batchId',j.expected_batch_id,'operationSetHash',j.expected_operation_set_hash,
                   'outcomeGeneration',j.outcome_generation,'waitId',j.wait_id,
@@ -306,20 +331,33 @@ export class RunExecutionStore {
                 )) AS job_payload_json
          FROM pr_agent_harness.job_queue j
          JOIN pr_agent_harness.agent_runs r ON r.tenant_id=j.tenant_id AND r.id=j.run_id
+         JOIN pr_agent_harness.integration_bindings b
+           ON b.tenant_id=r.tenant_id AND b.id=r.integration_id AND b.active
          WHERE j.tenant_id=$1 AND r.integration_id=$2
            AND r.authority_generation=$3 AND r.execution_mode_generation=$4
            AND r.runtime_version_hash=$5 AND r.status=$6
            AND r.cancel_requested_at IS NULL AND r.deadline_at>now()
            AND j.job_kind=$7 AND j.status IN ('ready','retry_wait') AND j.available_at<=now()
+           AND ($7='publication_outcome'
+             OR COALESCE(j.job_payload_json->>'decision','')<>'authorize_retry'
+             OR (r.run_type=ANY($8::text[])
+               AND (r.run_type IN ('review','review.single.v1')
+                 OR (r.run_type='review.deep.v1' AND b.review_deep_enabled)
+                 OR (r.run_type IN ('fix.propose.v1','fix.publish.v1') AND b.fix_enabled)
+                 OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1') AND b.evolution_enabled))))
            AND j.attempt_count<j.max_attempts
            AND j.expected_run_version=r.version AND ${predicate}
          ORDER BY j.priority DESC,j.available_at,j.id
          FOR UPDATE OF j,r SKIP LOCKED LIMIT 1`,
         [binding.tenantId, binding.integrationId, binding.authorityGeneration,
-          binding.executionModeGeneration, runtimeVersionHash, expectedStatus, kind],
+          binding.executionModeGeneration, runtimeVersionHash, expectedStatus, kind, supportedWorkflows],
       );
       const selected = candidate.rows[0];
       if (!selected) return undefined;
+      if (kind === "manual_resume" && selected.job_payload_json.decision === "authorize_retry") {
+        const capability = capabilityForWorkflow(selected.run_type);
+        if (capability && !await capabilityEnabled(client, binding, capability)) return undefined;
+      }
       const run = await client.query<Omit<ClaimRow, "job_id" | "job_attempt" | "job_kind" | "job_payload_json">>(
         `UPDATE pr_agent_harness.agent_runs
          SET status='running',lease_owner=$3,
@@ -1095,6 +1133,26 @@ export class RunExecutionStore {
       }
       return result;
     });
+  }
+}
+
+function capabilityForWorkflow(workflow: string): ProductCapability | undefined {
+  return workflow === "review" ? "review.single" : workflowCapability(workflow);
+}
+
+async function capabilityEnabled(
+  client: PoolClient,
+  binding: ClaimableBinding,
+  capability: ProductCapability,
+): Promise<boolean> {
+  try {
+    await lockCurrentBindingCapability(client, { tenantId: binding.tenantId,
+      integrationId: binding.integrationId, capability });
+    return true;
+  } catch (error) {
+    if (error instanceof RunControlError
+        && ["CAPABILITY_DISABLED", "BINDING_UNAVAILABLE"].includes(error.code)) return false;
+    throw error;
   }
 }
 

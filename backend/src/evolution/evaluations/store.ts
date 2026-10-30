@@ -16,6 +16,7 @@ import { createRunInTransaction } from "../../agent-runtime/postgres/run-store.j
 import type { RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { requireRunPermission, RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { fingerprint, type RunVersionManifest } from "../../agent-runtime/versions.js";
+import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
 
 interface EvalRow {
   id: string; dataset_id: string; candidate_id: string; split: EvaluationSplit;
@@ -46,13 +47,18 @@ export class PgEvolutionEvaluationStore {
     return this.db.transaction(principal.tenantId, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1::text,1830))", [principal.tenantId]);
       const duplicate = await client.query<EvalRow & { request_hash: string }>(
-        `SELECT * FROM pr_agent_harness.eval_runs WHERE tenant_id=$1 AND curator_actor_type=$2
-           AND curator_actor_id=$3 AND command_key=$4`,
-        [principal.tenantId, principal.actorType, principal.subjectId, input.commandKey]);
+        `SELECT e.* FROM pr_agent_harness.eval_runs e
+         JOIN pr_agent_harness.evolution_candidates c ON c.tenant_id=e.tenant_id AND c.id=e.candidate_id
+         JOIN pr_agent_harness.agent_runs r ON r.tenant_id=c.tenant_id AND r.id=c.proposal_run_id
+         WHERE e.tenant_id=$1 AND r.integration_id=$2 AND e.curator_actor_type=$3
+           AND e.curator_actor_id=$4 AND e.command_key=$5`,
+        [principal.tenantId, principal.integrationId, principal.actorType, principal.subjectId, input.commandKey]);
       if (duplicate.rows[0]) {
         if (duplicate.rows[0].request_hash !== input.requestHash) throw replayError("EVALUATION_CONFLICT", 409, "Idempotency key was reused");
         return mapEvaluation(duplicate.rows[0]);
       }
+      await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+        integrationId: principal.integrationId, capability: "evolution" });
       const candidate = (await client.query<{ dataset_version: string; dataset_manifest_hash: string;
         candidate_hash: string; candidate_json: ReviewStrategyText; expected_cases: number }>(
         `SELECT c.dataset_version,c.dataset_manifest_hash,c.candidate_hash,c.candidate_json,
@@ -152,9 +158,12 @@ export class PgEvolutionEvaluationStore {
     requireRunPermission(principal, "evaluations:read");
     return this.db.transaction(principal.tenantId, async (client) => {
       const row = (await client.query<EvalRow>(
-        `SELECT * FROM pr_agent_harness.eval_runs WHERE tenant_id=$1 AND id=$2
-          AND curator_actor_type=$3 AND curator_actor_id=$4`,
-        [principal.tenantId, evaluationId, principal.actorType, principal.subjectId])).rows[0];
+        `SELECT e.* FROM pr_agent_harness.eval_runs e
+         JOIN pr_agent_harness.evolution_candidates c ON c.tenant_id=e.tenant_id AND c.id=e.candidate_id
+         JOIN pr_agent_harness.agent_runs r ON r.tenant_id=c.tenant_id AND r.id=c.proposal_run_id
+         WHERE e.tenant_id=$1 AND r.integration_id=$2 AND e.id=$3
+           AND e.curator_actor_type=$4 AND e.curator_actor_id=$5`,
+        [principal.tenantId, principal.integrationId, evaluationId, principal.actorType, principal.subjectId])).rows[0];
       if (!row) throw replayError("EVALUATION_NOT_FOUND", 404, "Evaluation was not found");
       if (row.split === "holdout") requireRunPermission(principal, "evaluations:holdout");
       return mapEvaluation(row);
@@ -166,6 +175,13 @@ export class PgEvolutionEvaluationStore {
       throw replayError("EVALUATION_LEASE_TTL_INVALID", 400, "Evaluation lease TTL must be between 1 and 300 seconds");
     }
     return this.db.transaction(tenantId, async (client) => {
+      try {
+        await lockCurrentBindingCapability(client, { tenantId, integrationId, capability: "evolution" });
+      } catch (error) {
+        if (error instanceof RunControlError
+            && (error.code === "CAPABILITY_DISABLED" || error.code === "BINDING_UNAVAILABLE")) return undefined;
+        throw error;
+      }
       await expireEvaluations(client, tenantId);
       const selected = await client.query<{ id: string }>(
         `SELECT e.id FROM pr_agent_harness.eval_runs e

@@ -26,10 +26,40 @@ export const trustedLabelSetSchema = z.object({
 
 export const feedbackObservationSchema = z.object({
   schemaVersion: z.literal(1), artifactHash: hash,
-  sentiment: z.enum(["helpful", "not_helpful"]),
+  sentiment: z.enum(["helpful", "not_helpful", "mixed"]),
   categories: z.array(z.enum(["missed_finding", "false_positive", "incorrect_severity", "poor_explanation", "other"]))
     .max(5).default([]),
   comment: z.string().max(4_000).optional(),
+}).strict();
+
+const providerFeedbackSentimentSchema = z.enum(["positive", "negative", "mixed"]);
+const providerFeedbackProvenanceSchema = z.object({
+  method: z.literal("authorized_provider_comment"), provider: z.enum(["github", "gitlab"]),
+  eventId: z.string().min(1).max(200), actorProviderId: z.string().min(1).max(200),
+  providerSentiment: providerFeedbackSentimentSchema,
+}).strict();
+export const providerFeedbackRecordSchema = z.object({
+  sourceRunId: z.string().uuid(),
+  sentiment: providerFeedbackSentimentSchema,
+  comment: z.string().max(4_000).optional(),
+  target: z.object({
+    platform: z.enum(["github", "gitlab"]), origin: z.string().url(), repository: z.string().min(1).max(512),
+    providerRepositoryId: z.number().int().positive(), number: z.number().int().positive(),
+  }).strict(),
+  provenance: providerFeedbackProvenanceSchema,
+}).strict().superRefine((value, context) => {
+  if (value.target.platform !== value.provenance.provider) {
+    context.addIssue({ code: "custom", message: "provider feedback target and provenance must match" });
+  }
+  if (value.sentiment !== value.provenance.providerSentiment) {
+    context.addIssue({ code: "custom", message: "provider feedback sentiment provenance must match" });
+  }
+});
+export const providerFeedbackObservationSchema = feedbackObservationSchema.extend({
+  provenance: providerFeedbackProvenanceSchema.extend({
+    origin: z.string().url(), repository: z.string().min(1).max(512),
+    providerRepositoryId: z.number().int().positive(), targetNumber: z.number().int().positive(),
+  }).strict(),
 }).strict();
 
 export const annotationRequestSchema = z.object({
@@ -48,6 +78,7 @@ export const arbitrationRequestSchema = z.object({
 export type FindingLabelV1 = z.infer<typeof findingLabelSchema>;
 export type TrustedLabelSetV1 = z.infer<typeof trustedLabelSetSchema>;
 export type FeedbackObservationRequest = z.infer<typeof feedbackObservationSchema>;
+export type ProviderFeedbackRecordRequest = z.infer<typeof providerFeedbackRecordSchema>;
 export type AnnotationRequest = z.infer<typeof annotationRequestSchema>;
 export type ArbitrationRequest = z.infer<typeof arbitrationRequestSchema>;
 export interface FeedbackActor { type: "user" | "service"; id: string }
@@ -59,6 +90,21 @@ export interface AnnotationReceipt {
 }
 export interface ArbitrationReceipt {
   id: string; sourceRunId: string; chosenLabelSetHash: string; trustedLabelSetId: string; createdAt: string;
+}
+
+export interface ParsedProviderFeedbackCommand {
+  sourceRunId: string;
+  sentiment: z.infer<typeof providerFeedbackSentimentSchema>;
+  comment?: string;
+}
+
+export function parseProviderFeedbackCommand(body: string): ParsedProviderFeedbackCommand | undefined {
+  const match = /^\/feedback\s+([0-9a-f-]{36})\s+(positive|negative|mixed)(?:\s+([\s\S]*))?$/i.exec(body.trim());
+  if (!match) return undefined;
+  const parsed = z.object({ sourceRunId: z.string().uuid(), sentiment: providerFeedbackSentimentSchema,
+    comment: z.string().max(4_000).optional() }).safeParse({ sourceRunId: match[1]?.toLowerCase(),
+    sentiment: match[2]?.toLowerCase(), comment: match[3]?.trim() || undefined });
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function canonicalizeLabelSet(value: unknown): TrustedLabelSetV1 {

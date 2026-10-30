@@ -22,7 +22,7 @@ import { runtimeVersionManifest, fingerprint, verifierCapabilityHash } from "../
 import { verificationResultIdentityHash } from "../../src/fix/verification/jobs.js";
 import { createWorkflowRegistry, workflowExecutor } from "../../src/agent-runtime/runtime/workflows.js";
 import type { ReviewRunInput } from "../../src/review/intake/run-input.js";
-import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
+import { RunControlError, type RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { RunsService } from "../../src/http/runs/runs.service.js";
 import { FixesService } from "../../src/http/fixes/fixes.service.js";
 import { RunApiContextService } from "../../src/http/common/run-api-context.service.js";
@@ -115,6 +115,7 @@ if (!databaseUrl) {
     process.env.AI_PROVIDER = "openai-compatible"; process.env.AI_MODEL = "fix-dispatch-model";
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-model-key";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing(); process.env.FIX_DEFAULT_POLICY_ID = "node-fixture";
+    process.env.FEATURE_FIX = "on";
     process.env.FIX_VERIFIER_SNAPSHOT_ROOT = snapshotRoot;
     const rawPolicy = policy(); process.env.FIX_POLICY_REGISTRY_JSON = JSON.stringify({ "node-fixture": rawPolicy });
     appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); appDb = new RuntimeDatabase(appPool);
@@ -165,6 +166,24 @@ if (!databaseUrl) {
     assert.equal(duplicate.id, created.id); assert.equal(duplicate.created, false);
     assert.equal((await readdir(snapshotRoot)).filter((name) => /^[a-f0-9]{64}$/.test(name)).length, bundleCount);
     assert.equal(calls.filter(({ method, path }) => method === "POST" && path === "/v1/chat/completions").length, 1);
+
+    const authority = new PublicationAuthorityStore(adminDb);
+    const current = await authority.get(tenantId, integrationId);
+    const disabled = await authority.configureCapabilities({ tenantId, integrationId,
+      expectedVersion: current.version, reviewDeep: true, fix: false, evolution: false,
+      defaultReviewWorkflow: "review.single.v1", actor: "fixture", actorType: "service" });
+    process.env.FEATURE_FIX = "off";
+    try {
+      const disabledReplay = await fixesService.createFix(principal, sourceRunId, "fix-command-1", { findingId });
+      assert.equal(disabledReplay.id, created.id); assert.equal(disabledReplay.created, false);
+      await assert.rejects(fixesService.createFix(principal, sourceRunId, "fix-command-disabled-new", { findingId }),
+        (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+    } finally {
+      process.env.FEATURE_FIX = "on";
+      binding = await authority.configureCapabilities({ tenantId, integrationId,
+        expectedVersion: disabled.version, reviewDeep: true, fix: true, evolution: false,
+        defaultReviewWorkflow: "review.single.v1", actor: "fixture", actorType: "service" });
+    }
   });
 
   async function completeNextVerification(runId: string, workerErrors: unknown[]): Promise<void> {
@@ -202,7 +221,7 @@ if (!databaseUrl) {
     const runs = new RunStore(adminDb); const authority = new PublicationAuthorityStore(adminDb);
     await runs.registerIntegration({ tenantId, id: integrationId, platform: "github", origin, repository });
     await authority.configure({ tenantId, integrationId, providerRepositoryId: 88, providerActorId: 99,
-      credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });
+      credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0, fixEnabled: true });
     const active = await authority.transition({ tenantId, integrationId, expectedVersion: 1, action: "activate",
       actor: "fixture", actorType: "service", quiescenceEvidence: "local fixture" });
     await adminPool.query(`UPDATE pr_agent_harness.integration_bindings

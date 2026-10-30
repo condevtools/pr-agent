@@ -17,6 +17,7 @@ import { releaseBucket } from "../../src/evolution/releases/selection.js";
 import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH,
   REPLAY_VERIFIER_HASH } from "../../src/evolution/evaluations/contracts.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
+import { PublicationAuthorityStore } from "../../src/agent-runtime/authority/publication-authority.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore, type CreateRunInput } from "../../src/agent-runtime/postgres/run-store.js";
 import { buildReviewRunCreationInput } from "../../src/review/intake/run-intake.js";
@@ -100,6 +101,7 @@ if (!databaseUrl) {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("release fixture did not bind");
     origin = `http://127.0.0.1:${address.port}`;
     process.env.EVOLUTION_RELEASE_ACTIVATION_ENABLED = "true";
+    process.env.FEATURE_EVOLUTION = "on";
     process.env.HARNESS_DATABASE_URL = databaseUrl;
     process.env.AI_PROVIDER = "openai-compatible"; process.env.AI_MODEL = "p3c-model";
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-key";
@@ -222,6 +224,36 @@ if (!databaseUrl) {
     } finally { process.env.EVOLUTION_RELEASE_ACTIVATION_ENABLED = previous; }
   });
 
+  test("disabled Evolution fences new release writes while preserving receipts and safe revocation", async () => {
+    assert.ok(qualificationId, "qualification test must run first");
+    const store = new PgEvolutionReleaseStore(db);
+    const revocableInput = { target: "shadow" as const, candidateId, qualificationId,
+      expectedVersion: 0, commandKey: "disabled-revocable" };
+    const revocable = await store.request(maker(), revocableInput, currentManifest);
+    const approvalInput = { target: "shadow" as const, candidateId, qualificationId,
+      expectedVersion: 0, commandKey: "disabled-approval" };
+    const approval = await store.request(maker(), approvalInput, currentManifest);
+    await setEvolutionCapability(false);
+    try {
+      assert.equal((await store.qualify(qualifier(), qualificationInput("qualify-good"), currentManifest)).id,
+        qualificationId);
+      await assert.rejects(store.qualify(qualifier(), qualificationInput("qualify-disabled-new"), currentManifest),
+        (error: unknown) => hasCode(error, "CAPABILITY_DISABLED"));
+      assert.equal((await store.request(maker(), revocableInput, currentManifest)).id, revocable.id);
+      await assert.rejects(store.request(maker(), { ...revocableInput, commandKey: "request-disabled-new" }, currentManifest),
+        (error: unknown) => hasCode(error, "CAPABILITY_DISABLED"));
+      await assert.rejects(store.approve(checker(), { requestId: approval.id, decision: "approve",
+        commandKey: "approve-disabled-new" }, currentManifest),
+      (error: unknown) => hasCode(error, "CAPABILITY_DISABLED"));
+      assert.equal((await store.revoke(maker(), revocable.id, "disabled-safe-revoke")).status, "revoked");
+      assert.equal((await store.revoke(maker(), approval.id, "disabled-safe-revoke-approval")).status, "revoked");
+      assert.equal((await pool.query<{ count: string }>(`SELECT count(*) FROM pr_agent_harness.evolution_release_decisions
+        WHERE tenant_id=$1 AND command_key='approve-disabled-new'`, [tenantId])).rows[0]!.count, "0");
+      assert.equal((await pool.query<{ count: string }>(`SELECT count(*) FROM pr_agent_harness.evolution_release_requests
+        WHERE tenant_id=$1 AND command_key='request-disabled-new'`, [tenantId])).rows[0]!.count, "0");
+    } finally { await setEvolutionCapability(true); }
+  });
+
   test("maker-checker request is idempotent and the maker cannot approve it", async () => {
     assert.ok(qualificationId, "qualification test must run first");
     const store = new PgEvolutionReleaseStore(db);
@@ -329,6 +361,20 @@ if (!databaseUrl) {
     assert.doesNotMatch(JSON.stringify(selection), /prompt_text|tool_description_text|P3C_RELEASE_CANDIDATE/);
     assert.equal((await fetch(`${apiOrigin}/runs/${selectedRunId}/trace`, {
       headers: { authorization: `Bearer ${crossApiToken}` }, signal: AbortSignal.timeout(5_000) })).status, 404);
+  });
+
+  test("disabled Evolution freezes the baseline without reading an active assignment", async () => {
+    const previous = process.env.FEATURE_EVOLUTION;
+    process.env.FEATURE_EVOLUTION = "off";
+    try {
+      const creation = await buildReviewRunCreationInput(await releaseBinding(), reviewInput("evolution-off"));
+      await assertFrozenBaseline(creation);
+    } finally {
+      process.env.FEATURE_EVOLUTION = previous;
+    }
+    const binding = await releaseBinding();
+    await assertFrozenBaseline(await buildReviewRunCreationInput({ ...binding,
+      capabilities: { ...binding.capabilities, evolution: false } }, reviewInput("binding-evolution-off")));
   });
 
   test("aged canary rejects 99 observations per arm", async () => {
@@ -494,15 +540,74 @@ if (!databaseUrl) {
     (error: unknown) => error instanceof Error);
   });
 
+  test("HTTP release controls and exact receipts remain available after Evolution is disabled", async () => {
+    const store = new PgEvolutionReleaseStore(db);
+    const before = await store.read({ ...checker(), permissions: ["evolution:release:read"] });
+    const qualificationBody = { candidateId, datasetId, validationEvaluationId, holdoutEvaluationId };
+    const qualified = await apiRequest("/evolution/releases/qualify", "http-off-qualification", qualificationBody);
+    assert.equal(qualified.status, 201);
+
+    const activation = await store.request(maker(), { target: "shadow", candidateId, qualificationId,
+      expectedVersion: before.version, commandKey: "http-off-activation" }, currentManifest);
+    const activated = await apiRequest("/evolution/releases/approve", "http-off-activation-approve",
+      { requestId: activation.id, decision: "approve" });
+    assert.equal(activated.status, 201);
+    const active = await activated.json() as { version: number };
+
+    const revocableBody = { target: "canary", candidateId, qualificationId,
+      expectedVersion: active.version, candidateBps: 100 };
+    const revocableResponse = await apiRequest("/evolution/releases/request", "http-off-revocable", revocableBody);
+    assert.equal(revocableResponse.status, 202);
+    const revocable = await revocableResponse.json() as { id: string };
+    const rejectable = await store.request(maker(), { ...revocableBody,
+      commandKey: "http-off-rejectable" }, currentManifest);
+
+    const previousFeature = process.env.FEATURE_EVOLUTION;
+    const previousProvider = process.env.AI_PROVIDER;
+    const previousModel = process.env.AI_MODEL;
+    const previousPricing = process.env.HARNESS_MODEL_PRICING_JSON;
+    await setEvolutionCapability(false);
+    process.env.FEATURE_EVOLUTION = "off";
+    try {
+      assert.equal((await apiRequest("/evolution/releases/qualify", "http-off-qualification", qualificationBody)).status, 201);
+      assert.equal((await apiRequest("/evolution/releases/request", "http-off-revocable", revocableBody)).status, 202);
+      const denied = await apiRequest("/evolution/releases/request", "http-off-new", revocableBody);
+      assert.equal(denied.status, 409);
+
+      delete process.env.AI_PROVIDER; delete process.env.AI_MODEL; delete process.env.HARNESS_MODEL_PRICING_JSON;
+      assert.equal((await apiRequest("/evolution/releases/approve", "http-off-reject",
+        { requestId: rejectable.id, decision: "reject" })).status, 201);
+      assert.equal((await apiRequest("/evolution/releases/revoke", "http-off-revoke",
+        { requestId: revocable.id })).status, 201);
+      assert.equal((await apiRequest("/evolution/releases/rollback", "http-off-rollback",
+        { expectedVersion: active.version, reason: "Disable the experimental release safely after feature shutdown." })).status, 201);
+    } finally {
+      process.env.FEATURE_EVOLUTION = previousFeature;
+      process.env.AI_PROVIDER = previousProvider;
+      process.env.AI_MODEL = previousModel;
+      process.env.HARNESS_MODEL_PRICING_JSON = previousPricing;
+      await setEvolutionCapability(true);
+    }
+  });
+
   function qualificationInput(commandKey: string) {
     return { candidateId, datasetId, validationEvaluationId, holdoutEvaluationId, commandKey };
   }
 
   async function releaseBinding() {
-    return { id: integrationId, tenantId, platform: "github" as const, origin, repository: "acme/release",
-      providerRepositoryId: 700, providerActorId: 7, credentialRef: "env:GITHUB_TOKEN",
-      generation: 1, version: 0, state: "active" as const, reviewExecutionMode: "harness_async" as const,
-      executionModeGeneration: 1, reviewExecutionState: "active" as const };
+    return new PublicationAuthorityStore(db).get(tenantId, integrationId);
+  }
+
+  async function assertFrozenBaseline(creation: CreateRunInput): Promise<void> {
+    const run = await new RunStore(db).createRun(creation);
+    const selection = (await pool.query<{ selection: string; assignment_version: string; routing: string }>(
+      `SELECT selection,assignment_version,routing FROM pr_agent_harness.evolution_run_assignments
+       WHERE tenant_id=$1 AND run_id=$2`, [tenantId, run.id])).rows[0]!;
+    assert.deepEqual(selection, { selection: "baseline", assignment_version: "0", routing: "off" });
+    await pool.query("UPDATE pr_agent_harness.agent_runs SET status='cancelled',finished_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2",
+      [tenantId, run.id]);
+    await pool.query("UPDATE pr_agent_harness.job_queue SET status='completed' WHERE tenant_id=$1 AND run_id=$2",
+      [tenantId, run.id]);
   }
 
   function reviewInput(sourceKey: string) {
@@ -655,14 +760,20 @@ if (!databaseUrl) {
   async function seedBinding(client: PoolClient): Promise<void> {
     await client.query(`INSERT INTO pr_agent_harness.integration_bindings
       (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,
-       publication_state,publication_generation,quiescence_receipt,review_execution_mode,execution_mode_generation,review_execution_state)
+       publication_state,publication_generation,quiescence_receipt,review_execution_mode,execution_mode_generation,review_execution_state,evolution_enabled)
       VALUES ($1,$2,'github',$3,'acme/release',700,7,'env:GITHUB_TOKEN',
-       'active',1,'{}'::jsonb,'harness_async',1,'active')`, [integrationId, tenantId, origin]);
+       'active',1,'{}'::jsonb,'harness_async',1,'active',true)`, [integrationId, tenantId, origin]);
     await client.query(`INSERT INTO pr_agent_harness.integration_bindings
       (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,
-       publication_state,publication_generation,quiescence_receipt,review_execution_mode,execution_mode_generation,review_execution_state)
+       publication_state,publication_generation,quiescence_receipt,review_execution_mode,execution_mode_generation,review_execution_state,evolution_enabled)
       VALUES ($1,$2,'github',$3,'acme/other-release',701,7,'env:GITHUB_TOKEN',
-       'active',1,'{}'::jsonb,'harness_async',1,'active')`, [otherIntegrationId, tenantId, origin]);
+       'active',1,'{}'::jsonb,'harness_async',1,'active',true)`, [otherIntegrationId, tenantId, origin]);
+  }
+
+  async function setEvolutionCapability(enabled: boolean): Promise<void> {
+    await pool.query(`UPDATE pr_agent_harness.integration_bindings
+      SET evolution_enabled=$3,authority_version=authority_version+1 WHERE tenant_id=$1 AND id=$2`,
+    [tenantId, integrationId, enabled]);
   }
 
   async function seedDatasetCases(client: PoolClient): Promise<void> {

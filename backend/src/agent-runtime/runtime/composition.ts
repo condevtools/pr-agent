@@ -1,19 +1,25 @@
 import { EvaluationCoordinator } from "../../evolution/evaluations/run.js";
 import { PgEvolutionEvaluationStore } from "../../evolution/evaluations/store.js";
-import { resolveModelConfiguration } from "../../model/configuration.js";
-import { getModelExecutionPolicy, ModelBudgetStore } from "../budget/model-budget-store.js";
+import { ModelBudgetStore } from "../budget/model-budget-store.js";
 import { RunWorker } from "../execution/run-worker.js";
 import { RunExecutionStore } from "../execution/store.js";
 import { PublicationControlStore } from "../publication/control.js";
 import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "../publication/outcome.js";
 import { createPublicationRecoveryLoop, type PublicationRecoveryLoop } from "../publication/recovery.js";
-import { runtimeVersionManifest } from "../versions.js";
+import { loadFixPolicyRegistry } from "../../fix/proposal/policy.js";
 import { roleStartsRecovery, roleStartsWorker, type AgentProcessRole } from "./config.js";
+import { bindingAllowsCapability, resolveRuntimeCapabilities, supportedWorkflowIds,
+  supportedWorkflowIdsForBinding,
+  type RuntimeCapabilityConfiguration } from "./capabilities.js";
 import { clearSharedCredentialRuntime } from "./credentials.js";
+import { ProcessHeartbeatLoop, ProcessHeartbeatStore, resolveProcessHeartbeatConfiguration } from "./heartbeat.js";
 import { publicationRuntimeForBinding } from "./publication.js";
 import { closeApplicationRuntimeServices, createAgentRuntimeServices, withAgentRuntimeServices,
   type AgentRuntimeServices } from "./services.js";
 import { createWorkflowRegistry, workflowExecutor, type WorkflowExecutor } from "./workflows.js";
+import { resolveWorkerCompatibility, type WorkerCompatibility } from "./worker-compatibility.js";
+
+export { supportedWorkflowIds } from "./capabilities.js";
 
 export interface RuntimeRoleStatus {
   role: "worker" | "recovery";
@@ -26,17 +32,20 @@ export interface RuntimeRoleStatus {
 }
 
 export class AgentRuntimeComposition {
-  private worker?: { services: AgentRuntimeServices; loop: RunWorker };
-  private recovery?: { services: AgentRuntimeServices; loop: PublicationRecoveryLoop };
+  private worker?: { services: AgentRuntimeServices; loop: RunWorker; heartbeat: ProcessHeartbeatLoop };
+  private recovery?: { services: AgentRuntimeServices; loop: PublicationRecoveryLoop; heartbeat: ProcessHeartbeatLoop };
   private readonly statuses = new Map<"worker" | "recovery", RuntimeRoleStatus>([
     ["worker", { role: "worker", state: "stopped" }],
     ["recovery", { role: "recovery", state: "stopped" }],
   ]);
   private readonly execute: WorkflowExecutor;
+  private capabilities?: RuntimeCapabilityConfiguration;
 
   constructor(registry = createWorkflowRegistry()) { this.execute = workflowExecutor(registry); }
 
   async start(role: AgentProcessRole): Promise<void> {
+    this.capabilities = validateCapabilityDependencies();
+    resolveProcessHeartbeatConfiguration();
     if (roleStartsRecovery(role)) await this.startRecovery();
     if (roleStartsWorker(role)) await this.startWorker();
   }
@@ -47,24 +56,32 @@ export class AgentRuntimeComposition {
     if (this.recovery) return;
     this.setStatus("recovery", "starting");
     const services = createAgentRuntimeServices();
+    let heartbeat: ProcessHeartbeatLoop | undefined;
     try {
       await services.assertRole();
+      const activeHeartbeat = this.processHeartbeat(services, "recovery");
+      heartbeat = activeHeartbeat;
+      await activeHeartbeat.start();
       const loop = createPublicationRecoveryLoop({
         db: services.db, authority: services.authority,
         batchStore: services.batchStore, batchCoordinator: services.batchCoordinator,
         runtimeForBinding: (binding) => publicationRuntimeForBinding(binding, services),
-        onActivity: () => this.recordActivity("recovery"),
+        onActivity: () => {
+          this.recordActivity("recovery");
+          void activeHeartbeat.recordActivity().catch((error) => this.recordError("recovery", error));
+        },
         onError: (error, context) => {
           this.recordError("recovery", error);
           process.emitWarning(JSON.stringify({ component: "publication-recovery", ...context,
             errorType: error instanceof Error ? error.name : "unknown" }));
         },
       });
-      this.recovery = { services, loop };
+      this.recovery = { services, loop, heartbeat: activeHeartbeat };
       loop.start();
       this.setStatus("recovery", "running");
     } catch (error) {
       this.recordError("recovery", error, "failed");
+      await heartbeat?.stop().catch((stopError) => this.recordError("recovery", stopError, "failed"));
       await services.close();
       throw error;
     }
@@ -74,9 +91,17 @@ export class AgentRuntimeComposition {
     if (this.worker) return;
     this.setStatus("worker", "starting");
     const services = createAgentRuntimeServices();
+    let heartbeat: ProcessHeartbeatLoop | undefined;
     try {
       await services.assertRole();
-      const store = new RunExecutionStore(services.db);
+      const capabilities = this.capabilities ?? validateCapabilityDependencies();
+      const compatibility = await resolveWorkerCompatibility(capabilities);
+      const activeHeartbeat = this.processHeartbeat(services, "worker", compatibility);
+      heartbeat = activeHeartbeat;
+      await activeHeartbeat.start();
+      const store = new RunExecutionStore(services.db, {
+        supportedWorkflows: compatibility.supportedWorkflowIds,
+      });
       const budget = new ModelBudgetStore(services.db);
       const outcomes = new PublicationOutcomeCoordinator({ db: services.db, batchStore: services.batchStore });
       const evaluations = new EvaluationCoordinator(new PgEvolutionEvaluationStore(services.db));
@@ -91,7 +116,11 @@ export class AgentRuntimeComposition {
       const loop = new RunWorker({
         store, budget, outcomeHandler,
         coordinateOutcomes: async (binding) => {
-          const results = await Promise.allSettled([outcomes.tick(binding), evaluations.tick(binding)]);
+          const tasks: Promise<unknown>[] = [outcomes.tick(binding)];
+          if (bindingAllowsCapability(binding, "evolution", capabilities)) {
+            tasks.push(evaluations.tick(binding));
+          }
+          const results = await Promise.allSettled(tasks);
           for (const result of results) if (result.status === "rejected") {
             this.recordError("worker", result.reason);
             process.emitWarning(JSON.stringify({ component: "harness-coordinator",
@@ -101,12 +130,13 @@ export class AgentRuntimeComposition {
         bindings: async () => {
           const bindings = await services.authority.listRecoverable();
           this.recordActivity("worker");
+          await activeHeartbeat.recordActivity();
           return bindings;
         },
-        runtimeHash: async () => {
-          const { provider, model } = resolveModelConfiguration();
-          return (await runtimeVersionManifest(getModelExecutionPolicy(provider, model))).runtimeVersionHash;
-        },
+        runtimeHash: async () => compatibility.runtimeVersionHash,
+        supportedWorkflows: (binding) => supportedWorkflowIdsForBinding(
+          capabilities, binding,
+        ),
         execute: (lease, binding) => withAgentRuntimeServices(services, () => this.execute(lease, binding)),
         onError: (error, runId) => {
           this.recordError("worker", error);
@@ -114,11 +144,12 @@ export class AgentRuntimeComposition {
             errorType: error instanceof Error ? error.name : "unknown" }));
         },
       });
-      this.worker = { services, loop };
+      this.worker = { services, loop, heartbeat: activeHeartbeat };
       loop.start();
       this.setStatus("worker", "running");
     } catch (error) {
       this.recordError("worker", error, "failed");
+      await heartbeat?.stop().catch((stopError) => this.recordError("worker", stopError, "failed"));
       await services.close();
       throw error;
     }
@@ -130,7 +161,10 @@ export class AgentRuntimeComposition {
     this.worker = undefined;
     this.setStatus("worker", "stopping");
     try { await current.loop.stop(); }
-    finally { await current.services.close(); this.setStatus("worker", "stopped"); }
+    finally {
+      await current.heartbeat.stop().catch((error) => this.recordError("worker", error));
+      await current.services.close(); this.setStatus("worker", "stopped");
+    }
   }
 
   async stopRecovery(): Promise<void> {
@@ -139,7 +173,10 @@ export class AgentRuntimeComposition {
     this.recovery = undefined;
     this.setStatus("recovery", "stopping");
     try { await current.loop.stop(); }
-    finally { await current.services.close(); this.setStatus("recovery", "stopped"); }
+    finally {
+      await current.heartbeat.stop().catch((error) => this.recordError("recovery", error));
+      await current.services.close(); this.setStatus("recovery", "stopped");
+    }
   }
 
   async quiesce(): Promise<void> {
@@ -187,7 +224,39 @@ export class AgentRuntimeComposition {
   private recordActivity(role: "worker" | "recovery"): void {
     this.statuses.set(role, { ...this.statuses.get(role)!, lastActivityAt: new Date().toISOString() });
   }
+
+  private processHeartbeat(
+    services: AgentRuntimeServices,
+    role: "worker" | "recovery",
+    workerCompatibility?: WorkerCompatibility,
+  ): ProcessHeartbeatLoop {
+    return new ProcessHeartbeatLoop(
+      new ProcessHeartbeatStore(services.pool),
+      role,
+      role === "worker" ? { schemaVersion: 2,
+        capabilities: this.capabilities ?? validateCapabilityDependencies(),
+        supportedWorkflowIds: workerCompatibility?.supportedWorkflowIds ?? [],
+        runtimeVersionHash: workerCompatibility?.runtimeVersionHash ?? "" }
+        : { schemaVersion: 1 },
+      undefined,
+      (error) => this.recordError(role, error),
+      false,
+    );
+  }
 }
 
 const activeComposition = new AgentRuntimeComposition();
 export function runtimeComposition(): AgentRuntimeComposition { return activeComposition; }
+
+export function validateCapabilityDependencies(
+  env: NodeJS.ProcessEnv = process.env,
+): RuntimeCapabilityConfiguration {
+  const capabilities = resolveRuntimeCapabilities(env);
+  if (capabilities.fix) {
+    const policyId = env.FIX_DEFAULT_POLICY_ID!.trim();
+    if (!loadFixPolicyRegistry(env.FIX_POLICY_REGISTRY_JSON).has(policyId)) {
+      throw new Error("FEATURE_FIX=on requires FIX_DEFAULT_POLICY_ID in FIX_POLICY_REGISTRY_JSON");
+    }
+  }
+  return capabilities;
+}

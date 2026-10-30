@@ -11,6 +11,7 @@ import { RunControlError } from "../../../agent-runtime/runs/control-contracts.j
 import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { RunApiContextService } from "../../common/run-api-context.service.js";
+import { requireEvolutionCapability } from "../capability.js";
 
 const uuid = z.string().uuid();
 
@@ -22,11 +23,13 @@ export class DatasetsService {
 
   async create(request: Request, body: unknown) {
     const principal = this.authenticate(request);
+    await requireEvolutionCapability(this.context, principal);
     return (await this.store()).create(principal, createDatasetSchema.parse(body));
   }
 
   async addCase(request: Request, datasetId: string, body: unknown) {
     const principal = this.authenticate(request); uuid.parse(datasetId);
+    await requireEvolutionCapability(this.context, principal);
     const input = addDatasetCaseSchema.parse(body);
     const store = await this.store();
     const source = await store.loadCaseSource(principal, datasetId, input.sourceRunId, input.labelSetId);
@@ -47,6 +50,7 @@ export class DatasetsService {
 
   async freeze(request: Request, datasetId: string, body: unknown) {
     const principal = this.authenticate(request); uuid.parse(datasetId);
+    await requireEvolutionCapability(this.context, principal);
     const input = freezeDatasetSchema.parse(body);
     return (await this.store()).freeze(principal, datasetId, input.expectedVersion);
   }

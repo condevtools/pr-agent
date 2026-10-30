@@ -15,6 +15,10 @@ import { createRunInTransaction, RunStore } from "../../src/agent-runtime/postgr
 const url = process.env.HARNESS_TEST_DATABASE_URL;
 if (!url) test.skip("Snapshot GC requires disposable Docker PostgreSQL", () => {});
 else test("snapshot retention preserves queued intake references, removes purged content, and never follows symlinks", async () => {
+  const previousFixCapability = process.env.FEATURE_FIX;
+  const previousFixPolicy = process.env.FIX_DEFAULT_POLICY_ID;
+  process.env.FEATURE_FIX = "on";
+  process.env.FIX_DEFAULT_POLICY_ID = "snapshot-gc-fixture";
   if (!/^harness_test_/.test(new URL(url).pathname.slice(1))) throw new Error("Disposable database required");
   const pool = new Pool({ connectionString: url });
   const db = new RuntimeDatabase(pool);
@@ -26,6 +30,7 @@ else test("snapshot retention preserves queued intake references, removes purged
     const version = "a".repeat(64);
     await new RunStore(db).registerIntegration({ tenantId,id: integrationId,platform: "github",
       origin: "https://api.github.test",repository: `gc/${randomUUID()}` });
+    await pool.query("UPDATE pr_agent_harness.integration_bindings SET fix_enabled=true WHERE id=$1", [integrationId]);
     const { bundle,run } = await db.transaction(tenantId,async (client) => {
       await lockFixSnapshots(client);
       const bundle = await writeSnapshotBundle({ root,headSha: "b".repeat(40),dependencyLockHash: version,
@@ -48,5 +53,11 @@ else test("snapshot retention preserves queued intake references, removes purged
     assert.equal((await collectFixSnapshots({db,root,apply:true})).removed,1);
     await assert.rejects(stat(directory),{code:"ENOENT"});
     assert.equal((await stat(join(outside,"keep"))).isFile(),true);
-  } finally { await pool.end(); await rm(root,{recursive:true,force:true}); await rm(outside,{recursive:true,force:true}); }
+  } finally {
+    if (previousFixCapability === undefined) delete process.env.FEATURE_FIX;
+    else process.env.FEATURE_FIX = previousFixCapability;
+    if (previousFixPolicy === undefined) delete process.env.FIX_DEFAULT_POLICY_ID;
+    else process.env.FIX_DEFAULT_POLICY_ID = previousFixPolicy;
+    await pool.end(); await rm(root,{recursive:true,force:true}); await rm(outside,{recursive:true,force:true});
+  }
 });

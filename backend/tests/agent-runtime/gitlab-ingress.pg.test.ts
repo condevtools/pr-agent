@@ -44,7 +44,8 @@ if (!databaseUrl) {
       GRANT SELECT, INSERT ON pr_agent_harness.run_events,
         pr_agent_harness.audit_logs, pr_agent_harness.model_pricing_snapshots TO ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
-        pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${role};
+        pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
+      pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${role};
     `);
 
     const appUrl = new URL(databaseUrl);

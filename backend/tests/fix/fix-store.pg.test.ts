@@ -15,6 +15,10 @@ import type { FixApprovalIntent } from "../../src/fix/approval/contracts.js";
 import type { VerificationResult } from "../../src/fix/contracts.js";
 import { PublicationBatchStore } from "../../src/agent-runtime/publication/batches.js";
 import { prepareHarnessRuntimeRoles } from "../support/harness-runtime-roles.js";
+import { RunControlError } from "../../src/agent-runtime/runs/control-contracts.js";
+import { FixesService } from "../../src/http/fixes/fixes.service.js";
+import { RunApiContextService } from "../../src/http/common/run-api-context.service.js";
+import { closeAgentRuntime } from "../../src/agent-runtime/runtime.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -45,17 +49,20 @@ if (!databaseUrl) {
     imageDigest, policyHash: fingerprint("policy"), proposalHash };
 
   before(async () => {
+    process.env.FEATURE_FIX = "on";
+    process.env.FIX_DEFAULT_POLICY_ID = "fix-store-fixture";
     await prepareHarnessRuntimeRoles(pool, { app: "app-test", verifier: "verifier-test-password-123" });
     await migrateRuntime(pool);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = "app-test";
+    process.env.HARNESS_DATABASE_URL = appUrl.toString();
     appPool = new Pool({ connectionString: appUrl.toString(), max: 2 }); appDb = new RuntimeDatabase(appPool);
     await pool.query(
       `INSERT INTO pr_agent_harness.integration_bindings
          (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,
           publication_state,publication_generation,authority_version,review_execution_mode,execution_mode_generation,
-          review_execution_state,quiescence_receipt)
+          review_execution_state,quiescence_receipt,fix_enabled)
        VALUES ($1,$2,'github','https://github.example.test','acme/fix',88,1,'env:GITHUB_TOKEN',
-         'active',1,1,'harness_async',1,'active','{}'::jsonb)`, [integrationId, tenantId]);
+         'active',1,1,'harness_async',1,'active','{}'::jsonb,true)`, [integrationId, tenantId]);
     await insertRun(sourceRunId, "review.deep.v1", "succeeded");
     await insertRun(fixRunId, "fix.propose.v1", "running");
     await pool.query(
@@ -124,7 +131,7 @@ if (!databaseUrl) {
         verifierCapability, verificationInputHash, proposal.trustedCommandHash, proposal.dependencyLockHash,
         proposal.sandboxPolicyHash, imageDigest]);
   });
-  after(async () => { await appPool?.end(); await pool.end(); });
+  after(async () => { await closeAgentRuntime(); await appPool?.end(); await pool.end(); });
 
   test("versioned migration grants verifier only bounded SECURITY DEFINER functions and no harness tables", async () => {
     const verifierUrl = new URL(databaseUrl); verifierUrl.username = "pr_agent_verifier";
@@ -322,6 +329,19 @@ if (!databaseUrl) {
       verificationResultHash: fingerprint(verificationResult), rubricVersion: "fix-relevance.v1",
       reason: "The added test directly exercises the reviewed unsafe behavior.", commandKey: "attest-1",
       actor: { type: "user", id: "checker" } });
+    await setFixCapability(false);
+    assert.equal((await store.attestRelevance({ tenantId, integrationId, proposalRunId: fixRunId,
+      proposalId, proposalHash, testPatchHash: fingerprint("test"), findingId,
+      verificationResultHash: fingerprint(verificationResult), rubricVersion: "fix-relevance.v1",
+      reason: "The added test directly exercises the reviewed unsafe behavior.", commandKey: "attest-1",
+      actor: { type: "user", id: "checker" } })).id, relevance.id);
+    await assert.rejects(store.attestRelevance({ tenantId, integrationId, proposalRunId: fixRunId,
+      proposalId, proposalHash, testPatchHash: fingerprint("test"), findingId,
+      verificationResultHash: fingerprint(verificationResult), rubricVersion: "fix-relevance.v1",
+      reason: "The added test directly exercises the reviewed unsafe behavior.", commandKey: "attest-disabled",
+      actor: { type: "user", id: "checker" } }),
+    (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+    await setFixCapability(true);
     const intent: FixApprovalIntent = { proposalId, proposalHash, sourceReviewRunId: sourceRunId, findingId,
       headSha: "2".repeat(40), sourceBundleHash: fingerprint("bundle"), codePatchHash: fingerprint("code"),
       testPatchHash: fingerprint("test"), policyHash: verificationResult.policyHash,
@@ -342,6 +362,16 @@ if (!databaseUrl) {
       tenantId, integrationId, proposalRunId: fixRunId, proposalId, intent,
       commandKey: "preview-2", maker: { type: "user", id: "maker" }, ttlSeconds: 3_600 }));
     assert.notEqual(receipt.approvalId, expiredApprovalId);
+    await setFixCapability(false);
+    assert.equal((await db.transaction(tenantId, (client) => createApprovalInTransaction(client, {
+      tenantId, integrationId, proposalRunId: fixRunId, proposalId, intent,
+      commandKey: "preview-2", maker: { type: "user", id: "maker" }, ttlSeconds: 3_600 }))).approvalId,
+    receipt.approvalId);
+    await assert.rejects(db.transaction(tenantId, (client) => createApprovalInTransaction(client, {
+      tenantId, integrationId, proposalRunId: fixRunId, proposalId, intent,
+      commandKey: "preview-disabled", maker: { type: "user", id: "maker" }, ttlSeconds: 3_600 })),
+    (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+    await setFixCapability(true);
     const generations = await pool.query<{ id: string; status: string; generation: number }>(
       `SELECT id,status,generation FROM pr_agent_harness.fix_approval_requests
        WHERE tenant_id=$1 AND proposal_run_id=$2 ORDER BY generation`, [tenantId, fixRunId]);
@@ -349,11 +379,9 @@ if (!databaseUrl) {
       { id: expiredApprovalId, status: "expired", generation: 1 },
       { id: receipt.approvalId, status: "open", generation: 2 },
     ]);
-    const approved = await db.transaction(tenantId, (client) => approveFixApprovalInTransaction(client, {
-      tenantId, integrationId, approvalId: receipt.approvalId, commandKey: "approve-1",
-      requestHash: fingerprint("approve-1"), expectedVersion: receipt.version,
-      actor: { type: "user", id: "checker" },
-    }, async (transaction, exact) => (await createRunInTransaction(transaction, {
+    const createPublishRun = async (transaction: Parameters<typeof createRunInTransaction>[0], exact: {
+      proposalRunId: string; approvalId: string; intentHash: string;
+    }) => (await createRunInTransaction(transaction, {
       tenantId, integrationId, actorType: "user", actorId: "checker", parentRunId: exact.proposalRunId,
       createScope: `fix.publish.v1:${integrationId}`, createKey: `approval:${exact.approvalId}`,
       requestHash: exact.intentHash, runType: "fix.publish.v1", baseSha: "1".repeat(40), headSha: "2".repeat(40),
@@ -362,11 +390,37 @@ if (!databaseUrl) {
       input: { workflow: "fix.publish.v1", approvalId: exact.approvalId }, authorityGeneration: 1,
       executionModeGeneration: 1, runtimeConfig: { maxRunMs: 60_000, maxJobAttempts: 2, maxStepAttempts: 2 },
       limits: { maxRunMs: 60_000, maxJobAttempts: 2, maxStepAttempts: 2 },
-    })).id));
+    })).id;
+    await setFixCapability(false);
+    await assert.rejects(db.transaction(tenantId, (client) => approveFixApprovalInTransaction(client, {
+      tenantId, integrationId, approvalId: receipt.approvalId, commandKey: "approve-disabled",
+      requestHash: fingerprint("approve-disabled"), expectedVersion: receipt.version,
+      actor: { type: "user", id: "checker" },
+    }, createPublishRun)),
+    (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+    assert.equal((await pool.query<{ count: string }>(
+      "SELECT count(*) FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND parent_run_id=$2",
+      [tenantId, fixRunId])).rows[0]!.count, "0");
+    await setFixCapability(true);
+    const approved = await db.transaction(tenantId, (client) => approveFixApprovalInTransaction(client, {
+      tenantId, integrationId, approvalId: receipt.approvalId, commandKey: "approve-1",
+      requestHash: fingerprint("approve-1"), expectedVersion: receipt.version,
+      actor: { type: "user", id: "checker" },
+    }, createPublishRun));
     assert.equal(approved.status, "approved");
     const child = await pool.query<{ parent_run_id: string }>(
       "SELECT parent_run_id FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2", [tenantId, approved.publishRunId]);
     assert.equal(child.rows[0]!.parent_run_id, fixRunId);
+    await setFixCapability(false); process.env.FEATURE_FIX = "off";
+    try {
+      const revoked = await new FixesService({} as RunApiContextService).revokeFix({
+        tenantId, integrationId, subjectId: "maker", actorType: "user", permissions: ["fixes:revoke"],
+      }, fixRunId, receipt.approvalId, { commandKey: "revoke-disabled", intentHash: fingerprint(intent),
+        expectedVersion: approved.version });
+      assert.equal(revoked.status, "revoked");
+    } finally {
+      process.env.FEATURE_FIX = "on"; await setFixCapability(true);
+    }
     await assert.rejects(
       new PublicationBatchStore(db).freeze({ scope: { tenantId, integrationId, platform: "github",
         origin: "https://github.example.test", repository: "acme/fix", target: "pull:1", revision: "2".repeat(40),
@@ -388,5 +442,11 @@ if (!databaseUrl) {
       [id, tenantId, integrationId, runType, version, runType, "1".repeat(40), "2".repeat(40), status,
         status === "running" ? "worker" : null, status === "running" ? new Date(Date.now() + 600_000) : null,
         status === "succeeded" ? new Date() : null]);
+  }
+
+  async function setFixCapability(enabled: boolean): Promise<void> {
+    await pool.query(`UPDATE pr_agent_harness.integration_bindings
+      SET fix_enabled=$3,authority_version=authority_version+1 WHERE tenant_id=$1 AND id=$2`,
+    [tenantId, integrationId, enabled]);
   }
 }

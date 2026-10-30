@@ -8,7 +8,9 @@ import { currentRunExecutionContext } from "../../agent-runtime/execution/run-co
 import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
 import { AGENT_RUNTIME_CONFIG, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../strategy/text-components.js";
-import { recordDeepReleaseSelection, resolveDeepReleaseSelection } from "../../evolution/releases/selection.js";
+import { recordDeepReleaseSelection, resolveBaselineDeepReleaseSelection,
+  resolveDeepReleaseSelection } from "../../evolution/releases/selection.js";
+import { bindingAllowsCapability } from "../../agent-runtime/runtime/capabilities.js";
 
 export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {
   if (!binding) throw new Error("Trusted PostgreSQL review execution binding is required");
@@ -54,18 +56,22 @@ export async function buildReviewRunCreationInput(
     tenantId: binding.tenantId, integrationId: binding.id,
     actorType: identity?.actorType ?? "service", actorId: identity?.actorId ?? `integration:${binding.id}`,
     parentRunId: identity?.parentRunId,
-    createScope: `review.single.v1:${binding.id}`, createKey: parsed.source.key,
+    createScope: `${parsed.workflow}:${binding.id}`, createKey: parsed.source.key,
     // Configuration revisions do not turn a redelivered event into a new request.
     requestHash: reviewCreationRequestHash(parsed),
     runType: parsed.workflow, baseSha: parsed.revision.baseSha, headSha: parsed.revision.headSha,
     ...manifest, input: parsed, authorityGeneration: binding.generation,
+    bindingAuthorityVersion: binding.version,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
     runtimeConfig,
     limits: { maxRunMs: AGENT_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: AGENT_RUNTIME_CONFIG.maxJobAttempts,
       maxStepAttempts: AGENT_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
     admission: (client, runId) => reserveRunBudgetInTransaction(client, { tenantId: binding.tenantId, runId, policy }),
     ...(parsed.workflow === "review.deep.v1" ? { prepareNewRun: async (client) => {
-      const selected = await resolveDeepReleaseSelection(client, { binding, reviewInput: parsed, baseManifest });
+      const selectionInput = { binding, reviewInput: parsed, baseManifest };
+      const selected = bindingAllowsCapability(binding, "evolution")
+        ? await resolveDeepReleaseSelection(client, selectionInput)
+        : resolveBaselineDeepReleaseSelection(selectionInput);
       if (selected.manifest.runtimeVersionHash !== baseManifest.runtimeVersionHash
           || selected.manifest.workflowVersionHash !== baseManifest.workflowVersionHash
           || selected.manifest.modelVersionHash !== baseManifest.modelVersionHash

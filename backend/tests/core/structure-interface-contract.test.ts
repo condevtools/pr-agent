@@ -20,6 +20,7 @@ const EXPECTED_HTTP_ROUTES = [
   "GET /gitlab/health",
   "GET /health",
   "GET /metrics",
+  "GET /ready",
   "GET /runs/:id",
   "GET /runs/:id/artifact",
   "GET /runs/:id/events",

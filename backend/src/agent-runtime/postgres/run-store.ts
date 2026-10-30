@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
 
 import { RuntimeDatabase } from "./database.js";
+import { workflowCapability } from "../runtime/capabilities.js";
+import { lockCurrentBindingCapability } from "../authority/capability-guard.js";
 
 export type IntegrationPlatform = "github" | "gitlab";
 export type RunStatus =
@@ -42,6 +44,8 @@ export interface CreateRunInput {
   sourceAuditHash?: string;
   input: Record<string, unknown>;
   authorityGeneration?: number;
+  /** Binding authority version observed while constructing this capability-scoped Run. */
+  bindingAuthorityVersion?: number;
   runtimeConfig?: Record<string, unknown>;
   limits?: Record<string, unknown>;
   deadlineAt?: string;
@@ -127,17 +131,12 @@ export class RunStore {
   ): Promise<CreatedRun> {
     validateCreateRunInput(input);
     let execution = normalizeRunExecutionConfig(input);
-      const binding = await client.query(
-        `
-          SELECT 1
-          FROM pr_agent_harness.integration_bindings
-          WHERE tenant_id = $1 AND id = $2 AND active
-        `,
+      const activeBinding = await client.query(
+        `SELECT 1 FROM pr_agent_harness.integration_bindings
+         WHERE tenant_id=$1 AND id=$2 AND active`,
         [input.tenantId, input.integrationId],
       );
-      if (binding.rowCount !== 1) {
-        throw new Error("active integration binding not found for tenant");
-      }
+      if (activeBinding.rowCount !== 1) throw new Error("active integration binding not found for tenant");
       if (input.prepareNewRun) {
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,2002))",
           [JSON.stringify([input.tenantId, input.createScope, input.createKey])]);
@@ -151,6 +150,12 @@ export class RunStore {
         )).rows[0] : undefined;
       if (duplicate && (duplicate.integration_id !== input.integrationId || duplicate.request_hash !== input.requestHash)) {
         throw new RunCreateConflictError();
+      }
+      const capability = workflowCapability(input.runType);
+      if (!duplicate && capability) {
+        await lockCurrentBindingCapability(client, { tenantId: input.tenantId,
+          integrationId: input.integrationId, capability,
+          expectedAuthorityVersion: input.bindingAuthorityVersion });
       }
       if (input.executionModeGeneration !== undefined) {
         if (duplicate) {
@@ -421,6 +426,7 @@ function validateCreateRunInput(input: CreateRunInput): void {
   }
   for (const [name, value] of [
     ["authority generation", input.authorityGeneration],
+    ["binding authority version", input.bindingAuthorityVersion],
     ["execution mode generation", input.executionModeGeneration],
   ] as const) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {

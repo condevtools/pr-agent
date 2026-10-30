@@ -88,7 +88,8 @@ if (!databaseUrl) {
       GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA pr_agent_harness TO ${role};
       REVOKE UPDATE,DELETE ON pr_agent_harness.checkpoints,pr_agent_harness.run_publication_batches FROM ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
-        pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
+        pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
+      pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
         pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role}`);
     const url = new URL(databaseUrl!); url.username = role; url.password = password; appUrl = url.toString();
     appPool = new Pool({ connectionString: appUrl, max: 4 });

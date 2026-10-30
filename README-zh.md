@@ -443,7 +443,7 @@ pnpm --filter backend start
 
 ```bash
 curl http://localhost:3000/health
-curl http://localhost:3000/health?deep=true   # 测试 AI Provider 连通性
+curl http://localhost:3000/ready              # 检查已启用能力的运行依赖
 curl http://localhost:3000/github/health       # GitHub 配置状态
 ```
 
@@ -527,7 +527,9 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `AI_SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000`（15 秒） | 进程关闭时等待进行中 AI 请求完成的超时时间 |
 | `AI_DEBUG_LOGS` | `false` | 记录 AI 请求/响应载荷用于调试 |
 | `HEALTHCHECK_AI_TIMEOUT_MS` | `5000`（5 秒） | 深度健康检查 AI 探测超时 |
-| `HEALTHCHECK_AI_LIVE_PROBE` | `false` | `GET /health?deep=true` 时是否实际调用 AI API（否则仅检查配置） |
+| `FEATURE_DEEP_REVIEW` | `on` | 允许显式 Deep Review；普通 PR webhook 默认仍为 Single |
+| `FEATURE_FIX` | `off` | 需同时满足绑定授权、策略和 verifier 依赖 |
+| `FEATURE_EVOLUTION` | `off` | 为已授权绑定启用反馈和离线评测 |
 
 `AI_CONCURRENCY_LIMIT` 已废弃，不再生效。请改用 `AI_MAX_CONCURRENCY` 与 `AI_MAX_QUEUE_SIZE`。
 
@@ -866,7 +868,7 @@ Prometheus 格式指标通过 `GET /metrics` 暴露：
 | 端点 | 用途 |
 |---|---|
 | `GET /health` | 存活探针 |
-| `GET /health?deep=true` | 深度检查（AI Provider 连通性） |
+| `GET /ready` | 检查已启用能力及运行时依赖是否就绪 |
 | `GET /github/health` | GitHub Webhook 配置校验 |
 | `GET /gitlab/health` | GitLab Webhook 遗留配置校验（当前 beta 不支持） |
 

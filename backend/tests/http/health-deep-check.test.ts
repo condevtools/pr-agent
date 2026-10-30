@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { HealthService } from "../../src/http/system/health.service.ts";
+import { SystemController } from "../../src/http/system/system.controller.ts";
 
 test("health endpoint returns static status when deep check is disabled", async () => {
   const service = new HealthService();
@@ -15,76 +16,41 @@ test("health endpoint returns static status when deep check is disabled", async 
   assert.equal(result.checks, undefined);
 });
 
-test("health deep check includes ai probe details", async () => {
-  const originalProvider = process.env.AI_PROVIDER;
-  const originalApiKey = process.env.OPENAI_API_KEY;
-  const originalLiveProbe = process.env.HEALTHCHECK_AI_LIVE_PROBE;
+test("health remains liveness-only even when a legacy deep argument is supplied", async () => {
   const originalFetch = globalThis.fetch;
-
-  process.env.AI_PROVIDER = "openai";
-  process.env.OPENAI_API_KEY = "test-key";
-  process.env.HEALTHCHECK_AI_LIVE_PROBE = "true";
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        data: [],
-      }),
-      {
-        status: 200,
-        headers: {
-          "content-type": "application/json",
-        },
-      },
-    );
+  let fetchCalls = 0;
+  globalThis.fetch = async () => { fetchCalls += 1; throw new Error("liveness must not call providers"); };
 
   try {
     const service = new HealthService();
-    const result = await service.getHealth({
-      mode: "nest",
-      deep: true,
-    });
-
-    assert.equal(result.checks?.ai.provider, "openai");
-    assert.equal(result.checks?.ai.ok, true);
-    assert.equal(typeof result.checks?.ai.latencyMs, "number");
+    const result = await service.getHealth({ mode: "nest", deep: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.checks, undefined);
+    assert.equal(fetchCalls, 0);
   } finally {
-    process.env.AI_PROVIDER = originalProvider;
-    process.env.OPENAI_API_KEY = originalApiKey;
-    process.env.HEALTHCHECK_AI_LIVE_PROBE = originalLiveProbe;
     globalThis.fetch = originalFetch;
   }
 });
 
-test("health deep check skips live provider request by default", async () => {
-  const originalProvider = process.env.AI_PROVIDER;
-  const originalApiKey = process.env.OPENAI_API_KEY;
-  const originalLiveProbe = process.env.HEALTHCHECK_AI_LIVE_PROBE;
-  const originalFetch = globalThis.fetch;
-
-  process.env.AI_PROVIDER = "openai";
-  process.env.OPENAI_API_KEY = "test-key";
-  delete process.env.HEALTHCHECK_AI_LIVE_PROBE;
-
-  let fetchCalls = 0;
-  globalThis.fetch = async () => {
-    fetchCalls += 1;
-    return new Response("", { status: 500 });
+test("readiness endpoint returns 503 only for an unready runtime", async () => {
+  const service = new HealthService();
+  const controller = new SystemController(service);
+  let responseStatus = 200;
+  const response = { status: (status: number) => { responseStatus = status; } };
+  const unavailable = {
+    ok: false,
+    role: "web" as const,
+    capabilities: { reviewSingle: true as const, reviewDeep: true, fix: false, evolution: false },
+    checks: { postgres: false, runtimeRole: false, schema: false,
+      heartbeats: { worker: false, recovery: false } },
   };
+  service.getReadiness = async () => unavailable;
 
-  try {
-    const service = new HealthService();
-    const result = await service.getHealth({
-      mode: "nest",
-      deep: true,
-    });
+  assert.deepEqual(await controller.ready(response as never), unavailable);
+  assert.equal(responseStatus, 503);
 
-    assert.equal(result.checks?.ai.provider, "openai");
-    assert.equal(result.checks?.ai.ok, true);
-    assert.equal(fetchCalls, 0);
-  } finally {
-    process.env.AI_PROVIDER = originalProvider;
-    process.env.OPENAI_API_KEY = originalApiKey;
-    process.env.HEALTHCHECK_AI_LIVE_PROBE = originalLiveProbe;
-    globalThis.fetch = originalFetch;
-  }
+  service.getReadiness = async () => ({ ...unavailable, ok: true });
+  responseStatus = 200;
+  assert.equal((await controller.ready(response as never)).ok, true);
+  assert.equal(responseStatus, 200);
 });

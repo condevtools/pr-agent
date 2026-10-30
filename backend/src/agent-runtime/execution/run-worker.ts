@@ -21,6 +21,7 @@ interface WorkerDependencies {
   budget: ModelBudgetStore;
   bindings(): Promise<PublicationBinding[]>;
   runtimeHash(binding: PublicationBinding): Promise<string>;
+  supportedWorkflows?(binding: PublicationBinding): readonly string[];
   execute(lease: RunLease, binding: PublicationBinding): Promise<void>;
   outcomeHandler?: PublicationOutcomeHandler;
   coordinateOutcomes?(binding: PublicationBinding): Promise<unknown>;
@@ -67,12 +68,15 @@ export class RunWorker {
         if (this.stopped || this.active.size >= this.concurrency) break;
         if (binding.reviewExecutionMode !== "harness_async") continue;
         const runtimeHash = await this.dependencies.runtimeHash(binding);
+        const supportedWorkflows = this.dependencies.supportedWorkflows?.(binding);
         while (!this.stopped && this.active.size < this.concurrency) {
           const lease = await this.dependencies.store.claimPublicationOutcome(
-            claimBinding(binding), this.owner, runtimeHash,
+            claimBinding(binding), this.owner, runtimeHash, supportedWorkflows,
           ) ?? await this.dependencies.store.claimManualResume(
-            claimBinding(binding), this.owner, runtimeHash,
-          ) ?? await this.dependencies.store.claim(claimBinding(binding), this.owner, runtimeHash);
+            claimBinding(binding), this.owner, runtimeHash, supportedWorkflows,
+          ) ?? await this.dependencies.store.claim(
+            claimBinding(binding), this.owner, runtimeHash, supportedWorkflows,
+          );
           if (!lease) break;
           const controller = new AbortController();
           const task = this.execute(lease, binding, controller)

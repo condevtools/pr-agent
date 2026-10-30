@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { RuntimeDatabase } from "./postgres/database.js";
 import { migrateRuntime } from "./postgres/migrations.js";
 import { RunStore } from "./postgres/run-store.js";
-import { agentRuntimePoolConfig } from "./runtime/config.js";
+import { agentRuntimePoolConfig, resolveAgentProcessRole } from "./runtime/config.js";
+import { checkRuntimeReadiness } from "./runtime/readiness.js";
 import { PublicationAuthorityStore } from "./authority/publication-authority.js";
 import { PublicationControlStore, type PublicationControlInput } from "./publication/control.js";
 import { RuntimeMaintenanceStore } from "./maintenance.js";
@@ -17,7 +18,13 @@ const pool = new Pool(agentRuntimePoolConfig());
 const db = new RuntimeDatabase(pool);
 const authority = new PublicationAuthorityStore(db);
 try {
-  if (command === "migrate" && args.length === 0) {
+  if (command === "ready") {
+    const fields = parseFields(args, ["--role"]);
+    const role = resolveAgentProcessRole({ ...process.env, PR_AGENT_PROCESS_ROLE: fields.get("--role") });
+    const status = await checkRuntimeReadiness({ pool, role });
+    console.log(JSON.stringify(status));
+    if (!status.ok) process.exitCode = 1;
+  } else if (command === "migrate" && args.length === 0) {
     const role = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
       "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user");
     if (!role.rows[0] || role.rows[0].rolsuper || role.rows[0].rolbypassrls) {
@@ -51,6 +58,22 @@ try {
     console.log(JSON.stringify(await authority.transition({ tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
       action, expectedVersion: Number(fields.get("--version")), actor: await administrativeActor(), actorType: "service",
       quiescenceEvidence: fields.get("--evidence") })));
+  } else if (command === "capabilities") {
+    const fields = parseFields(args, ["--tenant", "--id", "--version", "--deep", "--fix",
+      "--evolution", "--default-review"]);
+    const defaultReview = fields.get("--default-review");
+    if (defaultReview !== "single" && defaultReview !== "deep") {
+      throw new Error("--default-review must be single or deep");
+    }
+    console.log(JSON.stringify(await authority.configureCapabilities({
+      tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
+      expectedVersion: Number(fields.get("--version")),
+      reviewDeep: onOff(fields.get("--deep")!, "--deep"),
+      fix: onOff(fields.get("--fix")!, "--fix"),
+      evolution: onOff(fields.get("--evolution")!, "--evolution"),
+      defaultReviewWorkflow: defaultReview === "deep" ? "review.deep.v1" : "review.single.v1",
+      actor: await administrativeActor(), actorType: "service",
+    })));
   } else if (command === "execution-drain") {
     const fields = parseFields(args, ["--tenant", "--id", "--version", "--evidence"]);
     console.log(JSON.stringify(await authority.drainExecution({
@@ -115,7 +138,7 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness migrate | bind | configure | authority | execution-drain | execution-resume | retention | snapshot-retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
+    throw new Error("Usage: harness ready | migrate | bind | configure | capabilities | authority | execution-drain | execution-resume | retention | snapshot-retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
   }
 } catch (error) {
   // Do not dump the Pool/driver error object, which can contain connection credentials.
@@ -141,4 +164,10 @@ function parseFields(values: string[], required: string[], optional: string[] = 
 async function administrativeActor(): Promise<string> {
   const identity = await pool.query<{ actor: string }>("SELECT current_user AS actor");
   return `postgres-role:${identity.rows[0]!.actor}`;
+}
+
+function onOff(value: string, name: string): boolean {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`${name} must be on or off`);
 }

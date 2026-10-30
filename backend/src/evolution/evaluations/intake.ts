@@ -82,6 +82,7 @@ export async function buildReplayRunCreationInput(binding: PublicationBinding, r
     createScope: `eval.replay.v1:${result.evaluationId}`, createKey: result.id, requestHash: fingerprint(replayInput),
     runType: "eval.replay.v1", baseSha: result.baseSha, headSha: result.headSha, ...manifest,
     input: replayInput, authorityGeneration: binding.generation,
+    bindingAuthorityVersion: binding.version,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
     runtimeConfig: { ...AGENT_RUNTIME_CONFIG, modelPolicy: policy, deepBudget: freezeDeepBudget(policy.runLimits), reviewText },
     limits: { maxRunMs: AGENT_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: AGENT_RUNTIME_CONFIG.maxJobAttempts,

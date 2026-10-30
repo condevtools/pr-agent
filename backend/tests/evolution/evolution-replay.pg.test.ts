@@ -22,7 +22,7 @@ import { buildDatasetFixture, type DatasetRepositoryAdapter } from "../../src/ev
 import { PgEvolutionFeedbackStore } from "../../src/evolution/feedback/store.js";
 import { PgEvolutionCandidateStore } from "../../src/evolution/proposals/candidate-store.js";
 import { admitEvolutionProposalRun } from "../../src/evolution/proposals/intake.js";
-import { admitEvaluation } from "../../src/evolution/evaluations/intake.js";
+import { admitEvaluation, buildReplayRunCreationInput } from "../../src/evolution/evaluations/intake.js";
 import { EVALUATION_SCHEDULING_POLICY, EVALUATION_SCHEDULING_POLICY_HASH } from "../../src/evolution/evaluations/contracts.js";
 import { EvaluationCoordinator } from "../../src/evolution/evaluations/run.js";
 import { PgEvolutionEvaluationStore } from "../../src/evolution/evaluations/store.js";
@@ -91,6 +91,7 @@ if (!databaseUrl) {
     await prepareHarnessRuntimeRoles(adminPool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(adminPool);
     process.env.AI_PROVIDER = "openai-compatible"; process.env.AI_MODEL = "p3b-model";
+    process.env.FEATURE_EVOLUTION = "on";
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-model-key";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing();
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
@@ -171,6 +172,8 @@ if (!databaseUrl) {
     assert.equal((await new PgEvolutionCandidateStore(appDb).read(curator(), candidateId)).status, "research_draft");
     await assert.rejects(new PgEvolutionCandidateStore(appDb).read({ ...curator(), subjectId: "other-curator" }, candidateId),
       (error: unknown) => error instanceof RunControlError && error.status === 404);
+    await assert.rejects(new PgEvolutionCandidateStore(appDb).read(curator(holdoutIntegrationId), candidateId),
+      (error: unknown) => error instanceof RunControlError && error.code === "CANDIDATE_NOT_FOUND" && error.status === 404);
 
     await adminPool.query(`GRANT INSERT,UPDATE,DELETE ON pr_agent_harness.evolution_proposal_sources,
       pr_agent_harness.evolution_candidates,pr_agent_harness.eval_runs,pr_agent_harness.eval_results TO pr_agent_app`);
@@ -198,6 +201,8 @@ if (!databaseUrl) {
     const duplicate = await admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-success",
       request: { datasetId, candidateId, split: "development" } });
     assert.equal(duplicate.id, receipt.id);
+    await assert.rejects(new PgEvolutionEvaluationStore(appDb).read(curator(holdoutIntegrationId), receipt.id),
+      (error: unknown) => error instanceof RunControlError && error.code === "EVALUATION_NOT_FOUND" && error.status === 404);
     await assert.rejects(admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-success",
       request: { datasetId, candidateId, split: "validation" } }),
     (error: unknown) => error instanceof RunControlError && error.status === 409);
@@ -430,6 +435,54 @@ if (!databaseUrl) {
     assert.equal(await store.claim(tenantId, developmentIntegrationId, "capacity-cleanup"), undefined);
   });
 
+  test("disabling Evolution pauses queued and already-leased evaluation work without creating a child", async () => {
+    const receipt = await admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-disabled-queue",
+      request: { datasetId, candidateId, split: "development" } });
+    const store = new PgEvolutionEvaluationStore(appDb);
+    const lease = await store.claim(tenantId, developmentIntegrationId, "disable-race-worker");
+    assert.ok(lease);
+    const pending = await store.nextPending(lease, developmentIntegrationId);
+    assert.ok(pending);
+    const authority = new PublicationAuthorityStore(adminDb);
+    const current = await authority.get(tenantId, developmentIntegrationId);
+    const disabled = await authority.configureCapabilities({ tenantId, integrationId: developmentIntegrationId,
+      expectedVersion: current.version, reviewDeep: true, fix: false, evolution: false,
+      defaultReviewWorkflow: "review.single.v1", actor: "p3b-fixture", actorType: "service" });
+    assert.equal((await new PgEvolutionCandidateStore(appDb).read(curator(), candidateId)).id, candidateId);
+    assert.equal((await store.read(curator(), receipt.id)).id, receipt.id);
+    const proposalReplay = await admitEvolutionProposalRun({ db: appDb, binding: developmentBinding,
+      principal: curator(), datasetId, commandKey: "proposal-1" });
+    assert.equal(proposalReplay.id, proposalRunId); assert.equal(proposalReplay.created, false);
+    await assert.rejects(admitEvolutionProposalRun({ db: appDb, binding: developmentBinding,
+      principal: curator(), datasetId, commandKey: "proposal-disabled-new" }),
+    (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+    await assert.rejects(admitEvaluation({ db: appDb, principal: curator(), commandKey: "evaluation-disabled-new",
+      request: { datasetId, candidateId, split: "development" } }),
+    (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+    await assert.rejects(store.attachChild(lease, pending,
+      await buildReplayRunCreationInput(developmentBinding, pending)),
+    (error: unknown) => error instanceof RunControlError
+      && (error.code === "CAPABILITY_DISABLED" || error.code === "BINDING_CAPABILITY_CHANGED"));
+    await store.releaseAndFinalize(lease);
+    assert.equal(await store.claim(tenantId, developmentIntegrationId, "disabled-evaluation-worker"), undefined);
+    assert.equal(await new EvaluationCoordinator(store).tick(developmentBinding), false);
+    const unchanged = await adminPool.query<{ status: string; lease_epoch: string; children: number }>(
+      `SELECT e.status,e.lease_epoch,
+         (SELECT count(*)::int FROM pr_agent_harness.eval_results x
+          WHERE x.tenant_id=e.tenant_id AND x.eval_run_id=e.id AND x.child_run_id IS NOT NULL) AS children
+       FROM pr_agent_harness.eval_runs e WHERE e.tenant_id=$1 AND e.id=$2`, [tenantId, receipt.id]);
+    assert.deepEqual(unchanged.rows[0], { status: "queued", lease_epoch: "1", children: 0 });
+    assert.equal((await adminPool.query<{ count: string }>(
+      `SELECT count(*) FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND create_key='proposal:proposal-disabled-new'`,
+      [tenantId])).rows[0]!.count, "0");
+    assert.equal((await adminPool.query<{ count: string }>(
+      "SELECT count(*) FROM pr_agent_harness.eval_runs WHERE tenant_id=$1 AND command_key='evaluation-disabled-new'",
+      [tenantId])).rows[0]!.count, "0");
+    developmentBinding = await authority.configureCapabilities({ tenantId, integrationId: developmentIntegrationId,
+      expectedVersion: disabled.version, reviewDeep: true, fix: false, evolution: true,
+      defaultReviewWorkflow: "review.single.v1", actor: "p3b-fixture", actorType: "service" });
+  });
+
   async function cloneCandidateForTerminalProposal(status: "failed" | "cancelled"): Promise<string> {
     const runId = randomUUID(); const retainedCandidateId = randomUUID();
     await adminPool.query(
@@ -545,7 +598,7 @@ if (!databaseUrl) {
     const runs = new RunStore(adminDb); const authority = new PublicationAuthorityStore(adminDb);
     await runs.registerIntegration({ tenantId, id, platform: "github", origin, repository });
     await authority.configure({ tenantId, integrationId: id, providerRepositoryId, providerActorId: 7,
-      credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });
+      credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0, evolutionEnabled: true });
     const active = await authority.transition({ tenantId, integrationId: id, expectedVersion: 1, action: "activate",
       actor: "p3b-fixture", actorType: "service", quiescenceEvidence: "local replay fixture" });
     await adminPool.query(`UPDATE pr_agent_harness.integration_bindings

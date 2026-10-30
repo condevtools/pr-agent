@@ -51,6 +51,7 @@ if (!databaseUrl) {
       pr_agent_harness.lock_active_publication_authority(uuid,uuid,text,text,text,bigint),
       pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
+      pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
       pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;
@@ -432,6 +433,74 @@ if (!databaseUrl) {
     );
   });
 
+  test("disabled capabilities stop new retry authorization but preserve safe manual and outcome completion", async () => {
+    const previousFix = process.env.FEATURE_FIX;
+    const previousPolicy = process.env.FIX_DEFAULT_POLICY_ID;
+    process.env.FEATURE_FIX = "on";
+    process.env.FIX_DEFAULT_POLICY_ID = "run-command-test";
+    try {
+      const safe = await createWaitingFixture("disabled-safe-resume", 2, ["confirm_occurred"]);
+      await adminPool.query("UPDATE pr_agent_harness.agent_runs SET run_type='fix.propose.v1' WHERE id=$1",
+        [safe.fixture.run.id]);
+      await commandStore.apply(safe.fixture.principal, safe.fixture.run.id, {
+        kind: "resume", expectedVersion: await runVersion(safe.fixture.run.id), commandKey: "safe-confirm",
+        decision: { waitId: safe.waitId, waitVersion: 1, intentHash: safe.intentHash,
+          operationVersion: safe.operation.version, decision: "confirm_occurred",
+          evidence: { kind: "provider_confirmation", reference: "provider:safe",
+            actualRevision: "head-sha" }, remoteId: "remote-safe" },
+      });
+      await adminPool.query("UPDATE pr_agent_harness.agent_runs SET status='waiting_for_user' WHERE id=$1",
+        [safe.fixture.run.id]);
+      const safeLease = await executionStore.claimManualResume({
+        tenantId: safe.fixture.scope.tenantId, integrationId: safe.fixture.scope.integrationId,
+        authorityGeneration: 1, executionModeGeneration: 1,
+      }, "safe-resume-worker", await runtimeHash(safe.fixture.run.id), ["review.single.v1"]);
+      assert.ok(safeLease);
+      await executionStore.relinquishSettledLease(safeLease, "test_safe_resume");
+
+      const retry = await createWaitingFixture("disabled-authorize-retry", 2, ["authorize_retry"]);
+      await adminPool.query("UPDATE pr_agent_harness.agent_runs SET run_type='fix.propose.v1' WHERE id=$1",
+        [retry.fixture.run.id]);
+      await assert.rejects(commandStore.apply(retry.fixture.principal, retry.fixture.run.id, {
+        kind: "resume", expectedVersion: await runVersion(retry.fixture.run.id), commandKey: "blocked-retry",
+        decision: { waitId: retry.waitId, waitVersion: 1, intentHash: retry.intentHash,
+          operationVersion: retry.operation.version, decision: "authorize_retry",
+          evidence: { kind: "provider_confirmation", reference: "provider:not-occurred" } },
+      }), { code: "CAPABILITY_DISABLED" });
+      await assertResumeWasNotApplied(retry.fixture, retry.waitId, "blocked-retry");
+
+      const outcome = await createWaitingFixture("disabled-outcome", 2);
+      await adminPool.query(
+        `UPDATE pr_agent_harness.agent_runs
+         SET run_type='fix.propose.v1',publication_outcome_generation=1 WHERE id=$1`,
+        [outcome.fixture.run.id],
+      );
+      const outcomeVersion = await runVersion(outcome.fixture.run.id);
+      await adminPool.query(
+        `INSERT INTO pr_agent_harness.job_queue
+           (tenant_id,run_id,job_kind,status,expected_run_version,expected_batch_id,
+            expected_operation_set_hash,outcome_generation,job_payload_json,max_attempts)
+         VALUES ($1,$2,'publication_outcome','ready',$3,$4,$5,1,'{}',2)`,
+        [outcome.fixture.scope.tenantId, outcome.fixture.run.id, outcomeVersion,
+          outcome.batchId, outcome.operationSetHash],
+      );
+      const outcomeLease = await executionStore.claimPublicationOutcome({
+        tenantId: outcome.fixture.scope.tenantId, integrationId: outcome.fixture.scope.integrationId,
+        authorityGeneration: 1, executionModeGeneration: 1,
+      }, "outcome-worker", await runtimeHash(outcome.fixture.run.id), ["review.single.v1"]);
+      assert.ok(outcomeLease);
+      await executionStore.transition(outcomeLease, { to: "succeeded",
+        outcomeCode: "publication_completed" });
+      assert.equal((await executionStore.load(outcome.fixture.scope.tenantId,
+        outcome.fixture.run.id))?.status, "succeeded");
+    } finally {
+      if (previousFix === undefined) delete process.env.FEATURE_FIX;
+      else process.env.FEATURE_FIX = previousFix;
+      if (previousPolicy === undefined) delete process.env.FIX_DEFAULT_POLICY_ID;
+      else process.env.FIX_DEFAULT_POLICY_ID = previousPolicy;
+    }
+  });
+
   test("resume locks the operation and rolls back when reconciliation wins the race", async () => {
     const { fixture, operationId, operation, waitId, intentHash } =
       await createWaitingFixture("resume-race");
@@ -517,7 +586,11 @@ if (!databaseUrl) {
     await assertResumeWasNotApplied(fixture, waitId, "resume-expired");
   });
 
-  async function createWaitingFixture(suffix: string, maxJobAttempts?: number) {
+  async function createWaitingFixture(
+    suffix: string,
+    maxJobAttempts?: number,
+    allowedDecisions: string[] = ["confirm_occurred"],
+  ) {
     const fixture = await createFixture(suffix, maxJobAttempts);
     const lease = await claim(fixture, fixture.run.id, `${suffix}-worker`);
     const batch = await batchStore.freeze({
@@ -549,9 +622,10 @@ if (!databaseUrl) {
           operation_version,intent_hash,allowed_decisions)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING id`,
       [fixture.scope.tenantId, fixture.run.id, batch.id, operationSetHash, operationId,
-        operation.version, intentHash, JSON.stringify(["confirm_occurred"])],
+        operation.version, intentHash, JSON.stringify(allowedDecisions)],
     );
-    return { fixture, operationId, operation, waitId: wait.rows[0]!.id, intentHash };
+    return { fixture, operationId, operation, waitId: wait.rows[0]!.id, intentHash,
+      batchId: batch.id, operationSetHash };
   }
 
   async function waitForBlockedOperationQuery(): Promise<void> {
@@ -680,6 +754,14 @@ if (!databaseUrl) {
       [runId],
     );
     return Number(result.rows[0]!.version);
+  }
+
+  async function runtimeHash(runId: string): Promise<string> {
+    const result = await adminPool.query<{ runtime_version_hash: string }>(
+      "SELECT runtime_version_hash FROM pr_agent_harness.agent_runs WHERE id=$1",
+      [runId],
+    );
+    return result.rows[0]!.runtime_version_hash;
   }
 
   async function jobRow(runId: string) {

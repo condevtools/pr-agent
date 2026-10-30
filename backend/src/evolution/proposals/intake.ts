@@ -13,6 +13,7 @@ import { resolveModelConfiguration } from "../../model/configuration.js";
 import { trustedLabelSetSchema } from "../feedback/contracts.js";
 import type { EvolutionDevelopmentCaseSummary, EvolutionProposalRunInput, EvolutionProposalSource } from "./candidate-contracts.js";
 import { EvolutionCandidateError, insertEvolutionProposalSource } from "./candidate-store.js";
+import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
 
 const EVOLUTION_POLICY = Object.freeze({ schemaVersion: 1, maxCases: 500, maxInputBytes: 524_288,
   maxOutputTokens: 8_192, maxRunMs: 15 * 60_000 });
@@ -42,6 +43,8 @@ export async function admitEvolutionProposalRun(input: {
   }
   const created = await input.db.transaction(input.principal.tenantId, async (client) => {
     await client.query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1,1830))", [input.principal.tenantId]);
+    await lockCurrentBindingCapability(client, { tenantId: input.principal.tenantId,
+      integrationId: input.principal.integrationId, capability: "evolution" });
     const source = await loadProposalSource(client, input.principal, input.datasetId);
     const creation = await buildEvolutionProposalCreation(input.binding, input.principal, createScope, createKey,
       requestHash, source);
@@ -84,7 +87,8 @@ export async function buildEvolutionProposalCreation(binding: PublicationBinding
     toolVersionHash: fingerprint({ base: base.toolVersionHash, tools: "none", baselineToolHash: source.baselineToolHash }),
     policyVersionHash: fingerprint({ base: base.policyVersionHash, policy: evolutionPolicy }),
     runtimeVersionHash: base.runtimeVersionHash, input: input as unknown as Record<string, unknown>,
-    authorityGeneration: binding.generation, executionModeGeneration: binding.executionModeGeneration ?? 0,
+    authorityGeneration: binding.generation, bindingAuthorityVersion: binding.version,
+    executionModeGeneration: binding.executionModeGeneration ?? 0,
     runtimeConfig: { schemaVersion: 1, workflow: "evolution.propose.v1", pollMs: 1_000, leaseTtlMs: 60_000,
       heartbeatMs: 15_000, sweepMs: 5_000, maxRunMs: EVOLUTION_POLICY.maxRunMs, maxJobAttempts: 3,
       maxStepAttempts: 3, maxCheckpointBytes: 4 * 1024 * 1024, modelPolicy, evolutionPolicy,

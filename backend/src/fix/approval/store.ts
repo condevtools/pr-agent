@@ -15,6 +15,7 @@ import type {
   FixApprovalReceipt,
   FixRelevanceAttestation,
 } from "./contracts.js";
+import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
 
 export class PgFixApprovalStore {
   constructor(private readonly db: RuntimeDatabase) {}
@@ -28,7 +29,27 @@ export class PgFixApprovalStore {
   }
 
   async attestRelevance(input: CreateFixRelevanceAttestationInput): Promise<FixRelevanceAttestation> {
+    const requestHash = fingerprint({ proposalRunId: input.proposalRunId, proposalId: input.proposalId,
+      proposalHash: input.proposalHash, testPatchHash: input.testPatchHash, findingId: input.findingId,
+      verificationResultHash: input.verificationResultHash, rubricVersion: input.rubricVersion, reason: input.reason,
+      commandKey: input.commandKey });
+    const attestationHash = fingerprint({ requestHash, actor: input.actor });
     return this.db.transaction(input.tenantId, async (client) => {
+      const replay = await client.query<{ id: string; request_hash: string; attestation_hash: string; created_at: Date }>(
+        `SELECT id,request_hash,attestation_hash,created_at FROM pr_agent_harness.fix_relevance_attestations
+         WHERE tenant_id=$1 AND integration_id=$2 AND proposal_run_id=$3 AND command_key=$4`,
+        [input.tenantId, input.integrationId, input.proposalRunId, input.commandKey]);
+      if (replay.rows[0]) {
+        if (replay.rows[0].request_hash !== requestHash || replay.rows[0].attestation_hash !== attestationHash) {
+          throw new FixStoreError("relevance_command_conflict");
+        }
+        return { id: replay.rows[0].id, proposalRunId: input.proposalRunId, proposalId: input.proposalId,
+          proposalHash: input.proposalHash, testPatchHash: input.testPatchHash, findingId: input.findingId,
+          verificationResultHash: input.verificationResultHash, rubricVersion: input.rubricVersion,
+          reason: input.reason, actor: input.actor, attestationHash, createdAt: replay.rows[0].created_at.toISOString() };
+      }
+      await lockCurrentBindingCapability(client, { tenantId: input.tenantId,
+        integrationId: input.integrationId, capability: "fix" });
       const selected = await client.query<{ created_by_actor_type: string; created_by_actor_id: string;
         proposal_hash: string; test_patch_hash: string; finding_id: string; result_hash: string; result_json: VerificationResult }>(
         `SELECT r.created_by_actor_type,r.created_by_actor_id,p.proposal_hash,p.test_patch_hash,p.finding_id,
@@ -51,11 +72,6 @@ export class PgFixApprovalStore {
       if (!isFixDifferentialEligible(verification)) {
         throw new FixStoreError("differential_verification_not_eligible");
       }
-      const requestHash = fingerprint({ proposalRunId: input.proposalRunId, proposalId: input.proposalId,
-        proposalHash: input.proposalHash, testPatchHash: input.testPatchHash, findingId: input.findingId,
-        verificationResultHash: input.verificationResultHash, rubricVersion: input.rubricVersion, reason: input.reason,
-        commandKey: input.commandKey });
-      const attestationHash = fingerprint({ requestHash, actor: input.actor });
       const inserted = await client.query<{ id: string; created_at: Date }>(
         `INSERT INTO pr_agent_harness.fix_relevance_attestations
            (tenant_id,integration_id,proposal_run_id,proposal_id,command_key,request_hash,proposal_hash,
@@ -69,8 +85,8 @@ export class PgFixApprovalStore {
       if (!id) {
         const existing = await client.query<{ id: string; request_hash: string; attestation_hash: string; created_at: Date }>(
           `SELECT id,request_hash,attestation_hash,created_at FROM pr_agent_harness.fix_relevance_attestations
-           WHERE tenant_id=$1 AND proposal_run_id=$2 AND command_key=$3`,
-          [input.tenantId, input.proposalRunId, input.commandKey]);
+           WHERE tenant_id=$1 AND integration_id=$2 AND proposal_run_id=$3 AND command_key=$4`,
+          [input.tenantId, input.integrationId, input.proposalRunId, input.commandKey]);
         if (!existing.rows[0] || existing.rows[0].request_hash !== requestHash
             || existing.rows[0].attestation_hash !== attestationHash) throw new FixStoreError("relevance_command_conflict");
         ({ id, created_at: createdAt } = existing.rows[0]);
@@ -85,6 +101,18 @@ export class PgFixApprovalStore {
 
 export async function createApprovalInTransaction(client: PoolClient, input: CreateFixApprovalInput): Promise<FixApprovalReceipt> {
   const intentHash = fingerprint(input.intent);
+  const duplicate = await client.query<{ id: string; intent_hash: string; status: FixApprovalReceipt["status"];
+    version: string; expires_at: Date }>(
+    `SELECT id,intent_hash,status,version,expires_at FROM pr_agent_harness.fix_approval_requests
+     WHERE tenant_id=$1 AND integration_id=$2 AND proposal_run_id=$3 AND command_key=$4`,
+    [input.tenantId, input.integrationId, input.proposalRunId, input.commandKey]);
+  if (duplicate.rows[0]) {
+    if (duplicate.rows[0].intent_hash !== intentHash) throw new FixStoreError("approval_command_conflict");
+    return receipt(duplicate.rows[0].id, intentHash, duplicate.rows[0].status,
+      duplicate.rows[0].version, duplicate.rows[0].expires_at);
+  }
+  await lockCurrentBindingCapability(client, { tenantId: input.tenantId,
+    integrationId: input.integrationId, capability: "fix" });
   await client.query(
     `SELECT id FROM pr_agent_harness.agent_runs
      WHERE tenant_id=$1 AND integration_id=$2 AND id=$3 FOR UPDATE`,
@@ -96,16 +124,6 @@ export async function createApprovalInTransaction(client: PoolClient, input: Cre
        AND NOT EXISTS (SELECT 1 FROM pr_agent_harness.fix_approval_consumptions c
          WHERE c.tenant_id=fix_approval_requests.tenant_id AND c.approval_id=fix_approval_requests.id)`,
     [input.tenantId, input.proposalRunId]);
-  const duplicate = await client.query<{ id: string; intent_hash: string; status: FixApprovalReceipt["status"];
-    version: string; expires_at: Date }>(
-    `SELECT id,intent_hash,status,version,expires_at FROM pr_agent_harness.fix_approval_requests
-     WHERE tenant_id=$1 AND proposal_run_id=$2 AND command_key=$3`,
-    [input.tenantId, input.proposalRunId, input.commandKey]);
-  if (duplicate.rows[0]) {
-    if (duplicate.rows[0].intent_hash !== intentHash) throw new FixStoreError("approval_command_conflict");
-    return receipt(duplicate.rows[0].id, intentHash, duplicate.rows[0].status,
-      duplicate.rows[0].version, duplicate.rows[0].expires_at);
-  }
   const active = await client.query(
     `SELECT 1 FROM pr_agent_harness.fix_approval_requests
      WHERE tenant_id=$1 AND proposal_run_id=$2 AND proposal_id=$3 AND status IN ('open','approved','consumed')`,
@@ -192,6 +210,8 @@ export async function approveFixApprovalInTransaction(
     return { ...receipt(request.id, request.intent_hash, request.status, request.version, request.expires_at),
       publishRunId: request.approved_publish_run_id };
   }
+  await lockCurrentBindingCapability(client, { tenantId: input.tenantId,
+    integrationId: input.integrationId, capability: "fix" });
   if (request.status !== "open" || request.version !== input.expectedVersion || !request.unexpired) {
     throw new FixStoreError("approval_cas_conflict");
   }

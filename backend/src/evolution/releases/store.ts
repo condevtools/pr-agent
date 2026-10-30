@@ -9,6 +9,7 @@ import { evaluateOfflineReleaseGates, EvolutionReleaseGateError } from "./gates.
 import { evolutionReleasePolicy, evolutionReleasePolicyHash } from "./policy.js";
 import type { EvolutionReleaseAssignment, EvolutionReleaseQualification, EvolutionReleaseRequest,
   QualifyCandidateInput, ReleaseDecisionInput, ReleaseRequestInput, ReleaseRollbackInput } from "./contracts.js";
+import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
 
 export class EvolutionReleaseError extends RunControlError {
   constructor(code: string, status: number, message: string) { super(code, status, message); }
@@ -42,6 +43,8 @@ export class PgEvolutionReleaseStore {
           if (replay.rows[0].request_hash !== requestHash) throw releaseError("RELEASE_QUALIFICATION_CONFLICT", 409, "Qualification key was reused");
           return mapQualification(replay.rows[0]);
         }
+        await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+          integrationId: principal.integrationId, capability: "evolution" });
         const evidence = await evaluateOfflineReleaseGates(client, { tenantId: principal.tenantId,
           integrationId: principal.integrationId, candidateId: input.candidateId, datasetId: input.datasetId,
           validationEvaluationId: input.validationEvaluationId, holdoutEvaluationId: input.holdoutEvaluationId,
@@ -80,6 +83,8 @@ export class PgEvolutionReleaseStore {
         if (duplicate.rows[0].request_hash !== requestHash) throw releaseError("RELEASE_REQUEST_CONFLICT", 409, "Idempotency key was reused");
         return mapRequest(duplicate.rows[0]);
       }
+      await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+        integrationId: principal.integrationId, capability: "evolution" });
       await assertQualificationFresh(client, principal, input.candidateId, input.qualificationId, currentManifest, policy);
       const assignment = await selectAssignment(client, principal, true);
       if ((assignment ? Number(assignment.version) : 0) !== input.expectedVersion) throw releaseError("RELEASE_VERSION_CONFLICT", 409, "Release assignment version changed");
@@ -100,7 +105,8 @@ export class PgEvolutionReleaseStore {
     });
   }
 
-  async approve(principal: RunPrincipal, input: ReleaseDecisionInput, currentManifest: RunVersionManifest): Promise<EvolutionReleaseAssignment> {
+  async approve(principal: RunPrincipal, input: ReleaseDecisionInput,
+    currentManifest?: RunVersionManifest): Promise<EvolutionReleaseAssignment> {
     requireRunPermission(principal, "evolution:release:approve"); requireUser(principal);
     const policy = evolutionReleasePolicy();
     if (!policy.activationEnabled) throw releaseError("EVOLUTION_RELEASE_DISABLED", 409, "Evolution release activation is disabled");
@@ -127,11 +133,26 @@ export class PgEvolutionReleaseStore {
         }
         return mapAssignment(await selectAssignment(client, principal, false) ?? baselineAssignment(principal));
       }
+      if (input.decision === "approve") {
+        await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+          integrationId: principal.integrationId, capability: "evolution" });
+      }
       if (request.status !== "open" || request.expired) throw releaseError("RELEASE_REQUEST_EXPIRED", 409, "Release request is not open");
       const assignment = await selectAssignment(client, principal, true);
+      if (input.decision === "reject") {
+        await client.query(
+          `INSERT INTO pr_agent_harness.evolution_release_decisions
+             (tenant_id,integration_id,request_id,decision,checker_actor_type,checker_actor_id,command_key,request_hash)
+           VALUES ($1,$2,$3,'reject','user',$4,$5,$6)`,
+          [principal.tenantId, principal.integrationId, request.id, principal.subjectId, input.commandKey, decisionHash]);
+        await client.query(`UPDATE pr_agent_harness.evolution_release_requests SET status='rejected',updated_at=clock_timestamp()
+          WHERE tenant_id=$1 AND id=$2`, [principal.tenantId, request.id]);
+        return mapAssignment(assignment ?? baselineAssignment(principal));
+      }
       if ((assignment ? Number(assignment.version) : 0) !== Number(request.expected_assignment_version)) {
         throw releaseError("RELEASE_VERSION_CONFLICT", 409, "Release assignment version changed");
       }
+      if (!currentManifest) throw releaseError("RELEASE_MANIFEST_REQUIRED", 409, "Release approval requires a runtime manifest");
       const qualification = await assertQualificationFresh(client, principal, request.candidate_id,
         request.qualification_id, currentManifest, policy);
       await client.query(
@@ -139,11 +160,6 @@ export class PgEvolutionReleaseStore {
            (tenant_id,integration_id,request_id,decision,checker_actor_type,checker_actor_id,command_key,request_hash)
          VALUES ($1,$2,$3,$4,'user',$5,$6,$7)`,
         [principal.tenantId, principal.integrationId, request.id, input.decision, principal.subjectId, input.commandKey, decisionHash]);
-      if (input.decision === "reject") {
-        await client.query(`UPDATE pr_agent_harness.evolution_release_requests SET status='rejected',updated_at=clock_timestamp()
-          WHERE tenant_id=$1 AND id=$2`, [principal.tenantId, request.id]);
-        return mapAssignment(assignment ?? baselineAssignment(principal));
-      }
       let metrics: ReturnType<typeof computeCanaryMetrics> | undefined;
       if (request.target === "promote") {
         if (!assignment?.canary_ready) {

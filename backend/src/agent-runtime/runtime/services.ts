@@ -37,12 +37,15 @@ export function createAgentRuntimeServices(): AgentRuntimeServices {
     batchCoordinator: new PublicationBatchCoordinator(batchStore, service),
     businessState: new PgBusinessStateStore(db),
     assertRole: async () => {
-      roleCheck ??= pool.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
-        "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+      roleCheck ??= pool.query<{ rolsuper: boolean; rolbypassrls: boolean; schema_owner: boolean }>(
+        `SELECT r.rolsuper,r.rolbypassrls,
+                (n.nspowner=r.oid OR pg_has_role(r.oid,n.nspowner,'MEMBER')) AS schema_owner
+         FROM pg_roles r JOIN pg_namespace n ON n.nspname='pr_agent_harness'
+         WHERE r.rolname=current_user`,
       ).then((result) => {
         const role = result.rows[0];
-        if (!role || role.rolsuper || role.rolbypassrls) {
-          throw new Error("Harness runtime requires a NOSUPERUSER NOBYPASSRLS PostgreSQL role");
+        if (!role || role.rolsuper || role.rolbypassrls || role.schema_owner) {
+          throw new Error("Harness runtime requires a non-owner NOSUPERUSER NOBYPASSRLS PostgreSQL role");
         }
       }).catch((error: unknown) => { roleCheck = undefined; throw error; });
       await roleCheck;

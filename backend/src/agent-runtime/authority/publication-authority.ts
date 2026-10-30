@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { RuntimeDatabase } from "../postgres/database.js";
 import { normalizeIntegrationTarget, type IntegrationPlatform } from "../postgres/run-store.js";
+import type { BindingCapabilities, ReviewWorkflow } from "../runtime/capabilities.js";
 
 export interface PublicationBinding {
   id: string;
@@ -18,6 +19,7 @@ export interface PublicationBinding {
   reviewExecutionMode: "harness_async";
   executionModeGeneration?: number;
   reviewExecutionState?: "active" | "draining";
+  capabilities: BindingCapabilities;
 }
 
 interface BindingRow {
@@ -27,6 +29,10 @@ interface BindingRow {
   review_execution_mode?: string;
   execution_mode_generation?: string;
   review_execution_state?: "active" | "draining";
+  review_deep_enabled?: boolean;
+  fix_enabled?: boolean;
+  evolution_enabled?: boolean;
+  default_review_workflow?: string;
 }
 
 export class PublicationBindingNotFoundError extends Error {
@@ -61,18 +67,29 @@ export class PublicationAuthorityStore {
   async configure(input: {
     tenantId: string; integrationId: string; providerRepositoryId: number;
     providerActorId: number; credentialRef: string; expectedVersion: number;
+    reviewDeepEnabled?: boolean; fixEnabled?: boolean; evolutionEnabled?: boolean;
+    defaultReviewWorkflow?: ReviewWorkflow;
   }): Promise<void> {
     positiveId(input.providerRepositoryId);
     positiveId(input.providerActorId);
     validateCredentialRef(input.credentialRef);
+    if (input.defaultReviewWorkflow === "review.deep.v1" && input.reviewDeepEnabled === false) {
+      throw new Error("Deep review cannot be the default when its binding capability is disabled");
+    }
     await this.db.transaction(input.tenantId, async (client) => {
       const result = await client.query(
         `UPDATE pr_agent_harness.integration_bindings
          SET provider_repository_id=$3, provider_actor_id=$4, credential_ref=$5,
+             review_deep_enabled=COALESCE($7,review_deep_enabled),
+             fix_enabled=COALESCE($8,fix_enabled),
+             evolution_enabled=COALESCE($9,evolution_enabled),
+             default_review_workflow=COALESCE($10,default_review_workflow),
              authority_version=authority_version+1, updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND active AND publication_state='blocked'
            AND authority_version=$6 AND publication_generation=0 RETURNING id`,
-        [input.tenantId, input.integrationId, String(input.providerRepositoryId), String(input.providerActorId), input.credentialRef, input.expectedVersion],
+        [input.tenantId, input.integrationId, String(input.providerRepositoryId), String(input.providerActorId),
+          input.credentialRef, input.expectedVersion, input.reviewDeepEnabled, input.fixEnabled,
+          input.evolutionEnabled, input.defaultReviewWorkflow],
       );
       if (result.rowCount !== 1) throw new Error("Binding configuration requires an unactivated, blocked binding and current version");
     });
@@ -136,6 +153,47 @@ export class PublicationAuthorityStore {
           JSON.stringify({ from: row.publication_state, to: next, priorVersion: input.expectedVersion }), input.actorType ?? "user"],
       );
       return mapBinding(updated.rows[0]!);
+    });
+  }
+
+  async configureCapabilities(input: {
+    tenantId: string;
+    integrationId: string;
+    expectedVersion: number;
+    reviewDeep: boolean;
+    fix: boolean;
+    evolution: boolean;
+    defaultReviewWorkflow: ReviewWorkflow;
+    actor: string;
+    actorType?: "user" | "service";
+  }): Promise<PublicationBinding> {
+    if (!input.actor.trim()) throw new Error("An administrative actor is required");
+    if (input.defaultReviewWorkflow === "review.deep.v1" && !input.reviewDeep) {
+      throw new Error("Deep review cannot be the default when its binding capability is disabled");
+    }
+    return this.db.transaction(input.tenantId, async (client) => {
+      const updated = await client.query<BindingRow>(
+        `UPDATE pr_agent_harness.integration_bindings
+         SET review_deep_enabled=$3,fix_enabled=$4,evolution_enabled=$5,
+             default_review_workflow=$6,authority_version=authority_version+1,
+             updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND id=$2 AND active AND authority_version=$7
+         RETURNING *`,
+        [input.tenantId, input.integrationId, input.reviewDeep, input.fix, input.evolution,
+          input.defaultReviewWorkflow, input.expectedVersion],
+      );
+      if (!updated.rows[0]) throw new Error("Binding capability configuration version conflict");
+      await client.query(
+        `INSERT INTO pr_agent_harness.audit_logs
+           (tenant_id,actor_type,actor_id,action,decision,resource_type,resource_ref,details_json)
+         VALUES ($1,$2,$3,'binding.capabilities.configure','allowed',
+           'integration_binding',$4,$5::jsonb)`,
+        [input.tenantId, input.actorType ?? "user", input.actor, input.integrationId,
+          JSON.stringify({ reviewDeep: input.reviewDeep, fix: input.fix,
+            evolution: input.evolution, defaultReviewWorkflow: input.defaultReviewWorkflow,
+            priorVersion: input.expectedVersion })],
+      );
+      return mapBinding(updated.rows[0]);
     });
   }
 
@@ -263,7 +321,20 @@ function mapBinding(row: BindingRow): PublicationBinding {
     reviewExecutionMode: requireAsyncExecutionMode(row.review_execution_mode),
     executionModeGeneration: Number(row.execution_mode_generation ?? 0),
     reviewExecutionState: row.review_execution_state ?? "active",
+    capabilities: {
+      reviewSingle: true,
+      reviewDeep: row.review_deep_enabled ?? true,
+      fix: row.fix_enabled ?? false,
+      evolution: row.evolution_enabled ?? false,
+      defaultReviewWorkflow: requireReviewWorkflow(row.default_review_workflow),
+    },
   };
+}
+
+function requireReviewWorkflow(value: string | undefined): ReviewWorkflow {
+  if (value === undefined || value === "review.single.v1") return "review.single.v1";
+  if (value === "review.deep.v1") return value;
+  throw new Error("Binding has an invalid default review workflow");
 }
 
 function requireAsyncExecutionMode(value: string | undefined): "harness_async" {

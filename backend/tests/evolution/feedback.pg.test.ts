@@ -26,9 +26,11 @@ else {
   const artifactHash = fingerprint(artifact);
 
   before(async () => {
+    process.env.FEATURE_EVOLUTION = "on";
     await migrateRuntime(admin);
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
+    await admin.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_current_binding_capability(uuid,uuid,text) TO ${role}`);
     await admin.query(`GRANT SELECT ON pr_agent_harness.integration_bindings,pr_agent_harness.agent_runs,pr_agent_harness.review_artifacts,
       pr_agent_harness.agent_steps,pr_agent_harness.feedback_observations,pr_agent_harness.review_annotations,
       pr_agent_harness.review_annotation_arbitrations,pr_agent_harness.trusted_review_label_sets,
@@ -40,9 +42,9 @@ else {
     await admin.query(`GRANT UPDATE (active) ON pr_agent_harness.trusted_review_label_sets TO ${role}`);
     await admin.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${role}`);
     await admin.query(
-      `INSERT INTO pr_agent_harness.integration_bindings (id,tenant_id,platform,origin,repository,active)
-       VALUES ($1,$3,'github','https://github.example.test','acme/widgets',true),
-              ($2,$3,'github','https://github.example.test','acme/other',true)`,
+      `INSERT INTO pr_agent_harness.integration_bindings (id,tenant_id,platform,origin,repository,active,evolution_enabled)
+       VALUES ($1,$3,'github','https://github.example.test','acme/widgets',true,true),
+              ($2,$3,'github','https://github.example.test','acme/other',true,true)`,
       [integrationId, otherIntegrationId, tenantId]);
     const version = fingerprint("version");
     await admin.query(

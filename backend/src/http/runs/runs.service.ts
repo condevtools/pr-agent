@@ -17,6 +17,7 @@ import { fingerprint } from "../../agent-runtime/versions.js";
 import { PgFixStore } from "../../fix/persistence/store.js";
 import { RunApiContextService, validRunId } from "../common/run-api-context.service.js";
 import { ModelBudgetStore, ModelCallConflictError } from "../../agent-runtime/budget/model-budget-store.js";
+import { bindingAllowsCapability } from "../../agent-runtime/runtime/capabilities.js";
 
 @Injectable()
 export class RunsService implements BeforeApplicationShutdown {
@@ -39,7 +40,7 @@ export class RunsService implements BeforeApplicationShutdown {
     }>(
       `SELECT id,status,version,request_hash
        FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND integration_id=$2 AND create_scope=$3 AND create_key=$4`,
-      [principal.tenantId, principal.integrationId, `review.single.v1:${binding.id}`, source.key],
+      [principal.tenantId, principal.integrationId, `${request.workflow}:${binding.id}`, source.key],
     ));
     if (previous.rows[0]) {
       if (previous.rows[0].request_hash !== requestHash) throw runConflict("Idempotency key was used for a different review request");
@@ -47,6 +48,9 @@ export class RunsService implements BeforeApplicationShutdown {
     }
     if (binding.reviewExecutionMode !== "harness_async" || binding.state !== "active") {
       throw runConflict("Asynchronous review admission is not active for this integration");
+    }
+    if (request.workflow === "review.deep.v1" && !bindingAllowsCapability(binding, "review.deep")) {
+      throw runConflict("Deep review is not enabled for this integration");
     }
     const input = await resolveReviewInput(binding, request, source);
     const creation = await buildReviewRunCreationInput(binding, input, { actorType: principal.actorType, actorId: principal.subjectId });
@@ -95,6 +99,9 @@ export class RunsService implements BeforeApplicationShutdown {
     if (previous) return previous;
     const original = reviewRunInputSchema.parse(await (await this.queries()).originalInput(principal, runId));
     const binding = await this.context.binding(principal);
+    if (original.workflow === "review.deep.v1" && !bindingAllowsCapability(binding, "review.deep")) {
+      throw runConflict("Deep review is not enabled for this integration");
+    }
     const source = { key: `rerun:${runId}:${command.commandKey}`, hash: fingerprint({ parentRunId: runId, command }) };
     const creation = await buildReviewRunCreationInput(binding, { ...original, source },
       { actorType: principal.actorType, actorId: principal.subjectId, parentRunId: runId });

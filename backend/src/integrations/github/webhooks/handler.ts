@@ -24,9 +24,9 @@ import {
   handleGitHubIssueCommentCommand,
 } from "../../../commands/platforms/github/handler.js";
 import { CommandAuthorizationError } from "../../../commands/authorization.js";
-import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
+import { handleGitHubProviderFeedback } from "../../../evolution/feedback/provider-bridge.js";
 export { createRestBackedOctokit } from "../api/http-client.js";
 export {
   handleGitHubIssueCommentCommand,
@@ -36,9 +36,9 @@ export {
 import { createRestBackedOctokit, guardGitHubOctokit } from "../api/http-client.js";
 const DEFAULT_GITHUB_API_URL = "https://api.github.com";
 const DEFAULT_GITHUB_WEBHOOK_MAX_BODY_BYTES = 10 * 1024 * 1024;
-const DEFAULT_FEEDBACK_SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 
 const repositoryInfoPayloadSchema = z.object({
+  id: z.number().int().positive().optional(),
   name: z.string().min(1),
   owner: z.object({
     login: z.string().optional(),
@@ -321,28 +321,8 @@ async function handlePullRequestReviewThreadEvent(
   if (action !== "resolved" && action !== "unresolved") {
     return { ok: true, message: "ignored pull_request_review_thread action" };
   }
-  const runtime = await resolvePublicationRuntime({
-    platform: "github",
-    origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL,
-    repository: `${owner}/${repo}`,
-  });
-
-  const pullNumber = payload.pull_request?.number;
-  const signal =
-    action === "resolved"
-      ? `PR #${pullNumber ?? "?"} review thread resolved: developer indicates suggestion fixed/high-value`
-      : `PR #${pullNumber ?? "?"} review thread unresolved: developer indicates suggestion still not satisfied`;
-  await (await getAgentRuntimeServices()).businessState.recordFeedbackSignal({
-    tenantId: runtime.binding.tenantId,
-    integrationId: runtime.binding.id,
-    platform: "github",
-    origin: runtime.binding.origin,
-    repository: runtime.binding.repository,
-    target: pullNumber ? `pr:${pullNumber}` : "repository",
-    signal,
-    ttlMs: readNumberEnv("GITHUB_FEEDBACK_SIGNAL_TTL_MS", DEFAULT_FEEDBACK_SIGNAL_TTL_MS),
-  });
-  return { ok: true, message: "pull_request_review_thread feedback recorded" };
+  return { ok: true,
+    message: `ignored pull_request_review_thread ${action}: no authoritative Deep Review artifact correlation` };
 }
 
 async function handleIssueCommentEvent(
@@ -365,6 +345,18 @@ async function handleIssueCommentEvent(
   }
 
   const context = createReviewContext(owner, repo, params.octokit, params.logger);
+  const providerFeedback = isPullRequest ? await handleGitHubProviderFeedback({
+    context,
+    origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL,
+    owner,
+    repo,
+    repositoryId: payload.repository.id,
+    pullNumber: payload.issue.number,
+    body: payload.comment?.body?.trim() ?? "",
+    commentId: payload.comment?.id,
+    actor: payload.comment?.user,
+  }) : undefined;
+  if (providerFeedback) return providerFeedback;
   return handleGitHubIssueCommentCommand({
     context,
     owner,

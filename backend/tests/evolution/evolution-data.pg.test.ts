@@ -56,6 +56,7 @@ if (!databaseUrl) {
     tenantId, integrationId: integration, permissions: ["feedback:create", "annotations:create", "annotations:arbitrate"] });
 
   before(async () => {
+    process.env.FEATURE_EVOLUTION = "on";
     await prepareHarnessRuntimeRoles(adminPool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(adminPool);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
@@ -114,6 +115,9 @@ if (!databaseUrl) {
     const first = await store.recordObservation(principal("feedback-user"), sourceRunId, "feedback-1", request);
     const replay = await store.recordObservation(principal("feedback-user"), sourceRunId, "feedback-1", request);
     assert.equal(replay.id, first.id);
+    await assert.rejects(store.recordObservation(principal("feedback-user", otherIntegrationId), sourceRunId,
+      "feedback-1", request), (error: unknown) =>
+      error instanceof RunControlError && error.status === 404 && error.code === "RUN_NOT_FOUND");
 
     await assert.rejects(store.recordObservation(principal("feedback-user"), sourceRunId, "feedback-1",
       { ...request, sentiment: "not_helpful" }), (error: unknown) =>
@@ -135,11 +139,43 @@ if (!databaseUrl) {
     assert.equal(trusted.rowCount, 0);
   });
 
+  test("disabled Evolution rejects new feedback and dataset writes but preserves idempotent receipts", async () => {
+    const request = { schemaVersion: 1 as const, artifactHash, sentiment: "helpful" as const, categories: [] };
+    const existing = await store.recordObservation(principal("capability-user"), sourceRunId, "capability-existing", request);
+    await adminPool.query(`UPDATE pr_agent_harness.integration_bindings
+      SET evolution_enabled=false,authority_version=authority_version+1 WHERE tenant_id=$1 AND id=$2`,
+    [tenantId, integrationId]);
+    try {
+      assert.equal((await store.recordObservation(principal("capability-user"), sourceRunId,
+        "capability-existing", request)).id, existing.id);
+      await assert.rejects(store.recordObservation(principal("capability-user"), sourceRunId,
+        "capability-new", request),
+      (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+      await assert.rejects(datasets.create(datasetPrincipal("capability-curator", integrationId, ["evaluations:create"]), {
+        name: "disabled-dataset", developmentBefore: "2025-06-01T00:00:00Z",
+        validationBefore: "2025-12-01T00:00:00Z",
+      }), (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+      assert.equal((await adminPool.query<{ count: string }>(
+        "SELECT count(*) FROM pr_agent_harness.feedback_observations WHERE tenant_id=$1 AND command_key='capability-new'",
+        [tenantId])).rows[0]!.count, "0");
+      assert.equal((await adminPool.query<{ count: string }>(
+        "SELECT count(*) FROM pr_agent_harness.eval_datasets WHERE tenant_id=$1 AND name='disabled-dataset'",
+        [tenantId])).rows[0]!.count, "0");
+    } finally {
+      await adminPool.query(`UPDATE pr_agent_harness.integration_bindings
+        SET evolution_enabled=true,authority_version=authority_version+1 WHERE tenant_id=$1 AND id=$2`,
+      [tenantId, integrationId]);
+    }
+  });
+
   test("two independent exact annotations create one trusted consensus label while preserving both annotations", async () => {
     const request = { artifactHash, labelSet: oneFinding,
       provenance: { method: "full_diff_review" as const, notes: "Reviewed the complete persisted diff." } };
     const left = await store.createAnnotation(principal("reviewer-a"), sourceRunId, "annotation-a", request);
     assert.equal(left.trustedLabelSetId, undefined);
+    await assert.rejects(store.createAnnotation(principal("reviewer-a", otherIntegrationId), sourceRunId,
+      "annotation-a", request), (error: unknown) =>
+      error instanceof RunControlError && error.status === 404 && error.code === "RUN_NOT_FOUND");
     const right = await store.createAnnotation(principal("reviewer-b"), sourceRunId, "annotation-b", request);
     assert.ok(right.trustedLabelSetId);
 
@@ -167,6 +203,9 @@ if (!databaseUrl) {
       (error: unknown) => error instanceof RunControlError && error.status === 409);
     const resolved = await store.arbitrate(principal("independent-arbitrator"), arbitrationRunId, "arbitration", arbitration);
     assert.equal(resolved.chosenLabelSetHash, labelSetHash(oneFinding));
+    await assert.rejects(store.arbitrate(principal("independent-arbitrator", otherIntegrationId), arbitrationRunId,
+      "arbitration", arbitration), (error: unknown) =>
+      error instanceof RunControlError && error.status === 404 && error.code === "RUN_NOT_FOUND");
 
     const history = await adminPool.query<{ annotation_count: string; arbitration_count: string; trusted_count: string }>(
       `SELECT (SELECT count(*) FROM pr_agent_harness.review_annotations WHERE tenant_id=$1 AND source_run_id=$2) annotation_count,
@@ -439,9 +478,9 @@ if (!databaseUrl) {
       `INSERT INTO pr_agent_harness.integration_bindings
          (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,
           publication_state,publication_generation,authority_version,review_execution_mode,execution_mode_generation,
-          review_execution_state,quiescence_receipt)
+          review_execution_state,quiescence_receipt,evolution_enabled)
        VALUES ($1,$2,'github','https://github.example.test',$3,$4,1,'env:GITHUB_TOKEN',
-         'active',1,1,'harness_async',1,'active','{}'::jsonb)`, [id, tenant, repository, providerRepositoryId]);
+         'active',1,1,'harness_async',1,'active','{}'::jsonb,true)`, [id, tenant, repository, providerRepositoryId]);
   }
 
   async function seedReview(runId: string, integration: string, tenant = tenantId,

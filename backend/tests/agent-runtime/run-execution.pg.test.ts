@@ -46,7 +46,8 @@ if (!databaseUrl) {
          pr_agent_harness.dead_letter_jobs FROM ${roleName}`,
     );
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
-    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
+      pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;
     appUrl.password = rolePassword;

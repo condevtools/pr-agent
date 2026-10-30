@@ -98,6 +98,13 @@ export async function resolveDeepReleaseSelection(client: PoolClient, input: {
     releaseReceiptId: row.release_receipt_id!, reviewText });
 }
 
+export function resolveBaselineDeepReleaseSelection(input: {
+  binding: PublicationBinding; reviewInput: ReviewRunInput; baseManifest: RunVersionManifest;
+}): ResolvedDeepReleaseSelection {
+  assertReviewScope(input.binding, input.reviewInput);
+  return baselineSelection({ ...input, input: input.reviewInput }, 0, "off", "evolution_capability_disabled");
+}
+
 export async function recordDeepReleaseSelection(client: PoolClient, runId: string,
   record: DeepReleaseSelectionRecord): Promise<void> {
   const inserted = await client.query(

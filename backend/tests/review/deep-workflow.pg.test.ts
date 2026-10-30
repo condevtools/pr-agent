@@ -396,6 +396,7 @@ async function grantRuntime(pool: Pool, role: string): Promise<void> {
       pr_agent_harness.skip_failed_batch_successors(uuid,uuid),
       pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
+      pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
       pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
       pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role};
     GRANT SELECT,INSERT,UPDATE ON pr_agent_harness.agent_steps,pr_agent_harness.step_attempts,

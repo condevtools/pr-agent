@@ -8,6 +8,7 @@ import { computeLineageHash, computeShingleSignature, shingleSimilarity, validat
 import type { DatasetCaseSource, DatasetFixtureV1, DatasetMetadata, DatasetSplitPolicyV1, DatasetStorePort } from "./contracts.js";
 import type { createDatasetSchema } from "./contracts.js";
 import type { z } from "zod";
+import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
 
 interface DatasetRow {
   id: string; name: string; status: "draft" | "frozen" | "retired"; version: string;
@@ -41,6 +42,8 @@ export class PgEvolutionDatasetStore implements DatasetStorePort {
       throw datasetError("INVALID_SPLIT_POLICY", 400, "Development cutoff must precede validation cutoff");
     }
     return this.db.transaction(principal.tenantId, async (client) => {
+      await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+        integrationId: principal.integrationId, capability: "evolution" });
       const result = await client.query<DatasetRow>(
         `INSERT INTO pr_agent_harness.eval_datasets
            (tenant_id,name,curator_actor_type,curator_actor_id,split_policy_json,split_policy_hash)
@@ -72,6 +75,8 @@ export class PgEvolutionDatasetStore implements DatasetStorePort {
     const lineageHash = computeLineageHash(source.repository, source.pullNumber);
     return this.db.transaction(principal.tenantId, async (client) => {
       await lockTenantEvaluationData(client, principal.tenantId);
+      await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+        integrationId: principal.integrationId, capability: "evolution" });
       const dataset = await selectOwnedDataset(client, principal, datasetId, true);
       if (dataset.status !== "draft" || Number(dataset.version) !== expectedVersion || dataset.content_purged_at) {
         throw datasetError("DATASET_CAS_CONFLICT", 409, "Dataset changed or is no longer mutable");
@@ -111,6 +116,8 @@ export class PgEvolutionDatasetStore implements DatasetStorePort {
     requireRunPermission(principal, "evaluations:create");
     return this.db.transaction(principal.tenantId, async (client) => {
       await lockTenantEvaluationData(client, principal.tenantId);
+      await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+        integrationId: principal.integrationId, capability: "evolution" });
       const dataset = await selectOwnedDataset(client, principal, datasetId, true);
       if (dataset.status !== "draft" || Number(dataset.version) !== expectedVersion || dataset.content_purged_at) {
         throw datasetError("DATASET_CAS_CONFLICT", 409, "Dataset changed or is already frozen");

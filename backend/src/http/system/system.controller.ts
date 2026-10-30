@@ -1,8 +1,9 @@
 import { RouteAccess } from "../common/route-access.js";
-import { Controller, Get, Header, Query } from "@nestjs/common";
+import { Controller, Get, Header, Res } from "@nestjs/common";
+import type { Response } from "express";
 
 import { HealthService } from "./health.service.js";
-import { isDeepHealthQuery, type HealthStatus } from "./health.js";
+import type { HealthStatus } from "./health.js";
 import { renderPrometheusMetrics } from "./metrics-runtime.js";
 
 @Controller()
@@ -11,11 +12,16 @@ export class SystemController {
 
   @Get("health")
   @RouteAccess("public")
-  health(@Query("deep") deep?: string): Promise<HealthStatus> {
-    return this.healthService.getHealth({
-      mode: "nest",
-      deep: isDeepHealthQuery(deep),
-    });
+  health(): Promise<HealthStatus> {
+    return this.healthService.getHealth({ mode: "nest" });
+  }
+
+  @Get("ready")
+  @RouteAccess("public")
+  async ready(@Res({ passthrough: true }) response: Response) {
+    const status = await this.healthService.getReadiness();
+    if (!status.ok) response.status(503);
+    return status;
   }
 
   @Get("metrics")

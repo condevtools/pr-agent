@@ -12,6 +12,8 @@ import { ReplayFixtureAdapter } from "./fixture-adapter.js";
 import { replayRunInputSchema } from "./contracts.js";
 import { buildReplayRunCreationInput, ReplayAdmissionManifestDriftError } from "./intake.js";
 import { PgEvolutionEvaluationStore } from "./store.js";
+import { bindingAllowsCapability } from "../../agent-runtime/runtime/capabilities.js";
+import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 
 export async function executeReplayRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
   const input = replayRunInputSchema.parse(lease.input);
@@ -28,6 +30,7 @@ export class EvaluationCoordinator {
   constructor(private readonly store: PgEvolutionEvaluationStore) {}
 
   async tick(binding: PublicationBinding): Promise<boolean> {
+    if (!bindingAllowsCapability(binding, "evolution")) return false;
     const lease = await this.store.claim(binding.tenantId, binding.id, this.owner);
     if (!lease) return false;
     await this.store.observeChildren(lease, binding.id);
@@ -38,6 +41,11 @@ export class EvaluationCoordinator {
         const attached = await this.store.attachChild(lease, pending, await buildReplayRunCreationInput(binding, pending));
         if (!attached) break;
       } catch (error) {
+        if (error instanceof RunControlError
+            && (error.code === "CAPABILITY_DISABLED" || error.code === "BINDING_CAPABILITY_CHANGED")) {
+          await this.store.releaseAndFinalize(lease);
+          return true;
+        }
         if (!(error instanceof ReplayAdmissionManifestDriftError)) throw error;
         await this.store.failAdmissionManifest(lease, pending.id);
         break;

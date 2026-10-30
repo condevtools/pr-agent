@@ -15,7 +15,8 @@ export class EvaluationsService {
   async create(request: Request, body: unknown) {
     const commandKey = idempotencyKey(request);
     const services = await getAgentRuntimeServices();
-    return admitEvaluation({ db: services.db, principal: this.context.authenticate(request), commandKey, request: body });
+    const principal = this.context.authenticate(request);
+    return admitEvaluation({ db: services.db, principal, commandKey, request: body });
   }
 
   async read(request: Request, id: string) {

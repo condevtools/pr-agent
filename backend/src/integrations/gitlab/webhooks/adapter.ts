@@ -7,9 +7,10 @@ import { resolveGitLabReviewPolicy, type GitLabReviewPolicy } from "../../../rev
 import { runGitLabReview } from "../../../review/platforms/gitlab/workflow.js";
 import type { GitLabPublicationRuntime } from "../publication/adapter.js";
 import { requireGitLabToken, resolveGitLabBaseUrl } from "../repository/context.js";
-import { gitlabMrWebhookPayloadSchema, parseGitLabPayload, type GitLabMrWebhookBody, type GitLabWebhookBody } from "./contracts.js";
-import { type LoggerLike } from "./contracts.js";
+import { gitlabMrWebhookPayloadSchema, gitlabNoteWebhookPayloadSchema, parseGitLabPayload,
+  type GitLabMrWebhookBody, type GitLabNoteWebhookBody, type GitLabWebhookBody, type LoggerLike } from "./contracts.js";
 import { verifyGitLabWebhookBodySize, verifyGitLabWebhookToken } from "./security.js";
+import { handleGitLabProviderFeedback } from "../../../evolution/feedback/provider-bridge.js";
 
 export async function runGitLabWebhook(params: {
   payload: GitLabWebhookBody;
@@ -119,6 +120,9 @@ async function runTrustedGitLabWebhook(params: {
   }
 
   if (kind === "note") {
+    const note = parseGitLabPayload(gitlabNoteWebhookPayloadSchema, params.payload, "note") as GitLabNoteWebhookBody;
+    const providerFeedback = await handleGitLabProviderFeedback({ payload: note });
+    if (providerFeedback) return providerFeedback;
     return handleGitLabNoteWebhook(params);
   }
 

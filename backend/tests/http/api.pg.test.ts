@@ -83,7 +83,8 @@ if (!databaseUrl) {
         uuid, uuid, text, text, text, bigint) TO ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
-        pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${role};
+        pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
+        pr_agent_harness.lock_current_binding_capability(uuid,uuid,text) TO ${role};
       GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.agent_steps,
         pr_agent_harness.step_attempts, pr_agent_harness.tool_calls,
         pr_agent_harness.model_calls, pr_agent_harness.tenant_budget_accounts,
@@ -196,10 +197,11 @@ if (!databaseUrl) {
     assert.equal(errorCode(missing.value), "RUN_CONFLICT");
   });
 
-  test("deep intake is explicit and cannot reuse the single workflow creation key", async () => {
-    const conflict = await request("/runs", { method: "POST", token: fullToken, idempotencyKey: "offline-replay",
+  test("deep intake is explicit and has an independent workflow creation scope", async () => {
+    const sharedKey = await request("/runs", { method: "POST", token: fullToken, idempotencyKey: "offline-replay",
       body: { number: 42, workflow: "review.deep.v1" } });
-    assert.equal(conflict.status, 409);
+    assert.equal(sharedKey.status, 202);
+    assert.equal(sharedKey.value.created, true);
     const deep = await request("/runs", { method: "POST", token: fullToken, idempotencyKey: "deep-review",
       body: { number: 42, workflow: "review.deep.v1" } });
     assert.equal(deep.status, 202);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 import { Client, Pool } from "pg";
@@ -34,6 +34,12 @@ if (!testUrl || !container) {
     let legacy: Pool | undefined;
     let app: Pool | undefined;
     await admin.connect();
+    // Roles belong to the test cluster, not the per-file database. Earlier
+    // suites may already have grants to the shared runtime role identities.
+    const existingRoles = new Set((await admin.query<{ rolname: string }>(
+      "SELECT rolname FROM pg_roles WHERE rolname=ANY($1::text[])",
+      [["pr_agent_app", "pr_agent_verifier", "pr_agent_migrator"]],
+    )).rows.map((row) => row.rolname));
     try {
       await admin.query(`CREATE ROLE pr_agent_migrator LOGIN PASSWORD '${legacyPassword}'
         SUPERUSER CREATEDB CREATEROLE BYPASSRLS`);
@@ -123,8 +129,10 @@ if (!testUrl || !container) {
           env: { ...process.env, HARNESS_DATABASE_URL: legacyUrl.toString() },
         });
       assert.equal(repeated.status, 0, repeated.stderr);
+      const migrationInventory = (await readdir(new URL("../../src/agent-runtime/postgres/migrations/", import.meta.url)))
+        .filter((name) => /^\d{3}_[a-z0-9_]+\.sql$/u.test(name));
       assert.equal((await legacy.query("SELECT count(*)::int n FROM pr_agent_harness.schema_migrations"))
-        .rows[0].n, 25);
+        .rows[0].n, migrationInventory.length);
 
       const appUrl = new URL(legacyUrl);
       appUrl.username = "pr_agent_app";
@@ -140,12 +148,15 @@ if (!testUrl || !container) {
         await visible.query("ROLLBACK");
       } finally { visible.release(); }
     } finally {
-      await app?.end();
-      await legacy?.end();
-      await admin.query(`ALTER ROLE postgres PASSWORD '${originalPostgresPassword}'`);
-      await admin.query("DROP DATABASE IF EXISTS pr_agent WITH (FORCE)");
-      await admin.query("DROP ROLE IF EXISTS pr_agent_app,pr_agent_verifier,pr_agent_migrator");
-      await admin.end();
+      try {
+        await app?.end();
+        await legacy?.end();
+        await admin.query(`ALTER ROLE postgres PASSWORD '${originalPostgresPassword}'`);
+        await admin.query("DROP DATABASE IF EXISTS pr_agent WITH (FORCE)");
+        for (const role of ["pr_agent_app", "pr_agent_verifier", "pr_agent_migrator"]) {
+          if (!existingRoles.has(role)) await admin.query(`DROP ROLE IF EXISTS ${role}`);
+        }
+      } finally { await admin.end(); }
     }
   });
 

@@ -87,10 +87,10 @@ export class PgEvolutionCandidateStore {
            ON r.tenant_id=c.tenant_id AND r.id=c.proposal_run_id
           AND r.run_type='evolution.propose.v1' AND r.input_json->>'workflow'='evolution.propose.v1'
           AND r.status='succeeded'
-         WHERE c.tenant_id=$1 AND (c.id=$2 OR c.proposal_run_id=$2)
-           AND c.created_by_actor_type=$3 AND c.created_by_actor_id=$4
+         WHERE c.tenant_id=$1 AND r.integration_id=$2 AND (c.id=$3 OR c.proposal_run_id=$3)
+           AND c.created_by_actor_type=$4 AND c.created_by_actor_id=$5
            AND c.content_purged_at IS NULL`,
-        [principal.tenantId, candidateId, principal.actorType, principal.subjectId]);
+        [principal.tenantId, principal.integrationId, candidateId, principal.actorType, principal.subjectId]);
       if (!result.rows[0]) throw new EvolutionCandidateError("CANDIDATE_NOT_FOUND", 404, "Evolution candidate was not found");
       return mapCandidate(result.rows[0]);
     });

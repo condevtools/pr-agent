@@ -61,6 +61,7 @@ export interface GitLabNoteWebhookBody {
     path_with_namespace?: string;
   };
   object_attributes: {
+    id?: number;
     action?: string;
     note?: string;
     noteable_type?: string;
@@ -149,6 +150,7 @@ export const gitlabNoteWebhookPayloadSchema = z.object({
     .optional(),
   project: gitlabProjectSchema,
   object_attributes: z.object({
+    id: z.number().int().positive().optional(),
     note: z.string().optional(),
     action: z.string().optional(),
     noteable_type: z.string().optional(),

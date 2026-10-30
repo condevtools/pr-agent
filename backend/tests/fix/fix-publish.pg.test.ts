@@ -60,9 +60,9 @@ if (!databaseUrl) {
       `INSERT INTO pr_agent_harness.integration_bindings
          (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,
           publication_state,publication_generation,authority_version,review_execution_mode,execution_mode_generation,
-          review_execution_state,quiescence_receipt)
+          review_execution_state,quiescence_receipt,fix_enabled)
        VALUES ($1,$2,'github','https://github.example.test','acme/fix',88,1,'env:GITHUB_TOKEN',
-         'active',1,1,'harness_async',1,'active','{}'::jsonb)`,
+         'active',1,1,'harness_async',1,'active','{}'::jsonb,true)`,
       [integrationId, tenantId],
     );
     await insertRun(sourceRunId, "review.deep.v1", "succeeded", {});

@@ -121,7 +121,8 @@ if (!databaseUrl) {
         uuid, uuid, text, text, text, bigint) TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
-        pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName};
+        pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
+        pr_agent_harness.lock_current_binding_capability(uuid,uuid,text) TO ${roleName};
       GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.agent_steps,
         pr_agent_harness.step_attempts, pr_agent_harness.tool_calls,
         pr_agent_harness.model_calls, pr_agent_harness.tenant_budget_accounts,

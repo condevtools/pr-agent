@@ -79,6 +79,7 @@ export class FixesService {
     const runId = validRunId(proposalRunId); const approval = validRunId(approvalId);
     const request = fixApprovalDecisionSchema.parse(body);
     const services = await getAgentRuntimeServices();
+    const binding = await this.context.binding(principal);
     const material = await this.fixApprovalMaterial(principal, runId);
     await assertFixHeadCurrent(await this.context.binding(principal), material.input.original);
     const { provider, model } = resolveModelConfiguration();
@@ -111,7 +112,8 @@ export class FixesService {
           policyVersionHash: row.policy_version_hash, runtimeVersionHash: row.runtime_version_hash,
           input: { schemaVersion: 1, workflow: "fix.publish.v1", approvalId: exact.approvalId,
             intentHash: exact.intentHash, proposalRunId: exact.proposalRunId },
-          authorityGeneration: Number(row.authority_generation), executionModeGeneration: Number(row.execution_mode_generation),
+          authorityGeneration: Number(row.authority_generation), bindingAuthorityVersion: binding.version,
+          executionModeGeneration: Number(row.execution_mode_generation),
           runtimeConfig: publishRuntimeConfig(row.runtime_config_json), limits: publishLimits(row.limits_json),
         });
         return created.id;
@@ -123,7 +125,7 @@ export class FixesService {
     requireRunPermission(principal, "fixes:revoke");
     const runId = validRunId(proposalRunId); const approval = validRunId(approvalId);
     const request = fixApprovalDecisionSchema.parse(body);
-    const services = await getAgentRuntimeServices(); await this.context.binding(principal);
+    const services = await getAgentRuntimeServices();
     return services.db.transaction(principal.tenantId, async (client) => {
       await assertApprovalIntent(client, principal, runId, approval, request.intentHash);
       return revokeApprovalInTransaction(client, { tenantId: principal.tenantId,

@@ -47,7 +47,8 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
-    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
+      pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;
     appUrl.password = rolePassword;

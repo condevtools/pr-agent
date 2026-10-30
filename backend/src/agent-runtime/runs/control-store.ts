@@ -18,6 +18,8 @@ import {
   type RunPrincipal,
 } from "./control-contracts.js";
 import { fingerprint } from "../versions.js";
+import { lockCurrentBindingCapability } from "../authority/capability-guard.js";
+import { workflowCapability } from "../runtime/capabilities.js";
 
 interface LockedRunRow {
   id: string;
@@ -70,6 +72,17 @@ export class RunControlStore {
 
     return this.db.transaction(principal.tenantId, async (client) => {
       await authorizeBinding(client, principal);
+      if (command.kind === "resume" && command.decision.decision === "authorize_retry") {
+        await assertRunScope(client, principal, runId);
+        const replay = await findReceipt(client, principal.tenantId, runId, command.commandKey);
+        if (replay) {
+          if (replay.request_hash !== requestHash || replay.command_kind !== command.kind) {
+            throw runConflict("Run command key was reused with a different request");
+          }
+          return mapReceipt(replay);
+        }
+        await lockAuthorizeRetryCapability(client, principal, runId);
+      }
       const run = await lockRun(client, principal, runId);
       const duplicate = await findReceipt(client, principal.tenantId, runId, command.commandKey);
       if (duplicate) {
@@ -478,6 +491,24 @@ async function assertRunScope(
     [principal.tenantId, principal.integrationId, runId],
   );
   if (result.rowCount !== 1) throw runNotFound();
+}
+
+async function lockAuthorizeRetryCapability(
+  client: PoolClient,
+  principal: RunPrincipal,
+  runId: string,
+): Promise<void> {
+  const result = await client.query<{ run_type: string }>(
+    `SELECT run_type FROM pr_agent_harness.agent_runs
+     WHERE tenant_id=$1 AND integration_id=$2 AND id=$3`,
+    [principal.tenantId, principal.integrationId, runId],
+  );
+  const workflow = result.rows[0]?.run_type;
+  if (!workflow) throw runNotFound();
+  const capability = workflow === "review" ? "review.single" : workflowCapability(workflow);
+  if (capability) await lockCurrentBindingCapability(client, {
+    tenantId: principal.tenantId, integrationId: principal.integrationId, capability,
+  });
 }
 
 async function findReceipt(
