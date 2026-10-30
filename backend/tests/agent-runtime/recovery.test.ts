@@ -116,6 +116,30 @@ test("manual review exits are counted and a lost claim is not replayed", async (
   assert.equal(result.operationsClaimed, 1);
 });
 
+test("a deep first binding cannot consume the recovery budget before the next binding", async () => {
+  const second = { ...binding, id: "33333333-3333-4333-8333-333333333333",
+    repository: "acme/second" };
+  const batchLimits: string[] = [];
+  const claimLimits: string[] = [];
+  const loop = new PublicationRecoveryLoop(fakeDependencies({
+    listBindings: async () => [binding, second],
+    listBatches: async (item, limit) => {
+      batchLimits.push(`${item.id}:${limit}`);
+      return item.id === binding.id ? [pendingBatch] : [];
+    },
+    executeBatch: async () => {},
+    claimOperations: async (item, _owner, limit) => {
+      claimLimits.push(`${item.id}:${limit}`);
+      return [];
+    },
+  }), { batchLimit: 2, operationLimit: 2 });
+
+  await loop.tick();
+  assert.ok(batchLimits.includes(`${binding.id}:1`));
+  assert.ok(batchLimits.includes(`${second.id}:1`));
+  assert.deepEqual(claimLimits, [`${binding.id}:1`, `${second.id}:1`]);
+});
+
 test("start polls immediately and stop waits for the active tick", async () => {
   let started = 0;
   let release!: () => void;

@@ -138,6 +138,10 @@ if (!databaseUrl) {
       kind: "cancel", expectedVersion: await runVersion(second.id), commandKey: "cancel-second",
     });
     assert.equal((await operationRow(operationId)).status, "cancelled");
+    // Cancellation requests keep their capacity until the worker/sweeper settles the leases.
+    const swept = await executionStore.sweep({ tenantId: fixture.scope.tenantId,
+      integrationId: fixture.scope.integrationId, authorityGeneration: 1, executionModeGeneration: 1 });
+    assert.equal(swept.cancelled, 2);
     const third = await createRun(fixture, "shared-cancel-third");
     const thirdLease = await claim(fixture, third.id, "third-worker");
     await batchStore.freeze({

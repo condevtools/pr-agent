@@ -147,6 +147,10 @@ export class RunControlStore {
         ? `UPDATE pr_agent_harness.agent_runs
            SET status='cancelled',cancel_requested_at=COALESCE(cancel_requested_at,clock_timestamp()),
                lease_owner=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),
+               next_outcome_scan_at=CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
+                 WHERE rpb.tenant_id=$1 AND rpb.run_id=$2
+               ) THEN NULL ELSE COALESCE(next_outcome_scan_at,clock_timestamp()) END,
                error_code='cancelled_by_command',version=version+1,updated_at=clock_timestamp()
            WHERE tenant_id=$1 AND id=$2 RETURNING version,status`
         : `UPDATE pr_agent_harness.agent_runs

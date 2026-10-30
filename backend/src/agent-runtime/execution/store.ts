@@ -7,6 +7,8 @@ import type { RunStatus } from "../postgres/run-store.js";
 import { lockCurrentBindingCapability } from "../authority/capability-guard.js";
 import { workflowCapability, type ProductCapability } from "../runtime/capabilities.js";
 import { RunControlError } from "../runs/control-contracts.js";
+import { PgRunArtifactStore, type PreparedRunArtifact } from "../artifacts/index.js";
+import { measureDatabaseOperation } from "../database-timing.js";
 import {
   RunCheckpointCompatibilityError,
   RunLeaseLostError,
@@ -34,6 +36,7 @@ interface RunExecutionStoreOptions {
   initialRetryMs?: number;
   maxRetryMs?: number;
   supportedWorkflows?: readonly string[];
+  perBindingConcurrency?: number;
 }
 
 interface ClaimRow {
@@ -71,6 +74,7 @@ interface StepRow {
   status: RunStep["status"];
   output_hash: string | null;
   output_json: JsonObject | null;
+  result_ref: string | null;
   last_lease_epoch: string;
   attempt_count: number;
 }
@@ -99,16 +103,24 @@ export class RunExecutionStore {
   private readonly initialRetryMs: number;
   private readonly maxRetryMs: number;
   private readonly supportedWorkflows: readonly string[];
+  private readonly perBindingConcurrency: number;
+  private readonly artifacts: PgRunArtifactStore;
 
   constructor(
     private readonly db: RuntimeDatabase,
     options: RunExecutionStoreOptions = {},
   ) {
+    this.artifacts = new PgRunArtifactStore(db);
     this.leaseTtlMs = positiveInteger(options.leaseTtlMs ?? 60_000, "lease TTL");
     this.initialRetryMs = positiveInteger(options.initialRetryMs ?? 1_000, "initial retry delay");
     this.maxRetryMs = positiveInteger(options.maxRetryMs ?? 60_000, "maximum retry delay");
     this.supportedWorkflows = options.supportedWorkflows ?? ["review", "review.single.v1", "review.deep.v1",
       "fix.propose.v1", "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1"];
+    this.perBindingConcurrency = positiveInteger(
+      options.perBindingConcurrency ?? 2,
+      "per-binding worker concurrency",
+    );
+    if (this.perBindingConcurrency > 16) throw new Error("per-binding worker concurrency must not exceed 16");
     if (!this.supportedWorkflows.length || this.supportedWorkflows.some((workflow) => !workflow.trim())) {
       throw new Error("supported workflows must be nonempty identifiers");
     }
@@ -131,6 +143,7 @@ export class RunExecutionStore {
           binding.executionModeGeneration],
       );
       if (!authority.rows[0]?.allowed) return undefined;
+      if (!await lockBindingCapacity(client, binding, this.perBindingConcurrency)) return undefined;
 
       const candidate = await client.query<{
         job_id: string; run_id: string; run_type: string;
@@ -271,6 +284,7 @@ export class RunExecutionStore {
           binding.executionModeGeneration],
       );
       if (!authority.rows[0]?.allowed) return undefined;
+      if (!await lockBindingCapacity(client, binding, this.perBindingConcurrency)) return undefined;
 
       await client.query(
         `UPDATE pr_agent_harness.job_queue j
@@ -394,7 +408,9 @@ export class RunExecutionStore {
   }
 
   async heartbeat(lease: RunLease): Promise<RunLease> {
-    return this.db.transaction(lease.tenantId, async (client) => {
+    return measureDatabaseOperation("lease_heartbeat", () => this.db.transaction(
+      lease.tenantId,
+      async (client) => {
       const run = await client.query<{ lease_expires_at: Date }>(
         `UPDATE pr_agent_harness.agent_runs
          SET lease_expires_at=now()+($7::double precision*interval '1 millisecond'),updated_at=now()
@@ -408,7 +424,8 @@ export class RunExecutionStore {
       );
       if (!run.rows[0]) throw new RunLeaseLostError(lease.runId);
       return { ...lease, leaseExpiresAt: run.rows[0].lease_expires_at.toISOString() };
-    });
+      },
+    ));
   }
 
   async withLease<T>(lease: RunLease, fn: LeaseTransaction<T>): Promise<T> {
@@ -497,7 +514,7 @@ export class RunExecutionStore {
       requiredHash(input.tool.requestHash, "tool request hash");
     }
     const maxStepAttempts = positiveLimit(lease.limits.maxStepAttempts, "limits.maxStepAttempts", 3);
-    return this.withLease(lease, async (client) => {
+    return measureDatabaseOperation("step_transaction", () => this.withLease(lease, async (client) => {
       const selected = await client.query<StepRow>(
         `SELECT * FROM pr_agent_harness.agent_steps
          WHERE tenant_id=$1 AND run_id=$2 AND step_key=$3 FOR UPDATE`,
@@ -570,7 +587,7 @@ export class RunExecutionStore {
         attemptId: attempt.rows[0]!.id, attemptNumber: attempt.rows[0]!.attempt_number,
       });
       return mapStep(step, attempt.rows[0]!.id, attempt.rows[0]!.attempt_number, false);
-    });
+    }));
   }
 
   async getStep(lease: RunLease, stepKey: string): Promise<RunStep | undefined> {
@@ -606,6 +623,7 @@ export class RunExecutionStore {
       attemptId: string;
       outputHash: string;
       output: JsonObject;
+      preparedArtifact?: PreparedRunArtifact;
       resultRef?: string;
       checkpoint: { schemaVersion: number; stateHash: string; state: JsonObject };
     },
@@ -613,7 +631,7 @@ export class RunExecutionStore {
     requiredHash(input.outputHash, "step output hash");
     requiredHash(input.checkpoint.stateHash, "checkpoint state hash");
     positiveInteger(input.checkpoint.schemaVersion, "checkpoint schema version");
-    return this.withLease(lease, async (client) => {
+    return measureDatabaseOperation("step_transaction", () => this.withLease(lease, async (client) => {
       const selected = await client.query<StepRow>(
         `SELECT * FROM pr_agent_harness.agent_steps
          WHERE tenant_id=$1 AND run_id=$2 AND id=$3 FOR UPDATE`,
@@ -623,6 +641,9 @@ export class RunExecutionStore {
       if (!step) throw new Error("run step not found");
       if (step.status === "succeeded") {
         if (step.output_hash !== input.outputHash) throw new RunStepConflictError(step.step_key);
+        if (input.preparedArtifact && step.result_ref !== input.preparedArtifact.artifactHash) {
+          throw new RunStepConflictError(step.step_key);
+        }
         const existing = await checkpointForStep(client, lease, step.id);
         if (!existing || existing.state_hash !== input.checkpoint.stateHash) {
           throw new RunCheckpointCompatibilityError(lease.runId);
@@ -637,21 +658,33 @@ export class RunExecutionStore {
         [lease.tenantId, lease.runId, input.attemptId, input.stepId, lease.owner, lease.epoch],
       );
       if (attempt.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      const artifact = input.preparedArtifact
+        ? await this.artifacts.putPreparedInTransaction(client, {
+          tenantId: lease.tenantId,
+          integrationId: lease.integrationId,
+          runId: lease.runId,
+        }, input.preparedArtifact)
+        : undefined;
+      if (artifact && artifact.artifactHash !== input.preparedArtifact?.artifactHash) {
+        throw new RunStepConflictError(step.step_key);
+      }
+      const resultRef = artifact?.artifactHash ?? input.resultRef;
       const toolCall = await client.query(
         `UPDATE pr_agent_harness.tool_calls
          SET status='succeeded',result_hash=$4,result_ref=$5,completed_at=now()
          WHERE tenant_id=$1 AND run_id=$2 AND step_attempt_id=$3 AND status='in_flight'`,
-        [lease.tenantId, lease.runId, input.attemptId, input.outputHash, input.resultRef ?? null],
+        [lease.tenantId, lease.runId, input.attemptId, input.outputHash, resultRef ?? null],
       );
       if (step.step_kind === "tool" && toolCall.rowCount !== 1) {
         throw new Error("tool step attempt has no in-flight tool call");
       }
       await client.query(
         `UPDATE pr_agent_harness.agent_steps
-         SET status='succeeded',output_hash=$4,output_json=$5::jsonb,
+         SET status='succeeded',output_hash=$4,output_json=$5::jsonb,result_ref=$6,
              completed_at=now(),updated_at=now()
          WHERE tenant_id=$1 AND run_id=$2 AND id=$3`,
-        [lease.tenantId, lease.runId, input.stepId, input.outputHash, JSON.stringify(input.output)],
+        [lease.tenantId, lease.runId, input.stepId, input.outputHash, JSON.stringify(input.output),
+          resultRef ?? null],
       );
       const sequence = await nextCheckpointSequence(client, lease);
       const checkpoint = await client.query<CheckpointRow>(
@@ -667,7 +700,17 @@ export class RunExecutionStore {
         stepId: input.stepId, attemptId: input.attemptId, checkpointSequence: sequence,
       });
       return mapCheckpoint(checkpoint.rows[0]!);
-    });
+    }));
+  }
+
+  async loadStepOutput<T>(lease: RunLease, step: RunStep): Promise<T> {
+    if (!step.outputHash) throw new RunCheckpointCompatibilityError(lease.runId);
+    const outputHash = step.outputHash;
+    return this.withLease(lease, (client) => this.artifacts.readStepOutputValueInTransaction<T>(
+      client,
+      { tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId },
+      { resultRef: step.resultRef, output: step.output, outputHash },
+    ));
   }
 
   /** Settle a caught role/tool failure without leaving an in-flight attempt behind. */
@@ -777,6 +820,14 @@ export class RunExecutionStore {
              waiting_batch_id=CASE WHEN $7::uuid IS NOT NULL THEN $7 ELSE waiting_batch_id END,
              waiting_operation_set_hash=CASE WHEN $8::text IS NOT NULL THEN $8 ELSE waiting_operation_set_hash END,
              finished_at=CASE WHEN $6 THEN now() ELSE NULL END,
+             next_outcome_scan_at=CASE
+               WHEN $7::uuid IS NOT NULL THEN COALESCE(next_outcome_scan_at,clock_timestamp())
+               WHEN $6 AND NOT EXISTS (
+                 SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
+                 WHERE rpb.tenant_id=$1 AND rpb.run_id=$2
+               ) THEN NULL
+               WHEN $6 THEN COALESCE(next_outcome_scan_at,clock_timestamp())
+               ELSE next_outcome_scan_at END,
              version=version+1,updated_at=now()
          WHERE tenant_id=$1 AND id=$2
          RETURNING id,tenant_id,integration_id,status,version,lease_owner,lease_epoch,
@@ -966,7 +1017,12 @@ export class RunExecutionStore {
         const run = await client.query<{ version: string; lease_epoch: string }>(
           `UPDATE pr_agent_harness.agent_runs
            SET status='failed',lease_owner=NULL,lease_expires_at=NULL,error_code=$3,
-               finished_at=now(),version=version+1,updated_at=now()
+               finished_at=now(),
+               next_outcome_scan_at=CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
+                 WHERE rpb.tenant_id=$1 AND rpb.run_id=$2
+               ) THEN NULL ELSE COALESCE(next_outcome_scan_at,clock_timestamp()) END,
+               version=version+1,updated_at=now()
            WHERE tenant_id=$1 AND id=$2 AND status='running'
            RETURNING version,lease_epoch`,
           [lease.tenantId, lease.runId, reason],
@@ -1066,7 +1122,12 @@ export class RunExecutionStore {
         const reason = row.cancel_requested_at ? "cancel_requested" : "run_deadline_exceeded";
         await client.query(
           `UPDATE pr_agent_harness.agent_runs
-           SET status=$3,error_code=$4,finished_at=now(),version=version+1,updated_at=now()
+           SET status=$3,error_code=$4,finished_at=now(),
+               next_outcome_scan_at=CASE WHEN NOT EXISTS (
+                 SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
+                 WHERE rpb.tenant_id=$1 AND rpb.run_id=$2
+               ) THEN NULL ELSE COALESCE(next_outcome_scan_at,clock_timestamp()) END,
+               version=version+1,updated_at=now()
            WHERE tenant_id=$1 AND id=$2`,
           [binding.tenantId, row.id, status, reason],
         );
@@ -1224,6 +1285,7 @@ export async function linkBatchAndCheckpoint(
         || row.state_hash !== input.stateHash) {
       throw new RunCheckpointCompatibilityError(lease.runId);
     }
+    await markRunForOutcomeScan(client, lease);
     return mapCheckpoint(row);
   }
   const link = await client.query<{ run_id: string; operation_set_hash: string }>(
@@ -1246,6 +1308,7 @@ export async function linkBatchAndCheckpoint(
       throw new Error("publication batch is already owned by another Run");
     }
   }
+  await markRunForOutcomeScan(client, lease);
   const sequence = await nextCheckpointSequence(client, lease);
   const checkpoint = await client.query<CheckpointRow>(
     `INSERT INTO pr_agent_harness.checkpoints
@@ -1261,6 +1324,17 @@ export async function linkBatchAndCheckpoint(
     checkpointSequence: sequence,
   });
   return mapCheckpoint(checkpoint.rows[0]!);
+}
+
+async function markRunForOutcomeScan(client: PoolClient, lease: RunLease): Promise<void> {
+  const updated = await client.query(
+    `UPDATE pr_agent_harness.agent_runs
+     SET next_outcome_scan_at=COALESCE(next_outcome_scan_at,clock_timestamp()),updated_at=clock_timestamp()
+     WHERE tenant_id=$1 AND integration_id=$2 AND id=$3
+       AND lease_owner=$4 AND lease_epoch=$5 AND status='running'`,
+    [lease.tenantId, lease.integrationId, lease.runId, lease.owner, lease.epoch],
+  );
+  if (updated.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
 }
 
 async function appendRunEvent(
@@ -1349,6 +1423,7 @@ function mapStep(
     id: row.id, runId: row.run_id, stepKey: row.step_key, kind: row.step_kind,
     inputHash: row.input_hash, status: row.status, attemptId, attemptNumber, reused,
     output: row.output_json ?? undefined, outputHash: row.output_hash ?? undefined,
+    resultRef: row.result_ref ?? undefined,
   };
 }
 
@@ -1373,7 +1448,12 @@ async function settleSweptRun(
   await client.query(
     `UPDATE pr_agent_harness.agent_runs
      SET status=$3,lease_owner=NULL,lease_expires_at=NULL,error_code=$4,
-         finished_at=now(),version=version+1,updated_at=now()
+         finished_at=now(),
+         next_outcome_scan_at=CASE WHEN NOT EXISTS (
+           SELECT 1 FROM pr_agent_harness.run_publication_batches rpb
+           WHERE rpb.tenant_id=$1 AND rpb.run_id=$2
+         ) THEN NULL ELSE COALESCE(next_outcome_scan_at,clock_timestamp()) END,
+         version=version+1,updated_at=now()
      WHERE tenant_id=$1 AND id=$2`,
     [tenantId, row.id, status, reason],
   );
@@ -1470,6 +1550,25 @@ async function terminalizeExhaustedSpecialJobs(
     }
     await insertDeadLetter(client, binding.tenantId, row, reason);
   }
+}
+
+async function lockBindingCapacity(
+  client: PoolClient,
+  binding: ClaimableBinding,
+  limit: number,
+): Promise<boolean> {
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1,8310))",
+    [`${binding.tenantId}:${binding.integrationId}`],
+  );
+  const active = await client.query<{ count: number }>(
+    `SELECT count(*)::int AS count
+     FROM pr_agent_harness.agent_runs
+     WHERE tenant_id=$1 AND integration_id=$2 AND status='running'
+       AND lease_expires_at>clock_timestamp()`,
+    [binding.tenantId, binding.integrationId],
+  );
+  return (active.rows[0]?.count ?? 0) < limit;
 }
 
 async function completeManualReceiptForJob(

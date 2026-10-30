@@ -30,7 +30,9 @@ export class EvaluationCoordinator {
   constructor(private readonly store: PgEvolutionEvaluationStore) {}
 
   async tick(binding: PublicationBinding): Promise<boolean> {
-    if (!bindingAllowsCapability(binding, "evolution")) return false;
+    if (!bindingAllowsCapability(binding, "evolution")) {
+      return (await this.store.expireDue(binding.tenantId)) > 0;
+    }
     const lease = await this.store.claim(binding.tenantId, binding.id, this.owner);
     if (!lease) return false;
     await this.store.observeChildren(lease, binding.id);

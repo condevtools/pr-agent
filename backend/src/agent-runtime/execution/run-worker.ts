@@ -15,11 +15,15 @@ import type { RunExecutionStore } from "./store.js";
 import { DeepReviewAnalysisFailedError, ReviewRunRevisionChangedError, withRunExecutionContext, type RunExecutionContext } from "./run-context.js";
 import { fingerprint, AGENT_RUNTIME_CONFIG } from "../versions.js";
 import type { PublicationOutcomeHandler } from "../publication/outcome.js";
+import type { RuntimeQueueClass } from "./scheduler.js";
+import { prepareRunArtifact, RunArtifactCorruptError, RunArtifactLimitError,
+  RunArtifactUnavailableError } from "../artifacts/index.js";
 
 interface WorkerDependencies {
   store: RunExecutionStore;
   budget: ModelBudgetStore;
-  bindings(): Promise<PublicationBinding[]>;
+  bindings(queueClass?: RuntimeQueueClass, limit?: number): Promise<PublicationBinding[]>;
+  sweepBindings?(limit: number): Promise<PublicationBinding[]>;
   runtimeHash(binding: PublicationBinding): Promise<string>;
   supportedWorkflows?(binding: PublicationBinding): readonly string[];
   execute(lease: RunLease, binding: PublicationBinding): Promise<void>;
@@ -30,16 +34,29 @@ interface WorkerDependencies {
 
 export class RunWorker {
   private readonly owner = `review-worker-${randomUUID()}`;
-  private readonly active = new Map<string, { task: Promise<void>; controller: AbortController }>();
+  private readonly active = new Map<string, {
+    task: Promise<void>;
+    controller: AbortController;
+    lane: "normal" | "special";
+  }>();
   private timer?: NodeJS.Timeout;
   private sweeper?: NodeJS.Timeout;
   private polling = false;
   private sweeping = false;
   private stopped = false;
+  private nextSpecial: "publication_outcome" | "manual_resume" = "publication_outcome";
 
-  constructor(private readonly dependencies: WorkerDependencies, private readonly concurrency = 4) {
+  constructor(
+    private readonly dependencies: WorkerDependencies,
+    private readonly concurrency = 4,
+    private readonly specialConcurrency = 1,
+  ) {
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 16) {
       throw new Error("Invalid Run worker concurrency");
+    }
+    if (!Number.isSafeInteger(specialConcurrency) || specialConcurrency < 1
+        || specialConcurrency > concurrency) {
+      throw new Error("Invalid special Run worker concurrency");
     }
   }
 
@@ -64,30 +81,19 @@ export class RunWorker {
     if (this.polling || this.stopped) return;
     this.polling = true;
     try {
-      for (const binding of await this.dependencies.bindings()) {
+      if (this.active.size < this.concurrency && this.activeLaneCount("special") < this.specialConcurrency) {
+        await this.claimSpecial();
+      }
+      const available = this.concurrency - this.active.size;
+      if (available <= 0 || this.stopped) return;
+      for (const binding of await this.dependencies.bindings("normal", available)) {
         if (this.stopped || this.active.size >= this.concurrency) break;
         if (binding.reviewExecutionMode !== "harness_async") continue;
-        const runtimeHash = await this.dependencies.runtimeHash(binding);
-        const supportedWorkflows = this.dependencies.supportedWorkflows?.(binding);
-        while (!this.stopped && this.active.size < this.concurrency) {
-          const lease = await this.dependencies.store.claimPublicationOutcome(
-            claimBinding(binding), this.owner, runtimeHash, supportedWorkflows,
-          ) ?? await this.dependencies.store.claimManualResume(
-            claimBinding(binding), this.owner, runtimeHash, supportedWorkflows,
-          ) ?? await this.dependencies.store.claim(
-            claimBinding(binding), this.owner, runtimeHash, supportedWorkflows,
-          );
-          if (!lease) break;
-          const controller = new AbortController();
-          const task = this.execute(lease, binding, controller)
-            .catch((error: unknown) => this.dependencies.onError(error, lease.runId))
-            .finally(() => {
-              if (this.active.get(lease.runId)?.controller === controller) {
-                this.active.delete(lease.runId);
-              }
-            });
-          this.active.set(lease.runId, { task, controller });
-        }
+        const lease = await this.dependencies.store.claim(
+          claimBinding(binding), this.owner, await this.dependencies.runtimeHash(binding),
+          this.dependencies.supportedWorkflows?.(binding),
+        );
+        if (lease) this.startLease(lease, binding, "normal");
       }
     } finally {
       this.polling = false;
@@ -98,7 +104,9 @@ export class RunWorker {
     if (this.sweeping || this.stopped) return;
     this.sweeping = true;
     try {
-      const bindings = await this.dependencies.bindings();
+      const bindings = this.dependencies.sweepBindings
+        ? await this.dependencies.sweepBindings(32)
+        : await this.dependencies.bindings("maintenance", 32);
       for (const binding of bindings) {
         if (binding.reviewExecutionMode === "harness_async") {
           await this.dependencies.store.sweep(claimBinding(binding));
@@ -135,6 +143,55 @@ export class RunWorker {
       controller.abort(new Error("Run worker stopped"));
     }
     await this.drain();
+  }
+
+  private async claimSpecial(): Promise<void> {
+    const preferred = this.nextSpecial;
+    this.nextSpecial = preferred === "publication_outcome" ? "manual_resume" : "publication_outcome";
+    const kinds = [preferred, this.nextSpecial] as const;
+    for (const kind of kinds) {
+      if (this.stopped || this.active.size >= this.concurrency
+          || this.activeLaneCount("special") >= this.specialConcurrency) return;
+      const bindings = await this.dependencies.bindings(kind, 1);
+      for (const binding of bindings) {
+        if (binding.reviewExecutionMode !== "harness_async") continue;
+        const runtimeHash = await this.dependencies.runtimeHash(binding);
+        const workflows = this.dependencies.supportedWorkflows?.(binding);
+        const lease = kind === "publication_outcome"
+          ? await this.dependencies.store.claimPublicationOutcome(
+            claimBinding(binding), this.owner, runtimeHash, workflows,
+          )
+          : await this.dependencies.store.claimManualResume(
+            claimBinding(binding), this.owner, runtimeHash, workflows,
+          );
+        if (lease) {
+          this.startLease(lease, binding, "special");
+          return;
+        }
+      }
+    }
+  }
+
+  private startLease(
+    lease: RunLease,
+    binding: PublicationBinding,
+    lane: "normal" | "special",
+  ): void {
+    const controller = new AbortController();
+    const task = this.execute(lease, binding, controller)
+      .catch((error: unknown) => this.dependencies.onError(error, lease.runId))
+      .finally(() => {
+        if (this.active.get(lease.runId)?.controller === controller) {
+          this.active.delete(lease.runId);
+        }
+      });
+    this.active.set(lease.runId, { task, controller, lane });
+  }
+
+  private activeLaneCount(lane: "normal" | "special"): number {
+    let count = 0;
+    for (const active of this.active.values()) if (active.lane === lane) count += 1;
+    return count;
   }
 
   private async execute(lease: RunLease, binding: PublicationBinding, controller: AbortController): Promise<void> {
@@ -193,10 +250,7 @@ export class RunWorker {
             : {}),
         });
         if (step.reused) {
-          if (!step.output || fingerprint(step.output) !== step.outputHash || !("value" in step.output)) {
-            throw new RunCheckpointCompatibilityError(lease.runId);
-          }
-          return step.output.value as T;
+          return store.loadStepOutput<T>(lease, step);
         }
         try {
         const policy = lease.runtimeConfig.modelPolicy as ModelExecutionPolicy;
@@ -224,16 +278,23 @@ export class RunWorker {
           throw new RunExecutionContractError(`Run step output is not JSON-serializable: ${
             error instanceof Error ? error.message : "unknown serialization error"}`);
         }
-        const checkpointLimit = frozenCheckpointLimit(lease);
-        if (Buffer.byteLength(JSON.stringify(output)) > checkpointLimit) {
-          throw new RunOutputLimitError(checkpointLimit);
-        }
+        const preparedArtifact = await prepareRunArtifact(Buffer.from(JSON.stringify(output)), {
+          contentType: "application/json",
+          purpose: "step_output",
+        });
+        const storedOutput = {
+          storage: "artifact",
+          artifactHash: preparedArtifact.artifactHash,
+          rawSizeBytes: preparedArtifact.rawSizeBytes,
+          compressedSizeBytes: preparedArtifact.compressedSizeBytes,
+        };
         const state = { stage: key, stepId: step.id, outputHash: fingerprint(output) };
         await store.completeStep(lease, {
           stepId: step.id,
           attemptId: step.attemptId,
-          output,
+          output: storedOutput,
           outputHash: fingerprint(output),
+          preparedArtifact,
           checkpoint: { schemaVersion: 1, state, stateHash: fingerprint(state) },
         });
         return result;
@@ -345,18 +406,13 @@ function frozenMaxJobAttempts(lease: RunLease): number {
   return value;
 }
 
-function frozenCheckpointLimit(lease: RunLease): number {
-  const value = lease.runtimeConfig.maxCheckpointBytes;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    throw new RunExecutionContractError("Run is missing its frozen maxCheckpointBytes contract");
-  }
-  return value;
-}
-
 function isPermanentExecutionError(error: unknown): boolean {
   return error instanceof RunStepConflictError
     || error instanceof RunStepAttemptLimitError
     || error instanceof RunOutputLimitError
+    || error instanceof RunArtifactLimitError
+    || error instanceof RunArtifactCorruptError
+    || error instanceof RunArtifactUnavailableError
     || error instanceof RunExecutionContractError
     || error instanceof ModelCallConflictError
     || error instanceof ZodError

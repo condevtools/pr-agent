@@ -2,13 +2,15 @@ import { EvaluationCoordinator } from "../../evolution/evaluations/run.js";
 import { PgEvolutionEvaluationStore } from "../../evolution/evaluations/store.js";
 import { ModelBudgetStore } from "../budget/model-budget-store.js";
 import { RunWorker } from "../execution/run-worker.js";
+import { PgRunScheduler } from "../execution/scheduler.js";
 import { RunExecutionStore } from "../execution/store.js";
 import { PublicationControlStore } from "../publication/control.js";
 import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "../publication/outcome.js";
 import { createPublicationRecoveryLoop, type PublicationRecoveryLoop } from "../publication/recovery.js";
 import { loadFixPolicyRegistry } from "../../fix/proposal/policy.js";
-import { roleStartsRecovery, roleStartsWorker, type AgentProcessRole } from "./config.js";
-import { bindingAllowsCapability, resolveRuntimeCapabilities, supportedWorkflowIds,
+import { resolveWorkerSchedulingConfiguration, roleStartsRecovery, roleStartsWorker,
+  type AgentProcessRole } from "./config.js";
+import { resolveRuntimeCapabilities, supportedWorkflowIds,
   supportedWorkflowIdsForBinding,
   type RuntimeCapabilityConfiguration } from "./capabilities.js";
 import { clearSharedCredentialRuntime } from "./credentials.js";
@@ -55,10 +57,16 @@ export class AgentRuntimeComposition {
   async startRecovery(): Promise<void> {
     if (this.recovery) return;
     this.setStatus("recovery", "starting");
-    const services = createAgentRuntimeServices();
+    const services = createAgentRuntimeServices("recovery");
     let heartbeat: ProcessHeartbeatLoop | undefined;
     try {
       await services.assertRole();
+      const scheduling = resolveWorkerSchedulingConfiguration();
+      const scheduler = new PgRunScheduler(
+        services.pool,
+        services.authority,
+        scheduling.perBindingConcurrency,
+      );
       const activeHeartbeat = this.processHeartbeat(services, "recovery");
       heartbeat = activeHeartbeat;
       await activeHeartbeat.start();
@@ -66,6 +74,8 @@ export class AgentRuntimeComposition {
         db: services.db, authority: services.authority,
         batchStore: services.batchStore, batchCoordinator: services.batchCoordinator,
         runtimeForBinding: (binding) => publicationRuntimeForBinding(binding, services),
+        reserveBindings: (limit) => scheduler.reserve({ queueClass: "recovery", limit }),
+        loopOptions: { bindingLimit: scheduling.recoveryBindingPageSize },
         onActivity: () => {
           this.recordActivity("recovery");
           void activeHeartbeat.recordActivity().catch((error) => this.recordError("recovery", error));
@@ -90,17 +100,24 @@ export class AgentRuntimeComposition {
   async startWorker(): Promise<void> {
     if (this.worker) return;
     this.setStatus("worker", "starting");
-    const services = createAgentRuntimeServices();
+    const services = createAgentRuntimeServices("worker");
     let heartbeat: ProcessHeartbeatLoop | undefined;
     try {
       await services.assertRole();
       const capabilities = this.capabilities ?? validateCapabilityDependencies();
       const compatibility = await resolveWorkerCompatibility(capabilities);
+      const scheduling = resolveWorkerSchedulingConfiguration();
+      const scheduler = new PgRunScheduler(
+        services.pool,
+        services.authority,
+        scheduling.perBindingConcurrency,
+      );
       const activeHeartbeat = this.processHeartbeat(services, "worker", compatibility);
       heartbeat = activeHeartbeat;
       await activeHeartbeat.start();
       const store = new RunExecutionStore(services.db, {
         supportedWorkflows: compatibility.supportedWorkflowIds,
+        perBindingConcurrency: scheduling.perBindingConcurrency,
       });
       const budget = new ModelBudgetStore(services.db);
       const outcomes = new PublicationOutcomeCoordinator({ db: services.db, batchStore: services.batchStore });
@@ -116,10 +133,7 @@ export class AgentRuntimeComposition {
       const loop = new RunWorker({
         store, budget, outcomeHandler,
         coordinateOutcomes: async (binding) => {
-          const tasks: Promise<unknown>[] = [outcomes.tick(binding)];
-          if (bindingAllowsCapability(binding, "evolution", capabilities)) {
-            tasks.push(evaluations.tick(binding));
-          }
+          const tasks: Promise<unknown>[] = [outcomes.tick(binding), evaluations.tick(binding)];
           const results = await Promise.allSettled(tasks);
           for (const result of results) if (result.status === "rejected") {
             this.recordError("worker", result.reason);
@@ -127,12 +141,18 @@ export class AgentRuntimeComposition {
               errorType: result.reason instanceof Error ? result.reason.name : "unknown" }));
           }
         },
-        bindings: async () => {
-          const bindings = await services.authority.listRecoverable();
+        bindings: async (queueClass = "normal", limit = scheduling.concurrency) => {
+          const bindings = await scheduler.reserve({
+            queueClass,
+            limit,
+            runtimeVersionHash: compatibility.runtimeVersionHash,
+            supportedWorkflows: compatibility.supportedWorkflowIds,
+          });
           this.recordActivity("worker");
           await activeHeartbeat.recordActivity();
           return bindings;
         },
+        sweepBindings: (limit) => scheduler.reserve({ queueClass: "maintenance", limit }),
         runtimeHash: async () => compatibility.runtimeVersionHash,
         supportedWorkflows: (binding) => supportedWorkflowIdsForBinding(
           capabilities, binding,
@@ -143,7 +163,7 @@ export class AgentRuntimeComposition {
           process.emitWarning(JSON.stringify({ component: "review-run-worker", runId,
             errorType: error instanceof Error ? error.name : "unknown" }));
         },
-      });
+      }, scheduling.concurrency, scheduling.specialConcurrency);
       this.worker = { services, loop, heartbeat: activeHeartbeat };
       loop.start();
       this.setStatus("worker", "running");

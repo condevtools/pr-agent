@@ -55,9 +55,11 @@ docker compose run --rm database-init node dist/agent-runtime/cli.js retention \
   --tenant <tenant-uuid> --action apply --days 30 --limit 100
 ```
 
-Apply 会删除候选的旧事件前缀，清除 Run 输入、Step 输出、checkpoint、模型响应与工具结果引用等原始内容；它是实际数据删除操作。非终态、外部效果未决或费用未决的 Run 被排除。Run 和关联 operation 加锁后再次检查，防止其他 Run 并发恢复共享操作时误清除。
+Apply 会删除候选的旧事件前缀，清除 Run 输入、Step 内联输出、checkpoint、模型响应与工具结果引用；它是实际数据删除操作。非终态、外部效果未决、费用未决或仍有未释放 artifact hold 的 Run 被排除。Run 和关联 operation 加锁后再次检查；新 hold 也遵守 Run → artifact 的锁顺序，不能在内容清理完成后补建引用。
 
-身份、版本、哈希、用量数值、命令回执和 publication 账继续保留。公开 snapshot 的 `contentPurgedAt` 标明内容已清除；rerun 返回 410，必须从源 PR 创建新的 review。原创建键仍按不可变 request hash 去重，不因清除内容而产生新 Run。事件 floor 与审计同事务推进。
+身份、版本、哈希、用量数值、命令回执和 publication 账继续保留。公开 snapshot 的 `contentPurgedAt` 标明 Run 的内联内容已清理，rerun 返回 410，必须从源 PR 创建新的 review。压缩 artifact 按独立保留期清理：默认 30 天，hold 释放后继续保留 30 天，因此该字段不代表压缩存储已经即时擦除。原创建键仍按不可变 request hash 去重，不因清除内容而产生新 Run。事件 floor 与审计同事务推进。
+
+已退休且没有提案、评测或发布引用的数据集在 purge 事务内释放自己的 `dataset-case` holds。其他 Fix、Evolution、资格认定和法律保留引用必须先由对应生命周期显式解除，不能为了释放磁盘空间跳过引用检查。
 
 此策略不删除 publication 的冻结 payload、外部平台评论或数据库备份，也不是全仓库数据擦除接口。它没有配置自动定时删除；备份保存期、磁盘加密、外部效果审计与平台内容删除需要部署方分别管理。
 

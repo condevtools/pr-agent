@@ -12,12 +12,18 @@ import {
   evolutionProposalSourceSchema, type EvolutionProposalSource,
 } from "./candidate-contracts.js";
 import { reviewStrategyTextSchema, type ReviewStrategyText } from "../../review/strategy/contracts.js";
+import { PgRunArtifactStore, RunArtifactCorruptError,
+  RunArtifactUnavailableError } from "../../agent-runtime/artifacts/index.js";
 
 export class EvolutionCandidateError extends RunControlError {
   constructor(code: string, status: number, message: string) { super(code, status, message); }
 }
 export class PgEvolutionCandidateStore {
-  constructor(private readonly db: RuntimeDatabase) {}
+  private readonly artifacts: PgRunArtifactStore;
+
+  constructor(private readonly db: RuntimeDatabase) {
+    this.artifacts = new PgRunArtifactStore(db);
+  }
 
   async loadSource(lease: RunLease): Promise<EvolutionProposalSource> {
     return this.db.transaction(lease.tenantId, async (client) => {
@@ -38,15 +44,31 @@ export class PgEvolutionCandidateStore {
       if (!source || source.source_hash !== sourceHash(source.source_json)) {
         throw new EvolutionCandidateError("EVOLUTION_SOURCE_UNAVAILABLE", 409, "Frozen proposal source is unavailable");
       }
-      const step = await client.query<{ id: string; output: unknown }>(
-        `SELECT id,output_json->'value' AS output FROM pr_agent_harness.agent_steps
+      const step = await client.query<{ id: string; output_json: Record<string, unknown> | null;
+        output_hash: string; result_ref: string | null }>(
+        `SELECT id,output_json,output_hash,result_ref FROM pr_agent_harness.agent_steps
          WHERE tenant_id=$1 AND run_id=$2 AND step_key=$3 AND step_kind='model' AND status='succeeded'`,
         [lease.tenantId, lease.runId, stepKey]);
-      if (!step.rows[0] || fingerprint(step.rows[0].output) !== candidateHash) {
+      const stepRow = step.rows[0];
+      let persistedCandidate: unknown;
+      try {
+        persistedCandidate = stepRow
+          ? await this.artifacts.readStepOutputValueInTransaction<unknown>(client, {
+            tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
+          }, { resultRef: stepRow.result_ref, output: stepRow.output_json, outputHash: stepRow.output_hash })
+          : undefined;
+      } catch (error) {
+        if (error instanceof RunArtifactCorruptError || error instanceof RunArtifactUnavailableError) {
+          throw new EvolutionCandidateError("EVOLUTION_STEP_MISMATCH", 409,
+            "Candidate model step content is unavailable");
+        }
+        throw error;
+      }
+      if (!stepRow || fingerprint(persistedCandidate) !== candidateHash) {
         throw new EvolutionCandidateError("EVOLUTION_STEP_MISMATCH", 409, "Candidate model step is not durably completed");
       }
       const id = randomUUID();
-      const provenance = { schemaVersion: 1, proposalRunId: lease.runId, modelStepId: step.rows[0].id,
+      const provenance = { schemaVersion: 1, proposalRunId: lease.runId, modelStepId: stepRow.id,
         sourceHash: source.source_hash, workflowVersionHash: lease.workflowVersionHash,
         promptVersionHash: lease.promptVersionHash, modelVersionHash: lease.modelVersionHash,
         runtimeVersionHash: lease.runtimeVersionHash };
@@ -67,6 +89,11 @@ export class PgEvolutionCandidateStore {
           throw new EvolutionCandidateError("EVOLUTION_CANDIDATE_CONFLICT", 409, "Proposal Run already produced a different candidate");
         }
         return mapCandidate(existing);
+      }
+      if (stepRow.result_ref) {
+        await this.artifacts.holdInTransaction(client, {
+          tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
+        }, stepRow.result_ref, `evolution-candidate:${id}`, "evolution");
       }
       return mapCandidate({ id, tenant_id: lease.tenantId, proposal_run_id: lease.runId,
         dataset_id: source.source_json.datasetId, dataset_version: String(source.source_json.datasetVersion),

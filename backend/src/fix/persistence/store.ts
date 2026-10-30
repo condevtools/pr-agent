@@ -19,10 +19,16 @@ import type { RunPrincipal } from "../../agent-runtime/runs/control-contracts.js
 import { requireRunPermission, runNotFound } from "../../agent-runtime/runs/control-contracts.js";
 import { redactRepositoryText } from "../../repository/content-safety/repository-content.js";
 import { verificationResultIdentityHash } from "../verification/jobs.js";
+import { PgRunArtifactStore, RunArtifactCorruptError,
+  RunArtifactUnavailableError } from "../../agent-runtime/artifacts/index.js";
 
 
 export class PgFixStore implements FixStorePort {
-  constructor(private readonly db: RuntimeDatabase, private readonly enqueueJob?: EnqueueVerificationJob) {}
+  private readonly artifacts: PgRunArtifactStore;
+
+  constructor(private readonly db: RuntimeDatabase, private readonly enqueueJob?: EnqueueVerificationJob) {
+    this.artifacts = new PgRunArtifactStore(db);
+  }
 
   async registerSource(lease: RunLease, source: FixSource): Promise<void> {
     assertSourceLease(lease, source);
@@ -72,7 +78,7 @@ export class PgFixStore implements FixStorePort {
     const verifierHash = this.enqueueJob ? await verifierCapabilityHash() : undefined;
     await this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "share" });
-      const step = await successfulStep(client, lease, stepKey, "verification");
+      const step = await successfulStep(client, this.artifacts, lease, stepKey, "verification");
       if (fingerprint(step.output) !== fingerprint(proposal)) throw new FixStoreError("proposal_step_output_mismatch");
       const contentHash = fingerprint(proposal);
       const inserted = await client.query(
@@ -91,6 +97,11 @@ export class PgFixStore implements FixStorePort {
           proposal.qualificationStatus, JSON.stringify(proposal), contentHash],
       );
       if (!inserted.rowCount) await assertProposalImmutable(client, proposal, contentHash);
+      if (step.resultRef) {
+        await this.artifacts.holdInTransaction(client, {
+          tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
+        }, step.resultRef, `fix-proposal:${proposal.id}`, "fix");
+      }
       if (this.enqueueJob) await this.enqueueJob(client, {
         tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
         proposalId: proposal.id, proposalHash: proposal.proposalHash,
@@ -131,8 +142,13 @@ export class PgFixStore implements FixStorePort {
   ): Promise<void> {
     await this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "share" });
-      const step = await successfulStep(client, lease, stepKey, "verification");
+      const step = await successfulStep(client, this.artifacts, lease, stepKey, "verification");
       if (fingerprint(step.output) !== fingerprint(verification)) throw new FixStoreError("verification_step_output_mismatch");
+      if (step.resultRef) {
+        await this.artifacts.holdInTransaction(client, {
+          tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
+        }, step.resultRef, `fix-verification:${proposal.id}:${fingerprint(verification)}`, "fix");
+      }
       const selected = await client.query<{
         job_id: string; result_json: unknown; result_hash: string; job_proposal_hash: string; job_policy_hash: string;
         proposal_hash: string; policy_hash: string; image_digest: string; verification_input_hash: string;
@@ -245,12 +261,25 @@ export class PgFixStore implements FixStorePort {
 
 }
 
-async function successfulStep(client: PoolClient, lease: RunLease, stepKey: string, kind: string): Promise<{ output: unknown }> {
-  const result = await client.query<{ step_kind: string; output: unknown }>(
-    `SELECT step_kind,output_json->'value' AS output FROM pr_agent_harness.agent_steps
+async function successfulStep(client: PoolClient, artifacts: PgRunArtifactStore,
+  lease: RunLease, stepKey: string, kind: string): Promise<{ output: unknown; resultRef?: string }> {
+  const result = await client.query<{ step_kind: string; output_json: Record<string, unknown> | null;
+    output_hash: string; result_ref: string | null }>(
+    `SELECT step_kind,output_json,output_hash,result_ref FROM pr_agent_harness.agent_steps
      WHERE tenant_id=$1 AND run_id=$2 AND step_key=$3 AND status='succeeded'`, [lease.tenantId, lease.runId, stepKey]);
-  if (!result.rows[0] || result.rows[0].step_kind !== kind) throw new FixStoreError("proposal_step_not_succeeded");
-  return result.rows[0];
+  const row = result.rows[0];
+  if (!row || row.step_kind !== kind) throw new FixStoreError("proposal_step_not_succeeded");
+  try {
+    return { output: await artifacts.readStepOutputValueInTransaction(client, {
+      tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
+    }, { resultRef: row.result_ref, output: row.output_json, outputHash: row.output_hash }),
+    ...(row.result_ref ? { resultRef: row.result_ref } : {}) };
+  } catch (error) {
+    if (error instanceof RunArtifactCorruptError || error instanceof RunArtifactUnavailableError) {
+      throw new FixStoreError("proposal_step_output_unavailable");
+    }
+    throw error;
+  }
 }
 
 async function assertImmutable(client: PoolClient, table: "fix_run_sources" | "fix_artifacts", tenantId: string, runId: string, hash: string): Promise<void> {

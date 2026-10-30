@@ -63,6 +63,30 @@ test("a role failure produces an incomplete artifact rather than a clean review"
   assert.equal(artifact.coverage.find(({ role }) => role === "correctness")?.status, "failed");
 });
 
+test("deep workflow preserves collection truncation metadata in the saved artifact", async () => {
+  const harness = createHarness();
+  const truncation = {
+    schemaVersion: 1,
+    rule: "drop_trailing_files_v1",
+    originalFileCount: 3,
+    retainedFileCount: 1,
+    omittedRange: "entire_file",
+    omittedPaths: ["src/b.ts", "src/c.ts"],
+  } as const;
+  harness.source.coverage = {
+    status: "partial",
+    reasonCodes: ["artifact_output_limit"],
+    truncation,
+  };
+
+  const artifact = await createDeepReviewWorkflow().execute(harness.source, harness.context, harness.policy);
+
+  assert.equal(artifact.analysisStatus, "partial");
+  assert.equal(artifact.verdict, "incomplete");
+  assert.deepEqual(artifact.sourceCoverage.truncation, truncation);
+  assert.deepEqual(harness.savedArtifact?.sourceCoverage, artifact.sourceCoverage);
+});
+
 test("a transient role failure waits for its peer and retry reuses completed peer steps", async () => {
   const harness = createHarness({ transientCorrectnessOnce: true });
   const workflow = createDeepReviewWorkflow();

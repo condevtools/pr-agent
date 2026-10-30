@@ -12,7 +12,7 @@ import { shouldQueueReview } from "../../intake/run-intake.js";
 import { analyzePullRequest, buildReportCommentMarkdown, type ReviewMode, type ReviewTrigger } from "#review";
 import { findPotentialSecrets as findSharedPotentialSecrets } from "../../../repository/content-safety/secret-scan.js";
 import { buildSecretWarningComment } from "../../rendering/secret-warning.js";
-import { reviewMessage } from "../../rendering/messages.js";
+import { reviewMessage, reviewPartialNoFilesMessage } from "../../rendering/messages.js";
 import { shouldSkipReviewForDraft, shouldUseIncrementalReview, shouldUseManagedReviewSummary } from "../../policy/triggers.js";
 import { assertGitLabBatchSucceeded, inferMergeRequestLabels, prepareGitLabPublicationBatch, publishGitLabLineComments, publishGitLabReviewNote, stableGitLabEventHash, tryAddGitLabMergeRequestLabels } from "./publication.js";
 
@@ -210,7 +210,9 @@ export async function runGitLabReview(
     );
 
     if (collected.files.length === 0) {
-      const noDiffBody = reviewMessage("reviewNoDiffSkipped", locale);
+      const noDiffBody = collected.coverage?.status === "partial"
+        ? reviewPartialNoFilesMessage(collected.coverage.reasonCodes, locale)
+        : reviewMessage("reviewNoDiffSkipped", locale);
       if (shouldUseManagedReviewSummary(trigger)) {
         await publishGitLabNoteDurably({
           runtime: activePublicationRuntime,

@@ -95,6 +95,34 @@ if (!databaseUrl) {
     assert.equal(await storeB.claim({ ...fixture.binding, tenantId: randomUUID() }, "intruder", fixture.runtimeHash), undefined);
   });
 
+  test("binding capacity is serialized across worker connections", async () => {
+    const first = await createFixture("binding-capacity");
+    const second = await runStore.createRun({
+      ...first.input,
+      createKey: "binding-capacity-2",
+      requestHash: hash("binding-capacity-2"),
+    });
+    const third = await runStore.createRun({
+      ...first.input,
+      createKey: "binding-capacity-3",
+      requestHash: hash("binding-capacity-3"),
+    });
+    const claims = await Promise.all([
+      storeA.claim(first.binding, "capacity-a", first.runtimeHash),
+      storeB.claim(first.binding, "capacity-b", first.runtimeHash),
+    ]);
+    assert.equal(claims.filter(Boolean).length, 2);
+    assert.equal(await storeA.claim(first.binding, "capacity-c", first.runtimeHash), undefined);
+    assert.equal(new Set(claims.map((lease) => lease!.runId)).size, 2);
+    const queued = await adminPool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pr_agent_harness.agent_runs
+       WHERE tenant_id=$1 AND integration_id=$2 AND status='queued'`,
+      [first.binding.tenantId, first.binding.integrationId],
+    );
+    assert.equal(queued.rows[0]?.count, 1);
+    assert.notEqual(second.id, third.id);
+  });
+
   test("claim excludes P0c jobs and retry delays use the PostgreSQL clock", async () => {
     const excluded = await createFixture("excluded-job-kind");
     await adminPool.query(

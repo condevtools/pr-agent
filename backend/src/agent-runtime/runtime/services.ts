@@ -6,7 +6,7 @@ import { PublicationBatchCoordinator, PublicationBatchStore } from "../publicati
 import { RuntimeDatabase } from "../postgres/database.js";
 import { PgPublicationStore, PublicationService } from "../publication/publication.js";
 import { PgBusinessStateStore } from "../state/business-state.js";
-import { agentRuntimePoolConfig } from "./config.js";
+import { agentRuntimePoolConfig, type AgentPoolRole } from "./config.js";
 
 export interface AgentRuntimeServices {
   pool: Pool;
@@ -21,8 +21,8 @@ export interface AgentRuntimeServices {
   close(): Promise<void>;
 }
 
-export function createAgentRuntimeServices(): AgentRuntimeServices {
-  const pool = new Pool(agentRuntimePoolConfig());
+export function createAgentRuntimeServices(role: AgentPoolRole = "web"): AgentRuntimeServices {
+  const pool = new Pool(agentRuntimePoolConfig(process.env, role));
   pool.on("error", () => process.emitWarning("Harness PostgreSQL idle connection failed"));
   const db = new RuntimeDatabase(pool);
   const operationStore = new PgPublicationStore(db);
@@ -65,7 +65,7 @@ const executionServices = new AsyncLocalStorage<AgentRuntimeServices>();
 export async function getAgentRuntimeServices(): Promise<AgentRuntimeServices> {
   const scoped = executionServices.getStore();
   if (scoped) return scoped;
-  applicationServices ??= createAgentRuntimeServices();
+  applicationServices ??= createAgentRuntimeServices("web");
   await applicationServices.assertRole();
   return applicationServices;
 }

@@ -15,11 +15,16 @@ import { requireRunPermission, runNotFound } from "../../../agent-runtime/runs/c
 import type { RunLease } from "../../../agent-runtime/runs/contracts.js";
 import { fingerprint } from "../../../agent-runtime/versions.js";
 import { redactRepositoryText } from "../../../repository/content-safety/repository-content.js";
+import { PgRunArtifactStore, RunArtifactCorruptError,
+  RunArtifactUnavailableError } from "../../../agent-runtime/artifacts/index.js";
 
 interface SuccessfulStepRow {
   step_id: string;
   step_kind: string;
   output_value: unknown;
+  output_json: Record<string, unknown> | null;
+  output_hash: string;
+  result_ref: string | null;
   attempt_id: string;
   tool_call_id: string | null;
   tool_name: string | null;
@@ -27,7 +32,11 @@ interface SuccessfulStepRow {
 }
 
 export class DeepReviewStore implements DeepReviewStorePort {
-  constructor(private readonly db: RuntimeDatabase) {}
+  private readonly artifacts: PgRunArtifactStore;
+
+  constructor(private readonly db: RuntimeDatabase) {
+    this.artifacts = new PgRunArtifactStore(db);
+  }
 
   async loadArtifact(lease: RunLease): Promise<DeepReviewArtifact | undefined> {
     return this.db.transaction(lease.tenantId, async (client) => {
@@ -67,7 +76,7 @@ export class DeepReviewStore implements DeepReviewStorePort {
     await this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "share" });
       const run = await selectRunScope(client, lease);
-      const step = await successfulStep(client, lease, stepKey);
+      const step = await successfulStep(client, this.artifacts, lease, stepKey);
       if (step.step_kind !== "tool" || !step.tool_call_id || !step.tool_name || !step.request_hash) {
         throw new DeepReviewEvidenceError("evidence_step_not_successful_tool");
       }
@@ -241,7 +250,7 @@ export class DeepReviewStore implements DeepReviewStorePort {
     await this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "share" });
       await selectRunScope(client, lease);
-      const step = await successfulStep(client, lease, stepKey);
+      const step = await successfulStep(client, this.artifacts, lease, stepKey);
       if (step.step_kind !== expectedKind) throw new DeepReviewEvidenceError("ledger_step_kind_mismatch");
       assertAuthoritativeOutput(step.output_value, records);
       for (const record of records) await insert(client, step.step_id, record);
@@ -249,9 +258,11 @@ export class DeepReviewStore implements DeepReviewStorePort {
   }
 }
 
-async function successfulStep(client: PoolClient, lease: RunLease, stepKey: string): Promise<SuccessfulStepRow> {
+async function successfulStep(client: PoolClient, artifacts: PgRunArtifactStore,
+  lease: RunLease, stepKey: string): Promise<SuccessfulStepRow> {
   const result = await client.query<SuccessfulStepRow>(
-    `SELECT s.id AS step_id,s.step_kind,s.output_json->'value' AS output_value,
+    `SELECT s.id AS step_id,s.step_kind,s.output_json,s.output_hash,s.result_ref,
+            NULL::jsonb AS output_value,
             a.id AS attempt_id,t.id AS tool_call_id,t.tool_name,t.request_hash
      FROM pr_agent_harness.agent_steps s
      JOIN pr_agent_harness.step_attempts a
@@ -262,8 +273,19 @@ async function successfulStep(client: PoolClient, lease: RunLease, stepKey: stri
      ORDER BY a.attempt_number DESC LIMIT 1`,
     [lease.tenantId, lease.runId, stepKey],
   );
-  if (!result.rows[0]) throw new DeepReviewEvidenceError("ledger_step_not_succeeded");
-  return result.rows[0];
+  const row = result.rows[0];
+  if (!row) throw new DeepReviewEvidenceError("ledger_step_not_succeeded");
+  try {
+    row.output_value = await artifacts.readStepOutputValueInTransaction(client, {
+      tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId,
+    }, { resultRef: row.result_ref, output: row.output_json, outputHash: row.output_hash });
+  } catch (error) {
+    if (error instanceof RunArtifactCorruptError || error instanceof RunArtifactUnavailableError) {
+      throw new DeepReviewEvidenceError("ledger_step_output_unavailable");
+    }
+    throw error;
+  }
+  return row;
 }
 
 async function selectRunScope(client: PoolClient, lease: RunLease): Promise<{ repository: string; platform: "github" | "gitlab" }> {

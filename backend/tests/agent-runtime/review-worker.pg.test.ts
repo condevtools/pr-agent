@@ -129,7 +129,8 @@ if (!databaseUrl) {
         pr_agent_harness.run_budget_envelopes, pr_agent_harness.model_budget_reservations TO ${roleName};
       GRANT SELECT, INSERT ON pr_agent_harness.checkpoints,
         pr_agent_harness.run_publication_batches, pr_agent_harness.dead_letter_jobs,
-        pr_agent_harness.usage_records, pr_agent_harness.model_pricing_snapshots TO ${roleName};
+        pr_agent_harness.usage_records, pr_agent_harness.model_pricing_snapshots,
+        pr_agent_harness.run_artifacts TO ${roleName};
       GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.run_command_receipts,
         pr_agent_harness.run_waits TO ${roleName};
       GRANT SELECT, INSERT ON pr_agent_harness.run_wait_decisions TO ${roleName};
@@ -246,16 +247,29 @@ if (!databaseUrl) {
     assert.equal(dispatches, 1);
     const evidence = await appDb.transaction(tenantId, (client) => client.query<{
       step_count: number; checkpoint_count: number; frozen_count: number; model_count: number; batch_count: number;
+      external_step_count: number; inline_value_count: number; tool_artifact_ref_count: number;
     }>(
       `SELECT
          (SELECT count(*)::int FROM pr_agent_harness.agent_steps WHERE tenant_id=$1 AND run_id=$2) step_count,
          (SELECT count(*)::int FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2) checkpoint_count,
          (SELECT count(*)::int FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2 AND checkpoint_kind='publication_frozen') frozen_count,
          (SELECT count(*)::int FROM pr_agent_harness.model_calls WHERE tenant_id=$1 AND run_id=$2) model_count,
-         (SELECT count(*)::int FROM pr_agent_harness.run_publication_batches WHERE tenant_id=$1 AND run_id=$2) batch_count`,
+         (SELECT count(*)::int FROM pr_agent_harness.run_publication_batches WHERE tenant_id=$1 AND run_id=$2) batch_count,
+         (SELECT count(*)::int FROM pr_agent_harness.agent_steps s
+            JOIN pr_agent_harness.run_artifacts a
+              ON a.tenant_id=s.tenant_id AND a.run_id=s.run_id AND a.artifact_hash=s.result_ref
+          WHERE s.tenant_id=$1 AND s.run_id=$2) external_step_count,
+         (SELECT count(*)::int FROM pr_agent_harness.agent_steps
+          WHERE tenant_id=$1 AND run_id=$2 AND output_json ? 'value') inline_value_count,
+         (SELECT count(*)::int FROM pr_agent_harness.tool_calls t
+            JOIN pr_agent_harness.run_artifacts a
+              ON a.tenant_id=t.tenant_id AND a.run_id=t.run_id AND a.artifact_hash=t.result_ref
+          WHERE t.tenant_id=$1 AND t.run_id=$2 AND t.status='succeeded') tool_artifact_ref_count`,
       [tenantId, fixture.runId],
     ));
-    assert.deepEqual(evidence.rows[0], { step_count: 2, checkpoint_count: 3, frozen_count: 1, model_count: 1, batch_count: 1 });
+    assert.deepEqual(evidence.rows[0], { step_count: 2, checkpoint_count: 3, frozen_count: 1,
+      model_count: 1, batch_count: 1, external_step_count: 2, inline_value_count: 0,
+      tool_artifact_ref_count: 1 });
   });
 
   test("two workers never execute the same queued Run twice", async () => {
@@ -410,6 +424,7 @@ if (!databaseUrl) {
       errors.map((error) => error instanceof Error ? `${error.name}: ${error.message}` : String(error)).join("\n"));
     const evidence = await appDb.transaction(tenantId, (client) => client.query<{
       sealed_batches: number; frozen_checkpoints: number; succeeded_operations: number; model_calls: number;
+      referenced_steps: number; inline_step_values: number;
     }>(
       `SELECT
         (SELECT count(*)::int FROM pr_agent_harness.publication_batches pb
@@ -421,10 +436,19 @@ if (!databaseUrl) {
           JOIN pr_agent_harness.publication_batch_operations pbo ON pbo.tenant_id=rpb.tenant_id AND pbo.batch_id=rpb.batch_id
             AND pbo.business_operation_id=ro.business_operation_id
           WHERE rpb.tenant_id=$1 AND rpb.run_id=$2 AND ro.status='succeeded') succeeded_operations,
-        (SELECT count(*)::int FROM pr_agent_harness.model_calls WHERE tenant_id=$1 AND run_id=$2 AND status='succeeded') model_calls`,
+        (SELECT count(*)::int FROM pr_agent_harness.model_calls WHERE tenant_id=$1 AND run_id=$2 AND status='succeeded') model_calls,
+        (SELECT count(*)::int FROM pr_agent_harness.agent_steps s
+          JOIN pr_agent_harness.run_artifacts a ON a.tenant_id=s.tenant_id AND a.run_id=s.run_id
+            AND a.artifact_hash=s.result_ref
+          WHERE s.tenant_id=$1 AND s.run_id=$2 AND s.status='succeeded') referenced_steps,
+        (SELECT count(*)::int FROM pr_agent_harness.agent_steps
+          WHERE tenant_id=$1 AND run_id=$2 AND output_json ? 'value') inline_step_values`,
       [tenantId, queued.id],
     ));
-    assert.deepEqual(evidence.rows[0], { sealed_batches: 1, frozen_checkpoints: 1, succeeded_operations: 1, model_calls: 1 });
+    const { referenced_steps: referencedSteps, ...runEvidence } = evidence.rows[0]!;
+    assert.ok(referencedSteps > 0);
+    assert.deepEqual(runEvidence, { sealed_batches: 1, frozen_checkpoints: 1,
+      succeeded_operations: 1, model_calls: 1, inline_step_values: 0 });
     const calls = httpCalls.slice(beforeCalls);
     assert.ok(calls.includes("POST /v1/chat/completions"));
     assert.ok(calls.includes("POST /repos/acme/durable-review/issues/42/comments"));

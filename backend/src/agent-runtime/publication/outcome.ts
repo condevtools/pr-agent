@@ -222,7 +222,7 @@ async function scheduleOutcomeInTransaction(
     );
     await client.query(
       `UPDATE pr_agent_harness.agent_runs
-       SET next_outcome_scan_at=clock_timestamp()+interval '1 day'
+       SET next_outcome_scan_at=NULL
        WHERE tenant_id=$1 AND id=$2`,
       [binding.tenantId, runId],
     );
@@ -290,6 +290,7 @@ async function claimOutcomeScanCandidates(
        WHERE r.tenant_id=$1 AND r.integration_id=$2
          AND r.authority_generation=$3 AND r.execution_mode_generation=$4
          AND r.status IN ('waiting_for_reconciliation','succeeded','failed','cancelled')
+         AND r.next_outcome_scan_at IS NOT NULL
          AND r.next_outcome_scan_at<=clock_timestamp()
          AND (r.waiting_batch_id IS NOT NULL OR EXISTS (
            SELECT 1 FROM pr_agent_harness.run_publication_batches rpb

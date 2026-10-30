@@ -90,6 +90,11 @@ if (!databaseUrl) {
 
   test("resolved outcome schedules once, claims once, and never revives a terminal Run", async () => {
     const fixture = await createWaitingFixture("resolved-once", "unknown");
+    assert.equal((await pool.query<{ due: boolean }>(
+      `SELECT next_outcome_scan_at IS NOT NULL AS due
+       FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2`,
+      [tenantId, fixture.runId],
+    )).rows[0]?.due, true, "linking the frozen publication must arm outcome scanning explicitly");
     await pool.query(
       `UPDATE pr_agent_harness.repository_operations
        SET status='succeeded',outcome_code='current',remote_id='remote-1',resolved_at=now(),version=version+1
@@ -123,15 +128,17 @@ if (!databaseUrl) {
     assert.equal(observed.scheduled, 0);
     assert.equal(observed.observedTerminal, 1);
     await outcomeCoordinator.tick(binding);
-    const evidence = await pool.query<{ jobs: number; observations: number }>(
+    const evidence = await pool.query<{ jobs: number; observations: number; scan_cleared: boolean }>(
       `SELECT
          (SELECT count(*)::int FROM pr_agent_harness.job_queue
           WHERE tenant_id=$1 AND run_id=$2 AND job_kind='publication_outcome') jobs,
          (SELECT count(*)::int FROM pr_agent_harness.run_events
-          WHERE tenant_id=$1 AND run_id=$2 AND event_type='publication.outcome_observed') observations`,
+          WHERE tenant_id=$1 AND run_id=$2 AND event_type='publication.outcome_observed') observations,
+         (SELECT next_outcome_scan_at IS NULL FROM pr_agent_harness.agent_runs
+          WHERE tenant_id=$1 AND id=$2) scan_cleared`,
       [tenantId, fixture.runId],
     );
-    assert.deepEqual(evidence.rows[0], { jobs: 1, observations: 1 });
+    assert.deepEqual(evidence.rows[0], { jobs: 1, observations: 1, scan_cleared: true });
   });
 
   test("manual not-occurred decision is replay-safe and creates a fresh authorization wait", async () => {

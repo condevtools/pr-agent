@@ -9,6 +9,8 @@ import type { DatasetCaseSource, DatasetFixtureV1, DatasetMetadata, DatasetSplit
 import type { createDatasetSchema } from "./contracts.js";
 import type { z } from "zod";
 import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
+import { PgRunArtifactStore, RunArtifactCorruptError,
+  RunArtifactUnavailableError } from "../../agent-runtime/artifacts/index.js";
 
 interface DatasetRow {
   id: string; name: string; status: "draft" | "frozen" | "retired"; version: string;
@@ -31,7 +33,11 @@ interface CaseRow {
 }
 
 export class PgEvolutionDatasetStore implements DatasetStorePort {
-  constructor(private readonly db: RuntimeDatabase) {}
+  private readonly artifacts: PgRunArtifactStore;
+
+  constructor(private readonly db: RuntimeDatabase) {
+    this.artifacts = new PgRunArtifactStore(db);
+  }
 
   async create(principal: RunPrincipal, input: z.infer<typeof createDatasetSchema>): Promise<DatasetMetadata> {
     requireRunPermission(principal, "evaluations:create");
@@ -63,7 +69,7 @@ export class PgEvolutionDatasetStore implements DatasetStorePort {
     requireRunPermission(principal, "evaluations:create");
     return this.db.transaction(principal.tenantId, async (client) => {
       await selectOwnedDataset(client, principal, datasetId, false);
-      return selectCaseSource(client, principal, sourceRunId, labelSetId);
+      return selectCaseSource(client, this.artifacts, principal, sourceRunId, labelSetId);
     });
   }
 
@@ -82,7 +88,8 @@ export class PgEvolutionDatasetStore implements DatasetStorePort {
         throw datasetError("DATASET_CAS_CONFLICT", 409, "Dataset changed or is no longer mutable");
       }
       if (dataset.case_count >= 1_000) throw datasetError("DATASET_CASE_LIMIT", 409, "Dataset case limit reached");
-      const authoritative = await selectCaseSource(client, principal, source.sourceRunId, source.labelSetId);
+      const authoritative = await selectCaseSource(client, this.artifacts, principal,
+        source.sourceRunId, source.labelSetId);
       if (fingerprint(authoritative) !== fingerprint(source)) throw datasetError("SOURCE_CHANGED", 409, "Dataset source changed");
       const databaseClock = await client.query<{ now: Date }>("SELECT clock_timestamp() AS now");
       assertWithinPolicy(dataset.split_policy_json, source.sourceCreatedAt, databaseClock.rows[0]!.now);
@@ -103,6 +110,11 @@ export class PgEvolutionDatasetStore implements DatasetStorePort {
         throw error;
       });
       if (!caseId.rows[0]) throw new Error("dataset case insert failed");
+      if (source.collectionResultRef) {
+        await this.artifacts.holdInTransaction(client, {
+          tenantId: source.tenantId, integrationId: source.integrationId, runId: source.sourceRunId,
+        }, source.collectionResultRef, `dataset-case:${datasetId}:${caseId.rows[0].id}`, "qualification");
+      }
       const updated = await client.query<DatasetRow>(
         `UPDATE pr_agent_harness.eval_datasets SET version=version+1,case_count=case_count+1,updated_at=clock_timestamp()
          WHERE tenant_id=$1 AND id=$2 AND version=$3 AND status='draft' RETURNING *`,
@@ -238,19 +250,22 @@ async function selectOwnedDataset(client: PoolClient, principal: RunPrincipal, d
   return result.rows[0];
 }
 
-async function selectCaseSource(client: PoolClient, principal: RunPrincipal, sourceRunId: string,
+async function selectCaseSource(client: PoolClient, artifacts: PgRunArtifactStore,
+  principal: RunPrincipal, sourceRunId: string,
   labelSetId: string): Promise<DatasetCaseSource> {
   const result = await client.query<{
     tenant_id: string; integration_id: string; source_run_id: string; platform: "github" | "gitlab";
     origin: string; repository: string; provider_repository_id: string; input_json: Record<string, unknown>;
     base_sha: string; head_sha: string; source_created_at: Date; collection_step_id: string;
-    collection_output: Record<string, unknown>; collection_output_hash: string; artifact_hash: string;
+    collection_output_json: Record<string, unknown> | null; collection_result_ref: string | null;
+    collection_output_hash: string; artifact_hash: string;
     artifact_json: Record<string, unknown>;
     label_set_id: string; label_set_hash: string; label_set_json: Record<string, unknown>;
   }>(
     `SELECT r.tenant_id,r.integration_id,r.id AS source_run_id,b.platform,b.origin,b.repository,
             b.provider_repository_id,r.input_json,r.base_sha,r.head_sha,r.created_at AS source_created_at,
-            s.id AS collection_step_id,s.output_json->'value' AS collection_output,s.output_hash AS collection_output_hash,
+            s.id AS collection_step_id,s.output_json AS collection_output_json,s.result_ref AS collection_result_ref,
+            s.output_hash AS collection_output_hash,
             a.content_hash AS artifact_hash,a.artifact_json,l.id AS label_set_id,l.label_set_hash,l.label_set_json
      FROM pr_agent_harness.agent_runs r JOIN pr_agent_harness.integration_bindings b
        ON b.tenant_id=r.tenant_id AND b.id=r.integration_id AND b.active
@@ -266,6 +281,18 @@ async function selectCaseSource(client: PoolClient, principal: RunPrincipal, sou
     [principal.tenantId, principal.integrationId, sourceRunId, labelSetId]);
   const row = result.rows[0];
   if (!row) throw datasetError("SOURCE_NOT_FOUND", 404, "Eligible labeled review Run was not found");
+  let collectionOutput: Record<string, unknown>;
+  try {
+    collectionOutput = await artifacts.readStepOutputValueInTransaction<Record<string, unknown>>(client, {
+      tenantId: row.tenant_id, integrationId: row.integration_id, runId: row.source_run_id,
+    }, { resultRef: row.collection_result_ref, output: row.collection_output_json,
+      outputHash: row.collection_output_hash });
+  } catch (error) {
+    if (error instanceof RunArtifactCorruptError || error instanceof RunArtifactUnavailableError) {
+      throw datasetError("SOURCE_INVALID", 409, "Labeled review source content is unavailable");
+    }
+    throw error;
+  }
   const input = reviewRunInputSchema.parse(row.input_json);
   const labels = row.label_set_json as { schemaVersion?: unknown; rubricVersion?: unknown; completeness?: unknown };
   const artifactCoverage = (row.artifact_json as { sourceCoverage?: { status?: unknown; reasonCodes?: unknown } }).sourceCoverage;
@@ -273,7 +300,6 @@ async function selectCaseSource(client: PoolClient, principal: RunPrincipal, sou
       || artifactCoverage?.status !== "complete" || !Array.isArray(artifactCoverage.reasonCodes)
       || artifactCoverage.reasonCodes.length !== 0
       || fingerprint(row.label_set_json) !== row.label_set_hash
-      || fingerprint({ value: row.collection_output }) !== row.collection_output_hash
       || fingerprint(row.artifact_json) !== row.artifact_hash
       || input.platform !== row.platform || input.target.origin !== row.origin
       || input.target.repository !== row.repository || input.target.providerRepositoryId !== Number(row.provider_repository_id)
@@ -284,8 +310,10 @@ async function selectCaseSource(client: PoolClient, principal: RunPrincipal, sou
     platform: row.platform, origin: row.origin, repository: row.repository,
     providerRepositoryId: Number(row.provider_repository_id), pullNumber: input.target.number,
     baseSha: row.base_sha, headSha: row.head_sha, sourceCreatedAt: row.source_created_at.toISOString(),
-    input: row.input_json, collected: row.collection_output, collectionStepId: row.collection_step_id,
-    collectionOutputHash: row.collection_output_hash, artifactHash: row.artifact_hash,
+    input: row.input_json, collected: collectionOutput, collectionStepId: row.collection_step_id,
+    collectionOutputHash: row.collection_output_hash,
+    ...(row.collection_result_ref ? { collectionResultRef: row.collection_result_ref } : {}),
+    artifactHash: row.artifact_hash,
     labelSetId: row.label_set_id, labelSetHash: row.label_set_hash, labelSet: row.label_set_json };
 }
 

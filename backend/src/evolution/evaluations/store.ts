@@ -200,6 +200,10 @@ export class PgEvolutionEvaluationStore {
     });
   }
 
+  async expireDue(tenantId: string): Promise<number> {
+    return this.db.transaction(tenantId, (client) => expireEvaluations(client, tenantId));
+  }
+
   async nextPending(lease: EvaluationLease, integrationId: string): Promise<PendingReplayResult | undefined> {
     return this.db.transaction(lease.tenantId, async (client) => {
       await assertEvaluationLease(client, lease);
@@ -354,7 +358,7 @@ export class PgEvolutionEvaluationStore {
   }
 }
 
-async function expireEvaluations(client: PoolClient, tenantId: string): Promise<void> {
+async function expireEvaluations(client: PoolClient, tenantId: string): Promise<number> {
   const expired = await client.query<{ id: string }>(
     `SELECT id FROM pr_agent_harness.eval_runs
      WHERE tenant_id=$1 AND status IN ('queued','running') AND deadline_at<=clock_timestamp()
@@ -403,6 +407,7 @@ async function expireEvaluations(client: PoolClient, tenantId: string): Promise<
          updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2`,
       [tenantId, evaluation.id, Number(counts.total), Number(counts.failed), JSON.stringify(metrics), fingerprint(metrics)]);
   }
+  return expired.rows.length;
 }
 
 async function assertEvaluationLease(client: PoolClient, lease: EvaluationLease): Promise<void> {

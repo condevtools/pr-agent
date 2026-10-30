@@ -62,6 +62,7 @@ export interface RunStep {
   reused: boolean;
   output?: JsonObject;
   outputHash?: string;
+  resultRef?: string;
 }
 
 export interface RunCheckpoint {

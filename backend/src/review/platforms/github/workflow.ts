@@ -17,7 +17,7 @@ import {
   shouldUseIncrementalReview,
   shouldUseManagedReviewSummary,
 } from "../../policy/triggers.js";
-import { reviewMessage } from "../../rendering/messages.js";
+import { reviewMessage, reviewPartialNoFilesMessage } from "../../rendering/messages.js";
 import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { publishGitHubIssueCommentDurably } from "../../../integrations/github/publication/adapter.js";
@@ -176,7 +176,9 @@ export async function runGitHubReview(
     activePublicationRuntime = batch.runtime;
 
     if (collected.files.length === 0) {
-      const noDiffBody = collected.filesTruncated
+      const noDiffBody = collected.coverage?.status === "partial"
+        ? reviewPartialNoFilesMessage(collected.coverage.reasonCodes, locale)
+        : collected.filesTruncated
         ? appendGitHubFilesTruncatedWarning(
             reviewMessage("reviewNoDiff", locale),
             locale,

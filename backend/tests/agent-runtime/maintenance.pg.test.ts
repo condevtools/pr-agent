@@ -14,6 +14,7 @@ import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
 import { RunCursorExpiredError, RunQueryStore } from "../../src/agent-runtime/runs/query-store.js";
 import { ModelBudgetStore } from "../../src/agent-runtime/budget/model-budget-store.js";
 import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import { PgRunArtifactStore, RunArtifactUnavailableError } from "../../src/agent-runtime/artifacts/index.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -27,6 +28,7 @@ if (!databaseUrl) {
   const runs = new RunStore(db);
   const maintenance = new RuntimeMaintenanceStore(pool);
   const execution = new RunExecutionStore(db);
+  const artifacts = new PgRunArtifactStore(db);
   const tenantId = randomUUID();
   const otherTenantId = randomUUID();
   const integrationId = randomUUID();
@@ -68,11 +70,16 @@ if (!databaseUrl) {
     await makeOldTerminal(tenantId, unknown.id);
     await makeOldTerminal(tenantId, estimatedUnknown.id);
     await makeOldTerminal(otherTenantId, foreign.id);
-    const metadata = await addTrace(tenantId, eligible.id, "succeeded");
-    const pendingTrace = await addTrace(tenantId, unknown.id, "unknown");
+    const metadata = await addTrace(tenantId, integrationId, eligible.id, "succeeded");
+    const pendingTrace = await addTrace(tenantId, integrationId, unknown.id, "unknown");
     await addBudgetReservation(tenantId, unknown.id, pendingTrace.modelCallId, "pending");
-    const estimatedTrace = await addTrace(tenantId, estimatedUnknown.id, "unknown");
+    const estimatedTrace = await addTrace(tenantId, integrationId, estimatedUnknown.id, "unknown");
     await addBudgetReservation(tenantId, estimatedUnknown.id, estimatedTrace.modelCallId, "estimated");
+    const heldArtifact = await artifacts.putStepOutput({
+      tenantId, integrationId, runId: eligibleSecond.id,
+    }, Buffer.from(JSON.stringify({ value: { retained: "legal hold" } }), "utf8"));
+    await artifacts.hold({ tenantId, integrationId, runId: eligibleSecond.id },
+      heldArtifact.artifactHash, "maintenance-test-legal-hold", "legal");
     const budget = new ModelBudgetStore(db);
     await budget.reconcileActualUsage({
       tenantId, integrationId, runId: estimatedUnknown.id, modelCallId: estimatedTrace.modelCallId,
@@ -112,10 +119,9 @@ if (!databaseUrl) {
 
     const preview = await maintenance.preview({ tenantId, olderThanDays: 30, limit: 10 });
     assert.deepEqual(preview.candidates.map((candidate) => candidate.runId).sort(),
-      [eligible.id, eligibleSecond.id, estimatedUnknown.id].sort());
+      [eligible.id, estimatedUnknown.id].sort());
     const applied = await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 });
     assert.equal(applied.applied, 1);
-    assert.equal((await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })).applied, 1);
     assert.equal((await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })).applied, 1);
     assert.equal((await maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })).applied, 0);
 
@@ -185,7 +191,7 @@ if (!databaseUrl) {
     const states = await pool.query<{ id: string; input_json: Record<string, unknown>; content_purged_at: Date | null }>(
       `SELECT id,input_json,content_purged_at FROM pr_agent_harness.agent_runs
        WHERE id=ANY($1::uuid[]) ORDER BY id`,
-      [[unknown.id, publicationUnknown.id, active.id, foreign.id]],
+      [[eligibleSecond.id, unknown.id, publicationUnknown.id, active.id, foreign.id]],
     );
     assert.equal(states.rows.every((state) => state.content_purged_at === null), true);
     assert.equal(states.rows.every((state) => Object.keys(state.input_json).length > 0), true);
@@ -290,7 +296,53 @@ if (!databaseUrl) {
     assert.equal(after.rows[0]!.audit_count, 0);
   });
 
+  test("retention wins the Run lock before a late artifact hold and the hold fails closed", async () => {
+    const run = await createRun(tenantId, integrationId, "retention-hold-race");
+    const artifact = await artifacts.putStepOutput({ tenantId, integrationId, runId: run.id },
+      Buffer.from(JSON.stringify({ value: { retained: "race evidence" } }), "utf8"));
+    await makeOldTerminal(tenantId, run.id);
+    const blocker = await pool.connect();
+    let maintenanceSettled = false;
+    let holdSettled = false;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `SELECT sequence FROM pr_agent_harness.run_events
+         WHERE tenant_id=$1 AND run_id=$2 FOR UPDATE`,
+        [tenantId, run.id]);
+      const applying = maintenance.apply({ tenantId, olderThanDays: 30, limit: 10 })
+        .finally(() => { maintenanceSettled = true; });
+      await waitForBlockedQuery("%ORDER BY sequence FOR SHARE%");
+      const holding = artifacts.hold({ tenantId, integrationId, runId: run.id },
+        artifact.artifactHash, "late-qualification", "qualification")
+        .finally(() => { holdSettled = true; });
+      await waitForBlockedQuery("%lock_available_run_artifact%");
+      assert.equal(maintenanceSettled, false);
+      assert.equal(holdSettled, false);
+      await blocker.query("COMMIT");
+      assert.equal((await applying).applied, 1);
+      await assert.rejects(holding, RunArtifactUnavailableError);
+    } catch (error) {
+      await blocker.query("ROLLBACK");
+      throw error;
+    } finally {
+      blocker.release();
+    }
+    const state = await pool.query<{ content_purged_at: Date | null; holds: number }>(
+      `SELECT r.content_purged_at,
+              (SELECT count(*)::int FROM pr_agent_harness.run_artifact_holds h
+               WHERE h.tenant_id=r.tenant_id AND h.run_id=r.id) AS holds
+       FROM pr_agent_harness.agent_runs r WHERE r.tenant_id=$1 AND r.id=$2`,
+      [tenantId, run.id]);
+    assert.ok(state.rows[0]?.content_purged_at);
+    assert.equal(state.rows[0]?.holds, 0);
+  });
+
   async function waitForBlockedMaintenanceQuery(): Promise<void> {
+    return waitForBlockedQuery("%FOR SHARE OF ro%");
+  }
+
+  async function waitForBlockedQuery(queryPattern: string): Promise<void> {
     for (let attempt = 0; attempt < 200; attempt += 1) {
       const result = await pool.query<{ blocked: boolean }>(
         `SELECT EXISTS (
@@ -298,13 +350,14 @@ if (!databaseUrl) {
            WHERE datname=current_database()
              AND state='active'
              AND wait_event_type='Lock'
-             AND query LIKE '%FOR SHARE OF ro%'
+             AND query LIKE $1
          ) AS blocked`,
+        [queryPattern],
       );
       if (result.rows[0]?.blocked) return;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    throw new Error("maintenance did not block on the revived publication operation");
+    throw new Error(`expected a blocked query matching ${queryPattern}`);
   }
 
   async function activate(tenant: string, integration: string, repository: string): Promise<void> {
@@ -360,7 +413,8 @@ if (!databaseUrl) {
     );
   }
 
-  async function addTrace(tenant: string, runId: string, modelStatus: "succeeded" | "unknown") {
+  async function addTrace(tenant: string, integration: string, runId: string,
+    modelStatus: "succeeded" | "unknown") {
     const outputHash = hash(`output:${runId}`);
     const stateHash = hash(`state:${runId}`);
     const requestHash = hash(`model-request:${runId}`);
@@ -387,13 +441,16 @@ if (!databaseUrl) {
       [tenant, runId, step.rows[0]!.id, attempt.rows[0]!.id, v, stateHash,
         JSON.stringify({ raw: "sensitive checkpoint" })],
     );
+    const toolResult = await artifacts.putStepOutput({
+      tenantId: tenant, integrationId: integration, runId,
+    }, Buffer.from(JSON.stringify({ value: { raw: "sensitive tool result" } }), "utf8"));
     await pool.query(
       `INSERT INTO pr_agent_harness.tool_calls
          (tenant_id,run_id,step_id,step_attempt_id,tool_kind,tool_name,request_hash,status,
           result_hash,result_ref,completed_at)
-       VALUES ($1,$2,$3,$4,'provider_read','fixture',$5,'succeeded',$6,'secret://result',now())`,
+       VALUES ($1,$2,$3,$4,'provider_read','fixture',$5,'succeeded',$6,$7,now())`,
       [tenant, runId, step.rows[0]!.id, attempt.rows[0]!.id,
-        hash(`tool-request:${runId}`), hash(`tool-result:${runId}`)],
+        hash(`tool-request:${runId}`), hash(`tool-result:${runId}`), toolResult.artifactHash],
     );
     const modelCall = await pool.query<{ id: string }>(
       `INSERT INTO pr_agent_harness.model_calls

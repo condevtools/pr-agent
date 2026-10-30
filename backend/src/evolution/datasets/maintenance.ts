@@ -35,6 +35,7 @@ export class PgEvolutionDatasetMaintenanceStore {
         "SELECT status,content_purged_at FROM pr_agent_harness.eval_datasets WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
         [request.tenantId, request.datasetId]);
       if (dataset.rows[0]?.status !== "retired") throw new Error("Only retired datasets can be purged");
+      await releaseDatasetCaseArtifactHolds(client, request);
       if (dataset.rows[0].content_purged_at) return { purged: false, fixtures: 0 };
       const fixtures = await client.query<{ id: string }>(
         `SELECT f.id FROM pr_agent_harness.eval_fixtures f
@@ -59,6 +60,25 @@ export class PgEvolutionDatasetMaintenanceStore {
       return { purged: true, fixtures: fixtures.rowCount ?? 0 };
     });
   }
+}
+
+async function releaseDatasetCaseArtifactHolds(
+  client: PoolClient,
+  request: { tenantId: string; datasetId: string },
+): Promise<void> {
+  await client.query(
+    `INSERT INTO pr_agent_harness.run_artifact_hold_releases
+       (tenant_id,integration_id,run_id,artifact_hash,hold_key)
+     SELECT h.tenant_id,h.integration_id,h.run_id,h.artifact_hash,h.hold_key
+     FROM pr_agent_harness.eval_cases c
+     JOIN pr_agent_harness.run_artifact_holds h
+       ON h.tenant_id=c.tenant_id AND h.integration_id=c.integration_id
+         AND h.run_id=c.source_run_id
+         AND h.hold_key=('dataset-case:'||c.dataset_id::text||':'||c.id::text)
+         AND h.hold_kind='qualification'
+     WHERE c.tenant_id=$1 AND c.dataset_id=$2
+     ON CONFLICT DO NOTHING`,
+    [request.tenantId, request.datasetId]);
 }
 
 async function lock(client: PoolClient, tenantId: string): Promise<void> {

@@ -9,6 +9,10 @@ const reviewMessages = {
     zh: "`AI Review` 未发现可评审的文本改动。",
     en: "`AI Review` found no textual changes to review.",
   },
+  reviewPartialNoFiles: {
+    zh: "`AI Review` 的可持久化上下文未能覆盖任何文件；本次结果不表示代码没有问题。",
+    en: "`AI Review` could not retain coverage for any file; this result does not mean the code is issue-free.",
+  },
   reviewRunning: {
     zh: "`AI Review` 正在分析这个 PR，请稍候...",
     en: "`AI Review` is analyzing this PR, please wait...",
@@ -55,4 +59,12 @@ export type ReviewMessageKey = keyof typeof reviewMessages;
 
 export function reviewMessage(key: ReviewMessageKey, locale: UiLocale): string {
   return localizeText(reviewMessages[key], locale);
+}
+
+export function reviewPartialNoFilesMessage(reasonCodes: readonly string[], locale: UiLocale): string {
+  const reasons = [...new Set(reasonCodes.filter((reason) => /^[a-z0-9_]{1,80}$/.test(reason)))].slice(0, 20);
+  if (!reasons.length) return reviewMessage("reviewPartialNoFiles", locale);
+  return [reviewMessage("reviewPartialNoFiles", locale), "",
+    localizeText({ zh: `覆盖不完整原因：${reasons.join(", ")}`, en: `Incomplete coverage reasons: ${reasons.join(", ")}` },
+      locale)].join("\n");
 }

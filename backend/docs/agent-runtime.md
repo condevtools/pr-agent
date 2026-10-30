@@ -20,7 +20,7 @@ docker compose up -d --build
 
 如果现有 volume 来自旧版 `POSTGRES_USER=pr_agent_migrator`（该角色仍为超级用户），不能直接启动新 `database-init`，也不能删除 volume。先备份并停止所有 writer，再按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 显式执行 `docker/postgres/upgrade-runtime-roles.sql`；脚本在迁移 021 之前安装 FORCE RLS owner policy，随后才降权 migrator。所有权或目标数据库不符合预期时脚本会中止，要求人工复核。
 
-在线入口强制使用 PostgreSQL 发布权威，Compose 固定 `HARNESS_PUBLICATION_MODE=postgres`。`legacy` 仅用于隔离测试；不能靠修改 `NODE_ENV` 或运行中切换环境变量绕过在线入口已锁定的发布边界。数据库配置只读取 `HARNESS_DATABASE_URL` 或 `HARNESS_PG_*`，不继承其他服务的 `DATABASE_URL`。
+在线入口和集成测试统一使用 PostgreSQL 发布权威，Compose 固定 `HARNESS_PUBLICATION_MODE=postgres`。旧的 legacy 发布模式已移除。数据库配置只读取 `HARNESS_DATABASE_URL` 或 `HARNESS_PG_*`，不继承其他服务的 `DATABASE_URL`。
 
 ## 注册并启用仓库
 
@@ -149,3 +149,19 @@ PG 测试命令自行创建隔离 Docker 容器、随机本地端口和密码，
 当前提供 Run 控制 API、SSE、发布结果回流及显式启用的多 Agent Deep Review。Fix 保持独立权限域和验证/审批流程；Evolution 提供反馈、离线评测与候选策略控制面，两者默认关闭。PG 承担持久事实和恢复协调，当前没有额外引入 Redis/Kafka。能力开关和架构测试不代表真实模型质量已通过验收，也不代表已覆盖 Harness 原课全部 49 项能力。
 
 多 Agent 深审的创建、证据门和 shadow 报告见 [deep-review.md](deep-review.md)。
+
+## 调度、产物与资源上限
+
+Worker 按 PG 中保存的游标轮转有到期工作的仓库绑定，每轮每个绑定最多领取一个任务。游标由多个 Worker 共享，不依赖进程内数组的位置；任务最终仍经过兼容性、能力、权限 generation 和 lease 检查。不兼容或关闭的能力不会因此被强行执行。
+
+默认每个 Worker 进程最多执行 4 个任务，同一绑定跨 Worker 最多执行 2 个任务。发布结局和人工恢复任务共享最多 1 个特殊槽位；普通任务可以借用空闲槽位。公平性表示空闲槽位出现时持续可运行的绑定获得领取机会，不表示长任务有固定完成时限。多个 Worker 的总容量随进程数变化，不能把每进程 4 个槽位解释为集群总共 4 个槽位。
+
+`HARNESS_WORKER_CONCURRENCY`、`HARNESS_WORKER_PER_BINDING_CONCURRENCY`、`HARNESS_WORKER_SPECIAL_CONCURRENCY` 和 `HARNESS_RECOVERY_BINDING_PAGE_SIZE` 在启动时校验并固定。Web、Worker、Recovery 的连接池分别由 `HARNESS_WEB_POOL_MAX`、`HARNESS_WORKER_POOL_MAX`、`HARNESS_RECOVERY_POOL_MAX` 控制，默认 8、8、4。调整这些值需要考虑副本数与 PostgreSQL 的连接上限。
+
+步骤产物使用 PG 压缩内容存储和 SHA-256 引用，读取时校验 tenant、integration、Run、大小和内容 hash。单份产物最多 32 MiB 原始数据、8 MiB 压缩数据，同一个 Run 最多保存 128 MiB 原始产物。旧版 inline checkpoint 保留读取兼容；新产物不会再把完整输出重复写进 checkpoint。
+
+只有评审上下文收集可以按确定规则省略尾部完整文件，并在覆盖范围中记录 partial、规则、保留数量与未覆盖路径。控制状态、审批材料、预算事实、发布结果和 Fix 验证输入不会被截断；无法安全容纳时明确失败。产物丢失或 hash 不符也会明确失败，不把缺失内容当作空评审。
+
+产物默认保留 30 天；正在执行的 Run、未确定的发布/预算结果，以及 Fix、Evolution、资格认定等显式引用会延长保留期。Run retention 遇到任何未释放的产物 hold 时会保留整个 Run，不能出现来源内容已经清理但强引用仍宣称可读的状态。已退役且确认未被提案、评测或发布资格引用的数据集在清理时，只释放自己创建的 `dataset-case:<dataset-id>:<case-id>` hold；其他资格、Fix、Evolution、法律保留等 hold 不会被顺带释放。完整 hold 生命周期和自动维护调度仍属于后续维护阶段。解除引用后还保留 30 天。内容清理保留 hash 和元数据，防止把已清理内容误认为可用。应用账户没有直接 UPDATE/DELETE 产物的权限；当前清理器由受控维护过程调用，尚未接入自动周期调度。
+
+Worker/Recovery 心跳的 `capability_report.databaseTiming` 记录固定维度的数据库测量：租户预算锁定查询、步骤提交事务和 lease 心跳。每项包含次数、错误数、总耗时、最大耗时及固定区间计数，且不记录 SQL、token 或仓库内容。耗时包含 SQL 执行和通信时间，不能直接当作纯锁等待时间。这些测试验证并发与资源边界，不代表已经完成生产吞吐量测试。

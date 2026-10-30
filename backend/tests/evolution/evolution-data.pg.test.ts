@@ -16,6 +16,7 @@ import { RuntimeMaintenanceStore } from "../../src/agent-runtime/maintenance.js"
 import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { RunControlError } from "../../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
+import { PgRunArtifactStore } from "../../src/agent-runtime/artifacts/index.js";
 import { prepareHarnessRuntimeRoles, reapplyVersionedRuntimeGrants } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -79,10 +80,10 @@ if (!databaseUrl) {
     await seedReview(crossTenantRunId, crossTenantIntegrationId, otherTenantId);
     await seedReview(datasetRunA, datasetIntegrationA);
     await seedReview(datasetRunB, datasetIntegrationB);
-    await seedReview(datasetRunC, datasetIntegrationC);
+    await seedReview(datasetRunC, datasetIntegrationC, tenantId, artifact, true);
     await seedReview(datasetRunD, datasetIntegrationD);
     await seedReview(datasetRunE, datasetIntegrationE);
-    await seedReview(datasetRunF, datasetIntegrationF);
+    await seedReview(datasetRunF, datasetIntegrationF, tenantId, artifact, true);
     await seedReview(datasetRunG, datasetIntegrationG, tenantId, partialArtifact);
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET created_at='2025-01-01T00:00:00Z' WHERE id=$1", [datasetRunA]);
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET created_at='2025-08-01T00:00:00Z' WHERE id=$1", [datasetRunB]);
@@ -288,9 +289,18 @@ if (!databaseUrl) {
       validationBefore: "2025-12-01T00:00:00Z" });
     const labelId = await trustedLabelId(datasetRunC);
     const source = await datasets.loadCaseSource(curator, dataset.id, datasetRunC, labelId);
+    assert.ok(source.collectionResultRef);
     const reads: string[] = [];
     const fixture = await buildDatasetFixture(source, repositoryAdapter(reads));
     const added = await datasets.addCase(curator, dataset.id, dataset.version, source, fixture);
+    const holds = await adminPool.query<{ hold_key: string; hold_kind: string }>(
+      `SELECT hold_key,hold_kind FROM pr_agent_harness.run_artifact_holds
+       WHERE tenant_id=$1 AND run_id=$2 AND artifact_hash=$3 ORDER BY hold_key`,
+      [tenantId,datasetRunC,source.collectionResultRef]);
+    assert.ok(holds.rows.some((row) => row.hold_key.startsWith("trusted-label:")
+      && row.hold_kind === "qualification"));
+    assert.ok(holds.rows.some((row) => row.hold_key.startsWith(`dataset-case:${dataset.id}:`)
+      && row.hold_kind === "qualification"));
     const frozen = await datasets.freeze(curator, dataset.id, added.version);
 
     assert.equal(frozen.status, "frozen"); assert.equal(frozen.holdoutCount, 1);
@@ -398,6 +408,13 @@ if (!databaseUrl) {
       validationBefore: "2025-12-01T00:00:00Z" });
     const retiringAdded = await datasets.addCase(curator, retiring.id, retiring.version, source, fixture);
     const retiringFrozen = await datasets.freeze(curator, retiring.id, retiringAdded.version);
+    assert.ok(source.collectionResultRef);
+    const activeCaseId = (await adminPool.query<{ id: string }>(
+      "SELECT id FROM pr_agent_harness.eval_cases WHERE tenant_id=$1 AND dataset_id=$2",
+      [tenantId, active.id])).rows[0]!.id;
+    const retiringCaseId = (await adminPool.query<{ id: string }>(
+      "SELECT id FROM pr_agent_harness.eval_cases WHERE tenant_id=$1 AND dataset_id=$2",
+      [tenantId, retiring.id])).rows[0]!.id;
     const before = (await adminPool.query<{ manifest_hash: string; fixture_hash: string; artifact_hash: string; label_set_hash: string }>(
       `SELECT d.manifest_hash,c.fixture_hash,f.artifact_hash,c.label_set_hash
        FROM pr_agent_harness.eval_datasets d JOIN pr_agent_harness.eval_cases c
@@ -408,7 +425,10 @@ if (!databaseUrl) {
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET finished_at=clock_timestamp()-interval '90 days' WHERE tenant_id=$1 AND id=$2",
       [tenantId, datasetRunF]);
     const sourceRetention = await new RuntimeMaintenanceStore(adminPool).apply({ tenantId, olderThanDays: 30, limit: 10 });
-    assert.equal(sourceRetention.applied, 1);
+    assert.equal(sourceRetention.applied, 0);
+    assert.equal((await adminPool.query<{ purged: boolean }>(
+      "SELECT content_purged_at IS NOT NULL AS purged FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
+      [tenantId, datasetRunF])).rows[0]?.purged, false);
 
     await assert.rejects(new PgEvolutionDatasetMaintenanceStore(appPool).retire({ tenantId, datasetId: retiring.id,
       expectedVersion: retiringFrozen.version }), /administrative PostgreSQL role/);
@@ -416,12 +436,13 @@ if (!databaseUrl) {
     assert.deepEqual(await maintenance.retire({ tenantId, datasetId: retiring.id,
       expectedVersion: retiringFrozen.version }), { retired: true });
     assert.deepEqual(await maintenance.purge({ tenantId, datasetId: retiring.id }), { purged: true, fixtures: 0 });
-    const activeCaseId = (await adminPool.query<{ id: string }>(
-      "SELECT id FROM pr_agent_harness.eval_cases WHERE tenant_id=$1 AND dataset_id=$2", [tenantId, active.id])).rows[0]!.id;
+    assert.equal(await holdReleased(`dataset-case:${retiring.id}:${retiringCaseId}`), true);
+    assert.equal(await holdReleased(`dataset-case:${active.id}:${activeCaseId}`), false);
     assert.equal((await datasets.readFixture(curator, active.id, activeCaseId)).fixtureHash, fixture.fixtureHash);
 
     await maintenance.retire({ tenantId, datasetId: active.id, expectedVersion: activeFrozen.version });
     assert.deepEqual(await maintenance.purge({ tenantId, datasetId: active.id }), { purged: true, fixtures: 1 });
+    assert.equal(await holdReleased(`dataset-case:${active.id}:${activeCaseId}`), true);
     const after = (await adminPool.query<{ manifest_hash: string; fixture_hash: string; artifact_hash: string;
       label_set_hash: string; input_json: Record<string, unknown>; live_files: string }>(
       `SELECT d.manifest_hash,c.fixture_hash,f.artifact_hash,c.label_set_hash,f.input_json,
@@ -484,7 +505,7 @@ if (!databaseUrl) {
   }
 
   async function seedReview(runId: string, integration: string, tenant = tenantId,
-    reviewArtifact: Record<string, unknown> = artifact): Promise<void> {
+    reviewArtifact: Record<string, unknown> = artifact, externalize = false): Promise<void> {
     const binding = (await adminPool.query<{ origin: string; repository: string; provider_repository_id: string }>(
       "SELECT origin,repository,provider_repository_id FROM pr_agent_harness.integration_bindings WHERE tenant_id=$1 AND id=$2",
       [tenant, integration])).rows[0]!;
@@ -515,6 +536,15 @@ if (!databaseUrl) {
          (id,tenant_id,run_id,step_key,step_kind,input_hash,status,output_hash,output_json,last_lease_epoch,attempt_count,completed_at)
        VALUES ($1,$2,$3,'github.collect_context.v1','tool',$4,'succeeded',$5,$6::jsonb,1,1,clock_timestamp())`,
       [stepId, tenant, runId, fingerprint(input), fingerprint({ value: collected }), JSON.stringify({ value: collected })]);
+    if (externalize) {
+      const output = { value: collected };
+      const ref = await new PgRunArtifactStore(new RuntimeDatabase(adminPool)).putStepOutput(
+        { tenantId: tenant, integrationId: integration, runId }, Buffer.from(JSON.stringify(output)));
+      await adminPool.query(`UPDATE pr_agent_harness.agent_steps
+        SET output_json=$4::jsonb,result_ref=$5,output_hash=$6
+        WHERE tenant_id=$1 AND run_id=$2 AND id=$3`,
+      [tenant,runId,stepId,JSON.stringify({ storage: "artifact" }),ref.artifactHash,fingerprint(output)]);
+    }
     await adminPool.query(
       `INSERT INTO pr_agent_harness.review_artifacts
          (id,tenant_id,integration_id,run_id,workflow_id,publication_mode,head_sha,content_hash,artifact_json)
@@ -532,6 +562,14 @@ if (!databaseUrl) {
     return (await adminPool.query<{ id: string }>(
       "SELECT id FROM pr_agent_harness.trusted_review_label_sets WHERE tenant_id=$1 AND source_run_id=$2 AND active",
       [tenantId, runId])).rows[0]!.id;
+  }
+
+  async function holdReleased(holdKey: string): Promise<boolean> {
+    const result = await adminPool.query<{ released: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM pr_agent_harness.run_artifact_hold_releases
+       WHERE tenant_id=$1 AND hold_key=$2) AS released`,
+      [tenantId, holdKey]);
+    return result.rows[0]?.released ?? false;
   }
 
   function repositoryAdapter(reads: string[]): DatasetRepositoryAdapter {

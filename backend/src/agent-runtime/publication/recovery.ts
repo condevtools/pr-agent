@@ -25,7 +25,7 @@ export interface PublicationRecoveryClaim {
 }
 
 export interface PublicationRecoveryDependencies {
-  listBindings(): Promise<PublicationBinding[]>;
+  listBindings(limit: number): Promise<PublicationBinding[]>;
   listBatches(
     binding: PublicationBinding,
     limit: number,
@@ -59,6 +59,7 @@ export interface PublicationRecoveryOptions {
   intervalMs?: number;
   batchLimit?: number;
   operationLimit?: number;
+  bindingLimit?: number;
 }
 
 export interface PublicationRecoveryTickResult {
@@ -78,6 +79,7 @@ export class PublicationRecoveryLoop {
   private readonly intervalMs: number;
   private readonly batchLimit: number;
   private readonly operationLimit: number;
+  private readonly bindingLimit: number;
   private timer: NodeJS.Timeout | undefined;
   private activeTick: Promise<PublicationRecoveryTickResult> | undefined;
   private readonly stopController = new AbortController();
@@ -94,6 +96,7 @@ export class PublicationRecoveryLoop {
       options.operationLimit ?? DEFAULT_LIMIT,
       "operation recovery limit",
     );
+    this.bindingLimit = boundedLimit(options.bindingLimit ?? 32, "binding recovery limit");
   }
 
   async tick(): Promise<PublicationRecoveryTickResult> {
@@ -129,17 +132,22 @@ export class PublicationRecoveryLoop {
 
   private async runTick(): Promise<PublicationRecoveryTickResult> {
     const result = emptyResult(false);
-    const bindings = await this.dependencies.listBindings();
+    const bindings = await this.dependencies.listBindings(this.bindingLimit);
     if (this.stopped) return result;
     result.bindings = bindings.length;
+    let remainingBatchScans = this.batchLimit;
+    let remainingOperationClaims = this.operationLimit;
     for (const binding of bindings) {
       if (this.stopped) break;
       const executedBatchIds = new Set<string>();
-      const initial = await this.dependencies.listBatches(
-        binding,
-        this.batchLimit,
-        this.stopController.signal,
-      );
+      const initial = remainingBatchScans > 0
+        ? await this.dependencies.listBatches(
+          binding,
+          1,
+          this.stopController.signal,
+        )
+        : [];
+      remainingBatchScans = Math.max(0, remainingBatchScans - initial.length);
       for (const batch of initial) {
         if (this.stopped) break;
         if (batch.status !== "pending") continue;
@@ -147,11 +155,14 @@ export class PublicationRecoveryLoop {
       }
 
       if (this.stopped) break;
-      const claims = await this.dependencies.claimOperations(
-        binding,
-        this.owner,
-        this.operationLimit,
-      );
+      const claims = remainingOperationClaims > 0
+        ? await this.dependencies.claimOperations(
+          binding,
+          this.owner,
+          1,
+        )
+        : [];
+      remainingOperationClaims = Math.max(0, remainingOperationClaims - claims.length);
       result.operationsClaimed += claims.length;
       for (const claim of claims) {
         try {
@@ -170,12 +181,7 @@ export class PublicationRecoveryLoop {
       }
 
       if (this.stopped) break;
-      const afterReconciliation = await this.dependencies.listBatches(
-        binding,
-        this.batchLimit,
-        this.stopController.signal,
-      );
-      for (const batch of afterReconciliation) {
+      for (const batch of initial) {
         if (this.stopped) break;
         if (batch.status !== "waiting_reconciliation") continue;
         let refreshed: FrozenPublicationBatch | undefined;
@@ -544,6 +550,7 @@ export function createPublicationRecoveryLoop(input: {
   runtimeForBinding(binding: PublicationBinding): Promise<RecoveryRuntime>;
   onError(error: unknown, context: PublicationRecoveryErrorContext): void;
   onActivity?(): void;
+  reserveBindings?(limit: number): Promise<PublicationBinding[]>;
   loopOptions?: PublicationRecoveryOptions;
   scheduleOptions?: PgPublicationRecoveryScheduleOptions;
 }): PublicationRecoveryLoop {
@@ -551,8 +558,10 @@ export function createPublicationRecoveryLoop(input: {
   const owner = requiredOwner(input.loopOptions?.owner ?? `recovery-${randomUUID()}`);
   return new PublicationRecoveryLoop(
     {
-      listBindings: async () => {
-        const bindings = await input.authority.listRecoverable();
+      listBindings: async (limit) => {
+        const bindings = input.reserveBindings
+          ? await input.reserveBindings(limit)
+          : (await input.authority.listRecoverable()).slice(0, limit);
         input.onActivity?.();
         return bindings;
       },

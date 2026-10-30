@@ -2,7 +2,8 @@
 // workflow code never depends on the composition root that imports workflows.
 export { requireOnlinePublicationAuthority } from "./publication/mode.js";
 export { agentRuntimePoolConfig, resolveAgentProcessRole, roleStartsWeb,
-  type AgentProcessRole } from "./runtime/config.js";
+  resolveWorkerSchedulingConfiguration,
+  type AgentProcessRole, type AgentPoolRole } from "./runtime/config.js";
 export { getAgentRuntimeServices } from "./runtime/services.js";
 export { resolvePublicationRuntime, publicationRuntimeForBinding,
   type PublicationRuntime } from "./runtime/publication.js";

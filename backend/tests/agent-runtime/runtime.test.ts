@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { agentRuntimePoolConfig, validatePublicationCredentialOrigin, requireOnlinePublicationAuthority } from "../../src/agent-runtime/runtime.js";
+import { agentRuntimePoolConfig, resolveWorkerSchedulingConfiguration,
+  validatePublicationCredentialOrigin, requireOnlinePublicationAuthority } from "../../src/agent-runtime/runtime.js";
 
 test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL", () => {
   assert.throws(() => agentRuntimePoolConfig({ DATABASE_URL: "postgres://unrelated/private" }), /Configure HARNESS/);
@@ -17,6 +18,27 @@ test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL"
     HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent",
     HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "local-test", HARNESS_PG_PORT: "bad",
   }), /Configure HARNESS/);
+});
+
+test("runtime roles freeze independent bounded pool and scheduling capacities", () => {
+  const base = { HARNESS_DATABASE_URL: "postgres://runtime:test@postgres/runtime" };
+  assert.equal(agentRuntimePoolConfig(base, "web").max, 8);
+  assert.equal(agentRuntimePoolConfig(base, "worker").max, 8);
+  assert.equal(agentRuntimePoolConfig(base, "recovery").max, 4);
+  assert.equal(agentRuntimePoolConfig({ ...base, HARNESS_WORKER_POOL_MAX: "12" }, "worker").max, 12);
+  assert.throws(() => agentRuntimePoolConfig({ ...base, HARNESS_WORKER_POOL_MAX: "many" }, "worker"),
+    /HARNESS_WORKER_POOL_MAX must be an integer/);
+  assert.deepEqual(resolveWorkerSchedulingConfiguration({}), {
+    concurrency: 4,
+    perBindingConcurrency: 2,
+    specialConcurrency: 1,
+    recoveryBindingPageSize: 32,
+  });
+  assert.throws(() => resolveWorkerSchedulingConfiguration({ HARNESS_WORKER_CONCURRENCY: "1" }),
+    /between 2 and 16/);
+  assert.throws(() => resolveWorkerSchedulingConfiguration({
+    HARNESS_WORKER_CONCURRENCY: "4", HARNESS_WORKER_SPECIAL_CONCURRENCY: "4",
+  }), /between 1 and 3/);
 });
 
 test("a server credential cannot be sent to a different binding origin", () => {

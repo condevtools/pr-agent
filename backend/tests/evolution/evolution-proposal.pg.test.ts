@@ -12,6 +12,7 @@ import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
+import { PgRunArtifactStore } from "../../src/agent-runtime/artifacts/index.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -48,9 +49,13 @@ else {
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${role}`);
     await admin.query(`GRANT SELECT ON pr_agent_harness.agent_runs,pr_agent_harness.agent_steps,
-      pr_agent_harness.evolution_proposal_sources,pr_agent_harness.evolution_candidates TO ${role}`);
+      pr_agent_harness.evolution_proposal_sources,pr_agent_harness.evolution_candidates,
+      pr_agent_harness.run_artifacts,pr_agent_harness.run_artifact_holds TO ${role}`);
     await admin.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${role}`);
     await admin.query(`GRANT INSERT ON pr_agent_harness.evolution_candidates TO ${role}`);
+    await admin.query(`GRANT INSERT ON pr_agent_harness.run_artifact_holds TO ${role}`);
+    await admin.query(`GRANT EXECUTE ON FUNCTION
+      pr_agent_harness.lock_available_run_artifact(uuid,uuid,uuid,text) TO ${role}`);
     await admin.query(`INSERT INTO pr_agent_harness.integration_bindings
       (id,tenant_id,platform,origin,repository,provider_repository_id,provider_actor_id,credential_ref,
        publication_state,publication_generation,authority_version,review_execution_mode,execution_mode_generation,
@@ -80,7 +85,8 @@ else {
     await admin.query(`INSERT INTO pr_agent_harness.agent_steps
       (id,tenant_id,run_id,step_key,step_kind,input_hash,status,output_hash,output_json,last_lease_epoch,attempt_count,completed_at)
       VALUES ($1,$2,$3,'evolution.proposal.model','model',$4,'succeeded',$5,$6::jsonb,1,1,clock_timestamp())`,
-    [stepId, tenantId, runId, fingerprint("model-input"), fingerprint(candidate), JSON.stringify({ value: candidate })]);
+    [stepId, tenantId, runId, fingerprint("model-input"), fingerprint({ value: candidate }),
+      JSON.stringify({ value: candidate })]);
     const url = new URL(databaseUrl); url.username = role; url.password = password;
     app = new Pool({ connectionString: url.toString(), max: 2 }); store = new PgEvolutionCandidateStore(new RuntimeDatabase(app));
   });
@@ -159,5 +165,32 @@ else {
        WHERE tenant_id=$1 AND id=$2`, [tenantId, succeeded.id])).rows[0]!;
     assert.equal(purged.candidate_hash, identity.candidate_hash); assert.deepEqual(purged.provenance_json, identity.provenance_json);
     assert.deepEqual(purged.candidate_json, { purged: true });
+  });
+
+  test("candidate persistence rehydrates an artifact-backed model step and holds its qualification source", async () => {
+    const artifactRunId = randomUUID();
+    const artifactLease = await seedProposalRun(artifactRunId);
+    const artifactStore = new PgRunArtifactStore(new RuntimeDatabase(admin));
+    const output = { value: candidate };
+    const ref = await artifactStore.putStepOutput({ tenantId, integrationId, runId: artifactRunId },
+      Buffer.from(JSON.stringify(output)));
+    await admin.query(`UPDATE pr_agent_harness.agent_steps
+      SET output_json=$3::jsonb,result_ref=$4,output_hash=$5
+      WHERE tenant_id=$1 AND run_id=$2 AND step_key='evolution.proposal.model'`,
+    [tenantId,artifactRunId,JSON.stringify({ storage: "artifact" }),ref.artifactHash,fingerprint(output)]);
+    const saved = await store.saveCandidate(artifactLease, "evolution.proposal.model", candidate,
+      fingerprint("artifact-model-config"));
+    const hold = await admin.query<{ hold_kind: string }>(`SELECT hold_kind
+      FROM pr_agent_harness.run_artifact_holds
+      WHERE tenant_id=$1 AND run_id=$2 AND artifact_hash=$3 AND hold_key=$4`,
+    [tenantId,artifactRunId,ref.artifactHash,`evolution-candidate:${saved.id}`]);
+    assert.equal(hold.rows[0]?.hold_kind, "evolution");
+    await admin.query(`UPDATE pr_agent_harness.run_artifacts
+      SET content_compressed=NULL,purged_at=clock_timestamp()
+      WHERE tenant_id=$1 AND run_id=$2 AND artifact_hash=$3`,
+    [tenantId,artifactRunId,ref.artifactHash]);
+    await assert.rejects(store.saveCandidate(artifactLease, "evolution.proposal.model", candidate,
+      fingerprint("artifact-model-config")),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "EVOLUTION_STEP_MISMATCH");
   });
 }

@@ -32,6 +32,14 @@ export interface DeepReviewFile {
 export interface SourceCoverage {
   status: "complete" | "partial";
   reasonCodes: readonly string[];
+  truncation?: {
+    schemaVersion: 1;
+    rule: "drop_trailing_files_v1";
+    originalFileCount: number;
+    retainedFileCount: number;
+    omittedRange: "entire_file";
+    omittedPaths: readonly string[];
+  };
 }
 
 export interface DeepReviewSource {

@@ -70,6 +70,73 @@ test("retry backoff is exponential, bounded, and jittered deterministically", ()
   assert.equal(retryBackoffMs(20, () => 1), 60_000);
 });
 
+test("special work has a bounded lane while normal work uses the remaining global capacity", async () => {
+  const release = deferred();
+  const started: string[] = [];
+  let normalOrdinal = 0;
+  let publicationAvailable = true;
+  let manualAvailable = true;
+  const store = workerStore({
+    claimPublicationOutcome: async () => publicationAvailable
+      ? (publicationAvailable = false, workerLease("publication-special"))
+      : undefined,
+    claimManualResume: async () => manualAvailable && !publicationAvailable
+      ? (manualAvailable = false, workerLease("manual-special"))
+      : undefined,
+    claim: async () => normalOrdinal < 3 ? workerLease(`normal-${++normalOrdinal}`) : undefined,
+  });
+  const worker = new RunWorker({
+    ...workerDependencies(store, async () => {
+      const runId = currentRunExecutionContext()!.lease.runId;
+      started.push(runId);
+      if (runId !== "manual-special") await release.promise;
+    }),
+    bindings: async (queueClass, limit = 4) => {
+      if (queueClass === "manual_resume" && publicationAvailable) return [];
+      return Array.from({ length: limit }, () => ({ reviewExecutionMode: "harness_async" } as PublicationBinding));
+    },
+  }, 4, 1);
+
+  await worker.tick();
+  await nextTurn();
+  assert.equal(started.filter((id) => id === "publication-special").length, 1);
+  assert.equal(started.filter((id) => id.startsWith("normal-")).length, 3);
+  release.resolve();
+  await worker.drain();
+  await worker.tick();
+  await worker.drain();
+  assert.ok(started.includes("manual-special"), "manual work must follow publication work in the special lane");
+  await worker.stop();
+});
+
+test("a reused artifact-backed step is rehydrated without another provider action", async () => {
+  let claimed = false;
+  let providerCalls = 0;
+  let transitioned = "";
+  const lease = workerLease("artifact-reuse");
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    beginStep: async () => ({
+      id: "step", runId: lease.runId, stepKey: "cached", kind: "model",
+      inputHash: "input", status: "succeeded", attemptId: "attempt", attemptNumber: 1,
+      reused: true, outputHash: "a".repeat(64), resultRef: "b".repeat(64),
+    }),
+    loadStepOutput: async () => ({ cached: true }),
+    transition: async (_lease, input) => { transitioned = input.to; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    const value = await currentRunExecutionContext()!.step(
+      "cached", "model", "input", async () => { providerCalls += 1; return { cached: false }; },
+    );
+    assert.deepEqual(value, { cached: true });
+  }));
+  await worker.tick();
+  await worker.drain();
+  assert.equal(providerCalls, 0);
+  assert.equal(transitioned, "succeeded");
+  await worker.stop();
+});
+
 test("shutdown waits for abort cleanup before returning the settled lease", async () => {
   const cleanup = deferred();
   const started = deferred();

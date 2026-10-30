@@ -10,6 +10,8 @@ import { fingerprint } from "../../agent-runtime/versions.js";
 import { redactRepositoryText } from "../../repository/content-safety/repository-content.js";
 import { reviewRunInputSchema } from "../../review/intake/run-input.js";
 import { lockCurrentBindingCapability } from "../../agent-runtime/authority/capability-guard.js";
+import { PgRunArtifactStore, RunArtifactCorruptError,
+  RunArtifactUnavailableError } from "../../agent-runtime/artifacts/index.js";
 import {
   annotationRequestSchema, arbitrationRequestSchema, canonicalizeLabelSet, feedbackObservationSchema,
   labelSetHash, providerFeedbackObservationSchema, providerFeedbackRecordSchema,
@@ -28,10 +30,15 @@ interface EligibleSource {
   artifactHash: string;
   artifactId: string;
   changedLines?: Map<string, Set<number>>;
+  collectionResultRef?: string;
 }
 
 export class PgEvolutionFeedbackStore {
-  constructor(private readonly db: RuntimeDatabase) {}
+  private readonly artifacts: PgRunArtifactStore;
+
+  constructor(private readonly db: RuntimeDatabase) {
+    this.artifacts = new PgRunArtifactStore(db);
+  }
 
   async recordObservation(principal: RunPrincipal, sourceRunId: string, commandKey: string,
     raw: unknown): Promise<FeedbackReceipt> {
@@ -49,7 +56,8 @@ export class PgEvolutionFeedbackStore {
       }
       await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
         integrationId: principal.integrationId, capability: "evolution" });
-      const source = await eligibleSource(client, principal, sourceRunId, request.artifactHash, false, true, false);
+      const source = await eligibleSource(client, this.artifacts, principal,
+        sourceRunId, request.artifactHash, false, true, false);
       const inserted = await client.query<{ id: string; created_at: Date }>(
         `INSERT INTO pr_agent_harness.feedback_observations
            (tenant_id,integration_id,source_run_id,artifact_hash,command_key,request_hash,
@@ -157,7 +165,8 @@ export class PgEvolutionFeedbackStore {
       await lockTenantEvolution(client, principal.tenantId);
       await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
         integrationId: principal.integrationId, capability: "evolution" });
-      const source = await eligibleSource(client, principal, sourceRunId, request.artifactHash, true, true, true);
+      const source = await eligibleSource(client, this.artifacts, principal,
+        sourceRunId, request.artifactHash, true, true, true);
       validateChangedLocations(labels, source.changedLines!);
       const active = await client.query<{ id: string }>(
         `SELECT id FROM pr_agent_harness.review_annotations
@@ -188,6 +197,11 @@ export class PgEvolutionFeedbackStore {
           principal.actorType, principal.subjectId, commandKey, requestHash, request.supersedesAnnotationId ?? null]);
       const trustedLabelSetId = await createConsensusIfExact(client, principal, sourceRunId, source.artifactHash,
         labelsHash, current !== undefined);
+      if (trustedLabelSetId && source.collectionResultRef) {
+        await this.artifacts.holdInTransaction(client, {
+          tenantId: principal.tenantId, integrationId: principal.integrationId, runId: sourceRunId,
+        }, source.collectionResultRef, `trusted-label:${trustedLabelSetId}`, "qualification");
+      }
       return { id, sourceRunId, artifactHash: source.artifactHash, rubricVersion: "review-quality.v1", labelSetHash: labelsHash,
         actor: actor(principal), supersedesAnnotationId: request.supersedesAnnotationId, trustedLabelSetId,
         createdAt: inserted.rows[0]!.created_at.toISOString() };
@@ -218,7 +232,8 @@ export class PgEvolutionFeedbackStore {
       await lockTenantEvolution(client, principal.tenantId);
       await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
         integrationId: principal.integrationId, capability: "evolution" });
-      const source = await eligibleSource(client, principal, sourceRunId, request.artifactHash, false, true, true);
+      const source = await eligibleSource(client, this.artifacts, principal,
+        sourceRunId, request.artifactHash, false, true, true);
       if (await trustedLabel(client, principal.tenantId, sourceRunId)) throw runConflict("A trusted label set already exists");
       const annotations = await client.query<AnnotationRow>(
         `SELECT id,label_set_hash,label_set_json,actor_type,actor_id FROM pr_agent_harness.review_annotations
@@ -254,6 +269,11 @@ export class PgEvolutionFeedbackStore {
       const trustedId = await insertTrustedLabel(client, principal, sourceRunId, source.artifactHash,
         chosen.label_set_hash, chosen.label_set_json, "arbitration",
         { arbitrationId, leftAnnotationId: left.id, rightAnnotationId: right.id }, arbitrationId);
+      if (source.collectionResultRef) {
+        await this.artifacts.holdInTransaction(client, {
+          tenantId: principal.tenantId, integrationId: principal.integrationId, runId: sourceRunId,
+        }, source.collectionResultRef, `trusted-label:${trustedId}`, "qualification");
+      }
       return { id: arbitrationId, sourceRunId, chosenLabelSetHash: chosen.label_set_hash,
         trustedLabelSetId: trustedId, createdAt: inserted.rows[0]!.created_at.toISOString() };
     });
@@ -334,17 +354,20 @@ interface ExistingAnnotation extends AnnotationRow {
   request_hash: string; artifact_hash: string; supersedes_annotation_id: string | null; created_at: Date;
 }
 
-async function eligibleSource(client: PoolClient, principal: RunPrincipal, sourceRunId: string,
+async function eligibleSource(client: PoolClient, artifacts: PgRunArtifactStore,
+  principal: RunPrincipal, sourceRunId: string,
   artifactHash: string, includeDiff: boolean, lockRun = false, requireCompleteCoverage = false): Promise<EligibleSource> {
-  const result = await client.query<{ artifact_id: string; content_hash: string; artifact_json: unknown; source_json: unknown }>(
+  const result = await client.query<{ artifact_id: string; content_hash: string; artifact_json: unknown;
+    source_output_json: Record<string, unknown> | null; source_output_hash: string | null;
+    source_result_ref: string | null }>(
     `SELECT a.id AS artifact_id,a.content_hash,a.artifact_json,
-            ${includeDiff ? "s.output_json->'value'" : "NULL::jsonb"} AS source_json
+            s.output_json AS source_output_json,s.output_hash AS source_output_hash,s.result_ref AS source_result_ref
      FROM pr_agent_harness.agent_runs r
      JOIN pr_agent_harness.review_artifacts a
        ON a.tenant_id=r.tenant_id AND a.integration_id=r.integration_id AND a.run_id=r.id AND a.content_purged_at IS NULL
-     ${includeDiff ? `JOIN LATERAL (SELECT output_json FROM pr_agent_harness.agent_steps
+     LEFT JOIN LATERAL (SELECT output_json,output_hash,result_ref FROM pr_agent_harness.agent_steps
        WHERE tenant_id=r.tenant_id AND run_id=r.id AND step_key IN ('github.collect_context.v1','gitlab.collect_context.v1')
-         AND status='succeeded' ORDER BY completed_at DESC LIMIT 1) s ON true` : ""}
+         AND status='succeeded' ORDER BY completed_at DESC LIMIT 1) s ON true
      WHERE r.tenant_id=$1 AND r.integration_id=$2 AND r.id=$3
        AND r.run_type='review.deep.v1' AND r.status='succeeded' AND r.content_purged_at IS NULL
      ${lockRun ? "FOR UPDATE OF r" : ""}`,
@@ -359,11 +382,25 @@ async function eligibleSource(client: PoolClient, principal: RunPrincipal, sourc
   if (requireCompleteCoverage && (!coverageStatus.success || coverageStatus.data.sourceCoverage.status !== "complete")) {
     throw runConflict("Complete source coverage is required for trusted annotations");
   }
-  if (!includeDiff) return { artifactId: row.artifact_id, artifactHash: row.content_hash };
-  const collected = collectedSourceSchema.parse(row.source_json);
+  const base = { artifactId: row.artifact_id, artifactHash: row.content_hash,
+    ...(row.source_result_ref ? { collectionResultRef: row.source_result_ref } : {}) };
+  if (!includeDiff) return base;
+  if (!row.source_output_hash) throw runConflict("Persisted source collection is unavailable");
+  let sourceOutput: unknown;
+  try {
+    sourceOutput = await artifacts.readStepOutputValueInTransaction<unknown>(client, {
+      tenantId: principal.tenantId, integrationId: principal.integrationId, runId: sourceRunId,
+    }, { resultRef: row.source_result_ref, output: row.source_output_json, outputHash: row.source_output_hash });
+  } catch (error) {
+    if (error instanceof RunArtifactCorruptError || error instanceof RunArtifactUnavailableError) {
+      throw runConflict("Persisted source collection is unavailable");
+    }
+    throw error;
+  }
+  const collected = collectedSourceSchema.parse(sourceOutput);
   const changedLines = new Map<string, Set<number>>();
   for (const file of collected.files) changedLines.set(file.newPath, new Set(addedLineNumbers(file.patch)));
-  return { artifactId: row.artifact_id, artifactHash: row.content_hash, changedLines };
+  return { ...base, changedLines };
 }
 
 function validateChangedLocations(labels: TrustedLabelSetV1, changed: Map<string, Set<number>>): void {

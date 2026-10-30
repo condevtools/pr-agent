@@ -406,7 +406,8 @@ async function grantRuntime(pool: Pool, role: string): Promise<void> {
     GRANT SELECT,INSERT ON pr_agent_harness.checkpoints,pr_agent_harness.run_publication_batches,
       pr_agent_harness.dead_letter_jobs,pr_agent_harness.usage_records,pr_agent_harness.model_pricing_snapshots,
       pr_agent_harness.run_wait_decisions,pr_agent_harness.evidence_records,pr_agent_harness.finding_candidates,
-      pr_agent_harness.finding_decisions,pr_agent_harness.review_artifacts TO ${role};
+      pr_agent_harness.finding_decisions,pr_agent_harness.review_artifacts,
+      pr_agent_harness.run_artifacts TO ${role};
     GRANT SELECT ON pr_agent_harness.evolution_release_assignments,
       pr_agent_harness.evolution_release_qualifications,pr_agent_harness.evolution_candidates,
       pr_agent_harness.evolution_proposal_sources,pr_agent_harness.eval_runs,pr_agent_harness.eval_results,

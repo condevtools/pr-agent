@@ -61,7 +61,8 @@ else {
       `INSERT INTO pr_agent_harness.agent_steps
          (id,tenant_id,run_id,step_key,step_kind,input_hash,status,output_hash,output_json,last_lease_epoch,attempt_count,completed_at)
        VALUES ($1,$2,$3,'github.collect_context.v1','tool',$4,'succeeded',$5,$6::jsonb,1,1,clock_timestamp())`,
-      [stepId, tenantId, runId, fingerprint("collector-input"), fingerprint(collected), JSON.stringify({ value: collected })]);
+      [stepId, tenantId, runId, fingerprint("collector-input"), fingerprint({ value: collected }),
+        JSON.stringify({ value: collected })]);
     await admin.query(
       `INSERT INTO pr_agent_harness.review_artifacts
          (id,tenant_id,integration_id,run_id,workflow_id,publication_mode,head_sha,content_hash,artifact_json)
@@ -179,7 +180,7 @@ else {
       `INSERT INTO pr_agent_harness.agent_steps
          (id,tenant_id,run_id,step_key,step_kind,input_hash,status,output_hash,output_json,last_lease_epoch,attempt_count,completed_at)
        VALUES ($1,$2,$3,'github.collect_context.v1','tool',$4,'succeeded',$5,$6::jsonb,1,1,clock_timestamp())`,
-      [partialStepId, tenantId, partialRunId, fingerprint("partial-collector-input"), fingerprint(collected),
+      [partialStepId, tenantId, partialRunId, fingerprint("partial-collector-input"), fingerprint({ value: collected }),
         JSON.stringify({ value: collected })]);
     await admin.query(
       `INSERT INTO pr_agent_harness.review_artifacts

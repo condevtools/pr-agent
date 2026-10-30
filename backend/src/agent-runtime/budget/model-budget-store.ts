@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 
 import { RuntimeDatabase } from "../postgres/database.js";
+import { measureDatabaseOperation } from "../database-timing.js";
 import {
   type ModelExecutionContext,
   type ModelProvider,
@@ -682,11 +683,11 @@ export async function reserveRunBudgetInTransaction(
       input.policy.tenantLimits.inputTokens, input.policy.tenantLimits.outputTokens,
       input.policy.tenantLimits.costMicros],
   );
-  const account = await client.query<AccountRow>(
+  const account = await measureDatabaseOperation("tenant_budget_lock", () => client.query<AccountRow>(
     `SELECT * FROM pr_agent_harness.tenant_budget_accounts
      WHERE tenant_id=$1 AND period_key=$2 AND currency=$3 FOR UPDATE`,
     [input.tenantId, input.policy.periodKey, input.policy.currency],
-  );
+  ));
   const row = account.rows[0]!;
   const existingEnvelope = await client.query<{ pricing_hash: string }>(
     `SELECT pricing_hash FROM pr_agent_harness.run_budget_envelopes

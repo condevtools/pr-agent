@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import { databaseTimingSnapshot } from "../database-timing.js";
 
 export type DurableProcessRole = "worker" | "recovery" | "verifier";
 
@@ -107,7 +108,9 @@ export class ProcessHeartbeatLoop {
 
   private async tick(): Promise<void> {
     if (this.stopped || this.active) return;
-    const active = this.store.beat(this.role, this.instanceId, this.report);
+    const active = this.store.beat(this.role, this.instanceId, {
+      ...this.report, databaseTiming: databaseTimingSnapshot(),
+    });
     this.active = active;
     try { await active; }
     finally { if (this.active === active) this.active = undefined; }

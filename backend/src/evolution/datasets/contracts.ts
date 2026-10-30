@@ -69,6 +69,7 @@ export interface DatasetCaseSource {
   collected: Record<string, unknown>;
   collectionStepId: string;
   collectionOutputHash: string;
+  collectionResultRef?: string;
   artifactHash: string;
   labelSetId: string;
   labelSetHash: string;

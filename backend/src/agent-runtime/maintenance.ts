@@ -74,6 +74,7 @@ export class RuntimeMaintenanceStore {
           [normalized.tenantId, candidate.runId],
         );
         if (!run.rows[0]) continue;
+        if (await hasUnreleasedArtifactHold(client, normalized.tenantId, candidate.runId)) continue;
         const floor = Number(run.rows[0].next_event_seq);
         const previousFloor = Number(run.rows[0].event_retention_floor);
         await client.query(
@@ -167,6 +168,13 @@ async function selectCandidates(
        AND r.content_purged_at IS NULL
        AND r.finished_at<$2
        AND NOT EXISTS (
+         SELECT 1 FROM pr_agent_harness.run_artifact_holds rah
+         LEFT JOIN pr_agent_harness.run_artifact_hold_releases rahr
+           ON rahr.tenant_id=rah.tenant_id AND rahr.run_id=rah.run_id
+             AND rahr.artifact_hash=rah.artifact_hash AND rahr.hold_key=rah.hold_key
+         WHERE rah.tenant_id=r.tenant_id AND rah.run_id=r.id AND rahr.hold_key IS NULL
+       )
+       AND NOT EXISTS (
          SELECT 1 FROM pr_agent_harness.evolution_run_assignments era
          WHERE era.tenant_id=r.tenant_id AND era.run_id=r.id AND era.selection<>'baseline'
        )
@@ -223,6 +231,18 @@ async function selectCandidates(
   );
   return result.rows.map((row) => ({ runId: row.id, finishedAt: row.finished_at.toISOString(),
     eventCount: Number(row.event_count), alreadyPurged: row.content_purged_at !== null }));
+}
+
+async function hasUnreleasedArtifactHold(client: PoolClient, tenantId: string, runId: string): Promise<boolean> {
+  const result = await client.query(
+    `SELECT 1 FROM pr_agent_harness.run_artifact_holds rah
+     LEFT JOIN pr_agent_harness.run_artifact_hold_releases rahr
+       ON rahr.tenant_id=rah.tenant_id AND rahr.run_id=rah.run_id
+         AND rahr.artifact_hash=rah.artifact_hash AND rahr.hold_key=rah.hold_key
+     WHERE rah.tenant_id=$1 AND rah.run_id=$2 AND rahr.hold_key IS NULL
+     LIMIT 1`,
+    [tenantId, runId]);
+  return result.rowCount !== 0;
 }
 
 async function scrubRunContent(
