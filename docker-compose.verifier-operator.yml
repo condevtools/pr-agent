@@ -1,0 +1,29 @@
+services:
+  verifier-operator:
+    image: ${PR_AGENT_VERIFIER_IMAGE:-pr-agent-verifier:local}
+    restart: unless-stopped
+    user: "10001:10001"
+    group_add:
+      - ${VERIFIER_DOCKER_GID:?Set VERIFIER_DOCKER_GID to the isolated daemon socket group}
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=700
+    stop_grace_period: 45s
+    environment:
+      HARNESS_DATABASE_URL: ${HARNESS_VERIFIER_DATABASE_URL:?Set the dedicated verifier database URL}
+      FIX_POLICY_REGISTRY_JSON: ${FIX_POLICY_REGISTRY_JSON:?Set the frozen verifier policy registry}
+      RUNTIME_HEARTBEAT_INTERVAL_MS: ${RUNTIME_HEARTBEAT_INTERVAL_MS:-5000}
+      RUNTIME_HEARTBEAT_STALE_MS: ${RUNTIME_HEARTBEAT_STALE_MS:-20000}
+    volumes:
+      - type: bind
+        source: ${VERIFIER_DOCKER_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "node", "dist/agent-runtime/health-cli.js", "--role", "verifier"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

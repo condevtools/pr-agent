@@ -15,7 +15,7 @@ const proposal: FixProposal = {
   id: "proposal-1", tenantId: "11111111-1111-4111-8111-111111111111", integrationId: "22222222-2222-4222-8222-222222222222",
   runId: "33333333-3333-4333-8333-333333333333", sourceReviewRunId: "44444444-4444-4444-8444-444444444444",
   findingId: hash("f"), revision: 1, repository: "acme/widgets", baseSha: "b".repeat(40), headSha,
-  sourceBundleRef: `snapshot:${hash("1")}`, sourceBundleHash: hash("1"),
+  sourceBundleRef: `artifact:${hash("1")}`, sourceBundleHash: hash("1"),
   codePatch: "diff --git a/src/add.ts b/src/add.ts\n--- a/src/add.ts\n+++ b/src/add.ts\n@@ -1,3 +1,3 @@\n export function add(a: number, b: number) {\n-  return a - b;\n+  return a + b;\n }\n",
   testPatch: "diff --git a/tests/add.fix.test.ts b/tests/add.fix.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/add.fix.test.ts\n@@ -0,0 +1,1 @@\n+test('add', () => assert.equal(add(1, 2), 3));\n",
   codePatchHash: "", testPatchHash: "", proposalHash: hash("4"), policyId: "node-v1", policyHash: hash("5"),

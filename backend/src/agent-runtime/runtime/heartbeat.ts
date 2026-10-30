@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { databaseTimingSnapshot } from "../database-timing.js";
+import { ProcessHealthMarker } from "./process-health.js";
 
 export type DurableProcessRole = "worker" | "recovery" | "verifier";
 
@@ -72,6 +73,7 @@ export class ProcessHeartbeatStore {
 
 export class ProcessHeartbeatLoop {
   readonly instanceId = randomUUID();
+  private readonly health: ProcessHealthMarker;
   private timer?: NodeJS.Timeout;
   private active?: Promise<void>;
   private stopped = false;
@@ -84,7 +86,7 @@ export class ProcessHeartbeatLoop {
     private readonly configuration = resolveProcessHeartbeatConfiguration(),
     private readonly onError: (error: unknown) => void = () => undefined,
     private readonly automatic = true,
-  ) {}
+  ) { this.health = new ProcessHealthMarker(role, this.instanceId); }
 
   async start(): Promise<void> {
     if (this.stopped || this.started) return;
@@ -102,15 +104,26 @@ export class ProcessHeartbeatLoop {
     this.stopped = true;
     clearInterval(this.timer);
     this.timer = undefined;
-    await this.active;
-    await this.store.remove(this.role, this.instanceId);
+    try { await this.active; }
+    finally {
+      try { await this.store.remove(this.role, this.instanceId); }
+      finally { await this.health.clear(); }
+    }
   }
 
   private async tick(): Promise<void> {
     if (this.stopped || this.active) return;
-    const active = this.store.beat(this.role, this.instanceId, {
-      ...this.report, databaseTiming: databaseTimingSnapshot(),
-    });
+    const active = (async () => {
+      try {
+        await this.store.beat(this.role, this.instanceId, {
+          ...this.report, databaseTiming: databaseTimingSnapshot(),
+        });
+        await this.health.record();
+      } catch (error) {
+        await this.health.clear().catch(this.onError);
+        throw error;
+      }
+    })();
     this.active = active;
     try { await active; }
     finally { if (this.active === active) this.active = undefined; }

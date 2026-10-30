@@ -5,8 +5,7 @@ import type { FindingCandidate } from "../../review/deep/contracts.js";
 import type { FixRunInput, FixSource, VerificationPolicy } from "../contracts.js";
 import { loadFixPolicyRegistry } from "./policy.js";
 import { assertVerifierPolicy } from "../verification/sandbox-policy.js";
-import { calculateSnapshotBundleHash, writeSnapshotBundle } from "../persistence/snapshot-bundle.js";
-import { lockFixSnapshots } from "../persistence/snapshot-gc.js";
+import { prepareSnapshotBundle } from "../persistence/snapshot-bundle.js";
 import { GitHubRepositoryReadAdapter } from "../../integrations/github/repository/read-adapter.js";
 import { GitLabRepositoryReadAdapter } from "../../integrations/gitlab/repository/read-adapter.js";
 import { resolveModelConfiguration } from "../../model/configuration.js";
@@ -21,6 +20,9 @@ import { reviewRunInputSchema, type ReviewRunInput } from "../../review/intake/r
 import { assertSafePath } from "../../repository/content-safety/repository-content.js";
 import { publicationRuntimeForBinding } from "../../agent-runtime/runtime/publication.js";
 import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
+import { PgRunArtifactStore, RUN_ARTIFACT_LIMITS } from "../../agent-runtime/artifacts/index.js";
+
+const MAX_SNAPSHOT_FILES = 2_000;
 
 const findingSchema: z.ZodType<FindingCandidate> = z.object({
   id: z.string().regex(/^[a-f0-9]{64}$/), sourceRole: z.enum(["security", "correctness"]),
@@ -66,28 +68,36 @@ export async function admitFixProposalRun(input: {
   const runtime = await publicationRuntimeForBinding(input.binding);
   const adapter = await repositoryAdapter(input.binding, source.review.revision.headSha, runtime.resolveCredential());
   const paths = (await adapter.listFiles()).filter(snapshotPathAllowed);
+  if (paths.length === 0 || paths.length > MAX_SNAPSHOT_FILES) {
+    throw runConflict("Bounded source snapshot file count exceeds the admission limit");
+  }
   if (!paths.includes(source.finding.location.path) || !paths.includes(policy.dependencyLockPath)) {
     throw runConflict("Trusted finding or dependency lock is unavailable in the bounded source snapshot");
   }
   const files: Array<{ path: string; content: Uint8Array }> = [];
-  let snapshotBytes = 0;
+  let collectedBytes = 0;
   for (let offset = 0; offset < paths.length; offset += 6) {
+    if (collectedBytes >= RUN_ARTIFACT_LIMITS.maxRawBytes) {
+      throw runConflict("Bounded source snapshot exceeds the admission byte limit");
+    }
     const batch = await Promise.all(paths.slice(offset, offset + 6).map(async (path) => {
       const file = await adapter.readFile(path);
       if (!file) throw runConflict(`Required fixed-revision source file is unavailable: ${path}`);
       return { path, content: file.bytes };
     }));
     for (const file of batch) {
-      snapshotBytes += file.content.byteLength;
-      if (snapshotBytes > 50 * 1024 * 1024) throw runConflict("Fixed-revision snapshot exceeds the 50 MiB limit");
+      collectedBytes += file.content.byteLength;
+      if (collectedBytes > RUN_ARTIFACT_LIMITS.maxRawBytes) {
+        throw runConflict("Bounded source snapshot exceeds the admission byte limit");
+      }
       files.push(file);
     }
   }
   const lock = files.find(({ path }) => path === policy.dependencyLockPath)!;
   if (sha256(lock.content) !== policy.dependencyLockHash) throw runConflict("Dependency lock does not match the trusted fix policy");
-  const sourceBundleHash = calculateSnapshotBundleHash({ headSha: source.review.revision.headSha,
+  const snapshot = await prepareSnapshotBundle({ headSha: source.review.revision.headSha,
     dependencyLockHash: policy.dependencyLockHash, files });
-  const sourceBundleRef = `snapshot:${sourceBundleHash}`;
+  const { sourceBundleHash, sourceBundleRef } = snapshot;
   const fixSource: Omit<FixSource, "runId"> = {
     tenantId: input.principal.tenantId, integrationId: input.principal.integrationId,
     sourceReviewRunId: input.sourceReviewRunId, findingId: input.findingId,
@@ -103,13 +113,16 @@ export async function admitFixProposalRun(input: {
       headBranch: source.review.presentation.headBranch, headSha: source.review.revision.headSha } };
   const creation = await buildFixRunCreationInput(input.binding, input.principal, createScope, createKey,
     requestHash, input.sourceReviewRunId, runInput, policy);
-  const run = await input.db.transaction(input.principal.tenantId, async (client) => {
-    await lockFixSnapshots(client);
-    const written = await writeSnapshotBundle({ root: snapshotRoot(), headSha: source.review.revision.headSha,
-      dependencyLockHash: policy.dependencyLockHash, files });
-    if (written.sourceBundleHash !== sourceBundleHash) throw new Error("Snapshot identity changed while acquiring its admission lock");
-    return createRunInTransaction(client, creation);
-  });
+  const artifacts = new PgRunArtifactStore(input.db);
+  const budgetAdmission = creation.admission;
+  creation.admission = async (client, runId) => {
+    await budgetAdmission?.(client, runId);
+    const scope = { tenantId: input.principal.tenantId, integrationId: input.principal.integrationId, runId };
+    await artifacts.putFixSnapshotForQueuedRunInTransaction(client, scope, snapshot.artifact);
+    await artifacts.holdInTransaction(client, scope, sourceBundleHash, `fix-source:${runId}`, "fix");
+  };
+  const run = await input.db.transaction(input.principal.tenantId,
+    (client) => createRunInTransaction(client, creation));
   return { id: run.id, status: run.status, version: run.version, created: run.created };
 }
 
@@ -129,7 +142,7 @@ export async function buildFixRunCreationInput(
   const manifest = { ...baseManifest,
     workflowVersionHash: fingerprint({ base: baseManifest.workflowVersionHash, workflow: "fix.propose.v1" }),
     promptVersionHash: fingerprint({ base: baseManifest.promptVersionHash, prompt: "fix.propose.v1" }),
-    toolVersionHash: fingerprint({ base: baseManifest.toolVersionHash, snapshotSchema: 1 }),
+    toolVersionHash: fingerprint({ base: baseManifest.toolVersionHash, snapshotSchema: 2 }),
     policyVersionHash: fingerprint({ base: baseManifest.policyVersionHash, fixPolicy }) };
   const maxRunMs = Math.max(15 * 60_000, fixPolicy.deadlineMs + 5 * 60_000);
   return { tenantId: binding.tenantId, integrationId: binding.id, actorType: principal.actorType, actorId: principal.subjectId,
@@ -181,7 +194,6 @@ async function repositoryAdapter(binding: PublicationBinding, headSha: string, c
   return new GitHubRepositoryReadAdapter({ apiBaseUrl: binding.origin, token, owner, repo, headSha });
 }
 
-function snapshotRoot(): string { return process.env.FIX_VERIFIER_SNAPSHOT_ROOT?.trim() || "/var/lib/pr-agent-verifier/snapshots"; }
 function sha256(value: Uint8Array): string { return createHash("sha256").update(value).digest("hex"); }
 function snapshotPathAllowed(path: string): boolean {
   try { assertSafePath(path); } catch { return false; }

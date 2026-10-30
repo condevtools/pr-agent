@@ -1,10 +1,17 @@
 import type { Pool, PoolClient } from "pg";
+import { createHash } from "node:crypto";
+import { promisify } from "node:util";
+import { gunzip } from "node:zlib";
 
 import type { FixProposal, VerificationJobInput, VerificationResult } from "../contracts.js";
 import { fingerprint } from "../../agent-runtime/versions.js";
 import type { RunLease } from "../../agent-runtime/runs/contracts.js";
 import { assertRunLease } from "../../agent-runtime/execution/store.js";
 import { RuntimeDatabase } from "../../agent-runtime/postgres/database.js";
+import { RUN_ARTIFACT_LIMITS } from "../../agent-runtime/artifacts/index.js";
+import { FIX_SNAPSHOT_CONTENT_TYPE } from "../persistence/snapshot-bundle.js";
+
+const gunzipAsync = promisify(gunzip);
 
 export interface VerificationJobLease extends VerificationJobInput {
   id: string;
@@ -67,6 +74,30 @@ export class PgFixVerifierJobStore {
     if (!result.rows[0]?.heartbeat_verification_job) throw new VerificationJobLeaseLostError(lease.id);
   }
 
+  async readSnapshot(lease: VerificationJobLease): Promise<Buffer> {
+    const result = await this.pool.query<{
+      artifact_hash: string; purpose: string; content_type: string; content_encoding: string;
+      raw_size_bytes: number; compressed_size_bytes: number; content_compressed: Buffer;
+    }>("SELECT * FROM pr_agent_harness.read_leased_verification_snapshot($1,$2,$3,$4,$5)",
+    [lease.tenantId, lease.id, lease.owner, lease.epoch, lease.sourceBundleHash]);
+    const row = result.rows[0];
+    if (!row || row.artifact_hash !== lease.sourceBundleHash || row.purpose !== "fix_snapshot"
+        || row.content_type !== FIX_SNAPSHOT_CONTENT_TYPE || row.content_encoding !== "gzip"
+        || row.raw_size_bytes < 0 || row.raw_size_bytes > RUN_ARTIFACT_LIMITS.maxRawBytes
+        || row.compressed_size_bytes !== row.content_compressed?.byteLength
+        || row.compressed_size_bytes > RUN_ARTIFACT_LIMITS.maxCompressedBytes) {
+      throw new VerificationSnapshotUnavailableError(lease.id);
+    }
+    let raw: Buffer;
+    try { raw = await gunzipAsync(row.content_compressed, { maxOutputLength: row.raw_size_bytes + 1 }); }
+    catch { throw new VerificationSnapshotUnavailableError(lease.id); }
+    if (raw.byteLength !== row.raw_size_bytes
+        || createHash("sha256").update(raw).digest("hex") !== lease.sourceBundleHash) {
+      throw new VerificationSnapshotUnavailableError(lease.id);
+    }
+    return raw;
+  }
+
   async complete(lease: VerificationJobLease, result: VerificationResult): Promise<void> {
     if (result.proposalHash !== lease.proposalHash || result.policyHash !== lease.policyHash
         || result.imageDigest !== lease.imageDigest) throw new Error("verification result scope mismatch");
@@ -100,6 +131,13 @@ export async function enqueueVerificationJob(client: PoolClient, input: Verifica
   if (input.verificationInputHash !== verificationInputHashForJob(input, input.verifierCapabilityHash)) {
     throw new Error("verification job input hash mismatch");
   }
+  if (input.sourceBundleRef !== `artifact:${input.sourceBundleHash}`) {
+    throw new Error("verification source snapshot reference mismatch");
+  }
+  const available = await client.query<{ available: boolean }>(
+    "SELECT pr_agent_harness.lock_available_run_artifact($1,$2,$3,$4) AS available",
+    [input.tenantId, input.integrationId, input.runId, input.sourceBundleHash]);
+  if (!available.rows[0]?.available) throw new Error("verification source snapshot artifact is unavailable");
   const inserted = await client.query<{ id: string }>(
     `INSERT INTO pr_agent_harness.verification_jobs
        (tenant_id,integration_id,run_id,proposal_id,proposal_hash,source_bundle_ref,source_bundle_hash,
@@ -224,6 +262,12 @@ export async function waitForVerification(
 
 export class VerificationJobLeaseLostError extends Error {
   constructor(readonly jobId: string) { super(`verification job lease lost: ${jobId}`); this.name = "VerificationJobLeaseLostError"; }
+}
+
+export class VerificationSnapshotUnavailableError extends Error {
+  constructor(readonly jobId: string) {
+    super("verification_snapshot_unavailable"); this.name = "VerificationSnapshotUnavailableError";
+  }
 }
 
 function validateClaim(row: ClaimRow): void {

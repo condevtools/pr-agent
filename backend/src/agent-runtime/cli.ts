@@ -10,7 +10,6 @@ import { PublicationAuthorityStore } from "./authority/publication-authority.js"
 import { PublicationControlStore, type PublicationControlInput } from "./publication/control.js";
 import { RuntimeMaintenanceStore } from "./maintenance.js";
 import { RuntimeMetricsStore } from "./metrics.js";
-import { collectFixSnapshots } from "../fix/persistence/snapshot-gc.js";
 import { PgEvolutionDatasetMaintenanceStore } from "../evolution/datasets/maintenance.js";
 
 const [command, ...args] = process.argv.slice(2);
@@ -96,15 +95,6 @@ try {
       olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
       limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined };
     console.log(JSON.stringify(await new RuntimeMaintenanceStore(pool)[action](request)));
-  } else if (command === "snapshot-retention") {
-    const fields = parseFields(args, ["--action"], ["--days", "--limit"]);
-    const action = fields.get("--action");
-    if (action !== "preview" && action !== "apply") throw new Error("Snapshot retention action must be preview or apply");
-    const root = process.env.FIX_VERIFIER_SNAPSHOT_ROOT?.trim();
-    if (!root) throw new Error("FIX_VERIFIER_SNAPSHOT_ROOT is required for snapshot retention");
-    console.log(JSON.stringify(await collectFixSnapshots({ db, root, apply: action === "apply",
-      olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
-      limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined })));
   } else if (command === "dataset-retire") {
     const fields = parseFields(args, ["--tenant", "--dataset", "--version"]);
     console.log(JSON.stringify(await new PgEvolutionDatasetMaintenanceStore(pool).retire({
@@ -138,7 +128,7 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness ready | migrate | bind | configure | capabilities | authority | execution-drain | execution-resume | retention | snapshot-retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
+    throw new Error("Usage: harness ready | migrate | bind | configure | capabilities | authority | execution-drain | execution-resume | retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
   }
 } catch (error) {
   // Do not dump the Pool/driver error object, which can contain connection credentials.

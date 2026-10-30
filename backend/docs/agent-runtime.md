@@ -12,11 +12,17 @@ docker compose up -d --build
 
 - `postgres`：PostgreSQL 17，持久卷 `harness-postgres`，仅 Compose 内网可访问，无宿主机数据库端口。
 - `database-init`：一次性迁移容器，以 `pr_agent_migrator` 事务执行带校验和的迁移；该角色必须由首次数据库 bootstrap 创建为 schema owner，且必须是 `NOSUPERUSER NOBYPASSRLS`。
-- `pr-agent`：等待数据库健康和迁移成功，以 `pr_agent_app` 连接；启动时拒绝超级用户或绕过 RLS 的账户。
+- `pr-agent`：只运行 `web`，等待数据库健康和迁移成功，以 `pr_agent_app` 连接。
+- `worker`：独立领取和执行 Run；不监听 HTTP 端口。
+- `recovery`：独立对账未知发布结果；不监听 HTTP 端口。
 
 保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥文件要求。部署前必须在 `.env` 设置四个互不相同的随机密码：`HARNESS_BOOTSTRAP_PASSWORD`、`HARNESS_MIGRATION_PASSWORD`、`HARNESS_APP_PASSWORD`、`HARNESS_VERIFIER_PASSWORD`；Compose 不提供默认值。`.env` 只用于 Compose 插值，`pr-agent` 不会整体加载该文件，而是通过 `docker-compose.yml` 的显式白名单接收运行配置，因此拿不到 bootstrap、migrator 或 verifier 密码。初始化 SQL 只在首次创建空数据卷时执行，创建受限的 migrator、app、verifier 角色；修改环境变量不会轮换已有数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
 
-全新部署复制 `.env.example`、替换四个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 必须成功退出，`pr-agent` 才会启动。可用 `docker compose ps` 和 `docker compose logs database-init` 核对结果。不要把 bootstrap 密码配置给应用或 verifier。
+全新部署复制 `.env.example`、替换四个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 必须成功退出，web、worker 和 recovery 才会启动。三者都使用 UID/GID `10001:10001`、只读根文件系统、tmpfs、`cap-drop ALL` 和 `no-new-privileges`，且没有 Docker socket。可用 `docker compose ps` 和 `docker compose logs database-init` 核对结果。不要把 bootstrap 密码配置给应用或 verifier。
+
+基础 Compose 通过内联 `PRIVATE_KEY` 提供 GitHub App PEM，`PRIVATE_KEY_PATH` 默认留空，因此 Coolify 等平台不需要宿主文件。使用文件时叠加 `docker-compose.secret-file.yml`；它会清空内联 key 并为 web、worker、recovery 挂载同一只读路径。本地 Compose 不保证 secret `uid/gid/mode` 重映射生效，Linux 部署应把源文件交给 UID/GID `10001:10001` 并设置 `0400`，或使用平台原生 secret-file。不能为了绕过权限问题把应用改回 root。
+
+镜像健康检查验证当前容器自己的进程：web 检查本地 `/health`，worker/recovery 检查各自成功写入 PostgreSQL 心跳后生成的本地新鲜 marker。管理 CLI 的 `ready --role` 仍是集群依赖检查，不能替代单容器健康检查。
 
 如果现有 volume 来自旧版 `POSTGRES_USER=pr_agent_migrator`（该角色仍为超级用户），不能直接启动新 `database-init`，也不能删除 volume。先备份并停止所有 writer，再按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 显式执行 `docker/postgres/upgrade-runtime-roles.sql`；脚本在迁移 021 之前安装 FORCE RLS owner policy，随后才降权 migrator。所有权或目标数据库不符合预期时脚本会中止，要求人工复核。
 

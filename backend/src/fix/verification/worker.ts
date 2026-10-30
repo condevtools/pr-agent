@@ -43,9 +43,10 @@ export class VerifierWorker {
       if (controller.signal.reason instanceof VerifierWorkerStoppingError) throw controller.signal.reason;
       const policy = this.options.policies.get(lease.proposal.policyId);
       assertFrozenInput(lease, policy);
+      const snapshot = await this.options.store.readSnapshot(lease);
       const result = await this.options.verifier.verify(lease.proposal, policy!, {
         jobId: lease.id, owner: lease.owner, epoch: lease.epoch, deadlineAt: lease.deadlineAt,
-      }, controller.signal);
+      }, controller.signal, snapshot);
       if (controller.signal.reason instanceof VerifierWorkerStoppingError) throw controller.signal.reason;
       await this.options.store.complete(lease, result);
     } catch (error) {

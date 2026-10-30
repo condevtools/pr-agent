@@ -93,6 +93,7 @@ function createWorker(store: PgFixVerifierJobStore, verifier: DockerFixVerifier,
 function verifierStore(overrides: Record<string, (...args: any[]) => Promise<any>>): PgFixVerifierJobStore {
   return {
     databaseNow: async () => new Date(), claim: async () => undefined, heartbeat: async () => undefined,
+    readSnapshot: async () => Buffer.from("snapshot"),
     complete: async () => undefined, fail: async () => "queued", relinquish: async () => undefined,
     ...overrides,
   } as unknown as PgFixVerifierJobStore;

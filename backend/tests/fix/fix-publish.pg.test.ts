@@ -343,17 +343,18 @@ if (!databaseUrl) {
          (id,tenant_id,integration_id,run_id,step_id,candidate_id,stage,head_sha,content_hash,record_json)
        VALUES ($1,$2,$3,$4,$5,$6,'gate',$7,$8,'{"accepted":true}'::jsonb)`,
       [gateId, tenantId, integrationId, sourceRunId, stepId, findingId, "2".repeat(40), fingerprint({ accepted: true })]);
+    const sourceBundleHash = fingerprint("bundle");
     const source = { tenantId, integrationId, runId: proposalRunId, sourceReviewRunId: sourceRunId, findingId,
       platform: "github", repository: "acme/fix", baseSha: "1".repeat(40), headSha: "2".repeat(40),
-      sourceBundleRef: "snapshot:bundle", sourceBundleHash: fingerprint("bundle"), allowedPaths: ["src/a.ts"],
+      sourceBundleRef: `artifact:${sourceBundleHash}`, sourceBundleHash, allowedPaths: ["src/a.ts"],
       finding: { title: "unsafe", body: "unsafe value", path: "src/a.ts", startLine: 1, endLine: 1 } };
     await pool.query(
       `INSERT INTO pr_agent_harness.fix_run_sources
          (tenant_id,integration_id,run_id,source_review_run_id,finding_id,repository,base_sha,head_sha,
           source_bundle_ref,source_bundle_hash,allowed_paths_json,source_json,content_hash)
-       VALUES ($1,$2,$3,$4,$5,'acme/fix',$6,$7,'snapshot:bundle',$8,'["src/a.ts"]'::jsonb,$9::jsonb,$10)`,
+       VALUES ($1,$2,$3,$4,$5,'acme/fix',$6,$7,$8,$9,'["src/a.ts"]'::jsonb,$10::jsonb,$11)`,
       [tenantId, integrationId, proposalRunId, sourceRunId, findingId, "1".repeat(40), "2".repeat(40),
-        source.sourceBundleHash, JSON.stringify(source), fingerprint(source)]);
+        source.sourceBundleRef, source.sourceBundleHash, JSON.stringify(source), fingerprint(source)]);
     await pool.query(
       `INSERT INTO pr_agent_harness.fix_run_findings
          (tenant_id,run_id,source_review_run_id,finding_id,gate_decision_id,finding_hash)
@@ -361,7 +362,7 @@ if (!databaseUrl) {
       [tenantId, proposalRunId, sourceRunId, findingId, gateId, fingerprint(source.finding)]);
     const proposal = { id: proposalId, tenantId, integrationId, runId: proposalRunId,
       sourceReviewRunId: sourceRunId, findingId, revision: 1, repository: "acme/fix",
-      baseSha: "1".repeat(40), headSha: "2".repeat(40), sourceBundleRef: "snapshot:bundle",
+      baseSha: "1".repeat(40), headSha: "2".repeat(40), sourceBundleRef: source.sourceBundleRef,
       sourceBundleHash: source.sourceBundleHash, codePatch: "code", testPatch: "test",
       codePatchHash: fingerprint("code"), testPatchHash: fingerprint("test"), proposalHash: intent.proposalHash,
       policyId: "node", policyHash: fingerprint("policy"), trustedCommandHash: fingerprint(["node", "--test"]),
@@ -374,10 +375,10 @@ if (!databaseUrl) {
           source_bundle_ref,source_bundle_hash,code_patch,test_patch,code_patch_hash,test_patch_hash,proposal_hash,
           policy_id,policy_hash,trusted_command_hash,dependency_lock_path,dependency_lock_hash,sandbox_policy_hash,image_digest,
           publisher_policy_hash,qualification_status,proposal_json,content_hash)
-       VALUES ($1,$2,$3,$4,$5,$6,1,'acme/fix',$7,$8,'snapshot:bundle',$9,'code','test',$10,$11,$12,
-         'node',$13,$14,'package-lock.json',$15,$16,$17,$18,'verified',$19::jsonb,$20)`,
+       VALUES ($1,$2,$3,$4,$5,$6,1,'acme/fix',$7,$8,$9,$10,'code','test',$11,$12,$13,
+         'node',$14,$15,'package-lock.json',$16,$17,$18,$19,'verified',$20::jsonb,$21)`,
       [proposalId, tenantId, integrationId, proposalRunId, sourceRunId, findingId, "1".repeat(40), "2".repeat(40),
-        source.sourceBundleHash, proposal.codePatchHash, proposal.testPatchHash, proposal.proposalHash,
+        source.sourceBundleRef, source.sourceBundleHash, proposal.codePatchHash, proposal.testPatchHash, proposal.proposalHash,
         proposal.policyHash, proposal.trustedCommandHash, proposal.dependencyLockHash, proposal.sandboxPolicyHash,
         proposal.imageDigest, proposal.publisherPolicyHash, JSON.stringify(proposal), fingerprint(proposal)]);
   }

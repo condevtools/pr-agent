@@ -9,7 +9,8 @@ import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js
 import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 import { approveFixApprovalInTransaction, createApprovalInTransaction, PgFixApprovalStore, revokeApprovalInTransaction } from "../../fix/approval/store.js";
 import type { FixArtifact } from "../../fix/contracts.js";
-import { readSnapshotBundle } from "../../fix/persistence/snapshot-bundle.js";
+import { FIX_SNAPSHOT_CONTENT_TYPE, readSnapshotBundleContent } from "../../fix/persistence/snapshot-bundle.js";
+import { PgRunArtifactStore } from "../../agent-runtime/artifacts/index.js";
 import { buildFixPublicationPlan } from "../../fix/publication/plan.js";
 import { admitFixProposalRun } from "../../fix/proposal/intake.js";
 import { fixRunInputSchema } from "../../fix/proposal/input.js";
@@ -47,9 +48,13 @@ export class FixesService {
       throw runConflict("GitLab fix publication is suggestion-only because conditional branch creation is unsupported");
     }
     await assertFixHeadCurrent(await this.context.binding(principal), material.input.original);
-    const snapshot = await readSnapshotBundle({ root: fixSnapshotRoot(),
-      sourceBundleRef: material.artifact.proposal!.sourceBundleRef,
-      sourceBundleHash: material.artifact.proposal!.sourceBundleHash });
+    const proposal = material.artifact.proposal!;
+    const stored = await new PgRunArtifactStore(services.db).read({ tenantId: principal.tenantId,
+      integrationId: principal.integrationId, runId: id }, proposal.sourceBundleHash);
+    if (!stored || stored.status !== "available" || stored.ref.purpose !== "fix_snapshot"
+        || stored.ref.contentType !== FIX_SNAPSHOT_CONTENT_TYPE) throw runConflict("Fix source snapshot artifact is unavailable");
+    const snapshot = readSnapshotBundleContent({ content: stored.content,
+      sourceBundleRef: proposal.sourceBundleRef, sourceBundleHash: proposal.sourceBundleHash });
     const plan = buildFixPublicationPlan(material.artifact.proposal!, material.input.original,
       snapshot.files, material.artifact.verification!, material.relevance);
     const receipt = await services.db.transaction(principal.tenantId, (client) => createApprovalInTransaction(client, {
@@ -202,7 +207,6 @@ function publishLimits(value: Record<string, unknown>): Record<string, unknown> 
   return { maxRunMs: value.maxRunMs ?? 15 * 60_000, maxJobAttempts: value.maxJobAttempts ?? 3,
     maxStepAttempts: value.maxStepAttempts ?? 3 };
 }
-function fixSnapshotRoot(): string { return process.env.FIX_VERIFIER_SNAPSHOT_ROOT?.trim() || "/var/lib/pr-agent-verifier/snapshots"; }
 function fixApprovalTtlSeconds(): number {
   const value = Number(process.env.FIX_APPROVAL_TTL_SECONDS ?? "86400");
   if (!Number.isSafeInteger(value) || value < 300 || value > 86400) throw new Error("FIX_APPROVAL_TTL_SECONDS must be 300-86400");

@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
@@ -56,7 +53,6 @@ if (!databaseUrl) {
   const calls: Array<{ method: string; path: string }> = [];
   let origin = "";
   let server: Server;
-  let snapshotRoot = "";
   let appPool: Pool;
   let appDb: RuntimeDatabase;
   let binding: PublicationBinding;
@@ -64,7 +60,6 @@ if (!databaseUrl) {
   let fixesService: FixesService;
 
   before(async () => {
-    snapshotRoot = await mkdtemp(join(tmpdir(), "pr-agent-fix-dispatch-"));
     server = createServer(async (request, response) => {
       const method = request.method ?? "GET"; const path = request.url ?? "/";
       calls.push({ method, path });
@@ -116,7 +111,6 @@ if (!databaseUrl) {
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-model-key";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing(); process.env.FIX_DEFAULT_POLICY_ID = "node-fixture";
     process.env.FEATURE_FIX = "on";
-    process.env.FIX_VERIFIER_SNAPSHOT_ROOT = snapshotRoot;
     const rawPolicy = policy(); process.env.FIX_POLICY_REGISTRY_JSON = JSON.stringify({ "node-fixture": rawPolicy });
     appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); appDb = new RuntimeDatabase(appPool);
     binding = await bind();
@@ -129,7 +123,6 @@ if (!databaseUrl) {
   after(async () => {
     await closeAgentRuntime(); await appPool?.end();
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE"); await adminPool.end();
-    await rm(snapshotRoot, { recursive: true, force: true });
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   });
 
@@ -161,10 +154,19 @@ if (!databaseUrl) {
     assert.equal(raw.verification?.relevance, "unknown");
     assert.equal(calls.filter(({ method, path }) => method === "POST" && path === "/v1/chat/completions").length, 1);
 
-    const bundleCount = (await readdir(snapshotRoot)).filter((name) => /^[a-f0-9]{64}$/.test(name)).length;
+    const bundleCount = Number((await adminPool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM pr_agent_harness.run_artifacts WHERE tenant_id=$1 AND run_id=$2 AND purpose='fix_snapshot'",
+      [tenantId, created.id])).rows[0]!.count);
+    assert.equal(bundleCount, 1);
+    const sourceReadCount = calls.filter(({ method, path }) => method === "GET"
+      && (/\/git\/trees\//.test(path) || /\/contents\//.test(path))).length;
     const duplicate = await fixesService.createFix(principal, sourceRunId, "fix-command-1", { findingId });
     assert.equal(duplicate.id, created.id); assert.equal(duplicate.created, false);
-    assert.equal((await readdir(snapshotRoot)).filter((name) => /^[a-f0-9]{64}$/.test(name)).length, bundleCount);
+    assert.equal(Number((await adminPool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM pr_agent_harness.run_artifacts WHERE tenant_id=$1 AND run_id=$2 AND purpose='fix_snapshot'",
+      [tenantId, created.id])).rows[0]!.count), bundleCount);
+    assert.equal(calls.filter(({ method, path }) => method === "GET"
+      && (/\/git\/trees\//.test(path) || /\/contents\//.test(path))).length, sourceReadCount);
     assert.equal(calls.filter(({ method, path }) => method === "POST" && path === "/v1/chat/completions").length, 1);
 
     const authority = new PublicationAuthorityStore(adminDb);

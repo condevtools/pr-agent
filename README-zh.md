@@ -581,11 +581,15 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 ```mermaid
 graph LR
     subgraph Docker 构建
-        B1[阶段 1：构建<br/>node:22-alpine<br/>pnpm install + backend build]
-        B2[阶段 2：运行时<br/>node:22-alpine<br/>仅生产依赖]
-        B1 -->|COPY dist/| B2
+        B1[构建阶段<br/>编译后端]
+        B2[依赖阶段<br/>仅生产依赖]
+        B3[运行时阶段<br/>非 root node:22-alpine]
+        B1 -->|dist| B3
+        B2 -->|node_modules| B3
     end
-    B2 -->|暴露 3000 端口| SRV[pr-agent 容器]
+    B3 --> W[web 容器]
+    B3 --> Q[worker 容器]
+    B3 --> R[recovery 容器]
 ```
 
 **构建 & 运行**
@@ -594,12 +598,25 @@ graph LR
 docker build -t pr-agent:latest .
 docker run -d \
   --name pr-agent \
+  --user 10001:10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
   -p 3000:3000 \
   --env-file .env \
   pr-agent:latest
 ```
 
-应用镜像不内置 PostgreSQL，也不会为外部数据库创建角色。单独运行容器时，部署平台必须预先提供 PostgreSQL、受限 schema owner / 应用角色，并完成迁移；如果这些组件尚未由平台托管，请使用下面的 Compose 方案。
+应用镜像不内置 PostgreSQL，也不会为外部数据库创建角色。单独运行容器时，部署平台必须预先提供 PostgreSQL、受限 schema owner / 应用角色，并完成迁移。单容器 `all` 角色只适合本地验证；生产部署应分别运行 `web`、`worker` 和 `recovery`，平台未托管这些进程时使用下方 Compose。
+
+发布到镜像仓库时，用 Buildx 生成同时包含两种架构的 manifest。verifier operator 需要 Docker CLI，因此使用独立 tag；普通应用镜像不会包含 Docker CLI：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 --target default \
+  -t ghcr.io/OWNER/pr-agent:TAG --push .
+docker buildx build --platform linux/amd64,linux/arm64 --target verifier \
+  -t ghcr.io/OWNER/pr-agent-verifier:TAG --push .
+```
+
+使用 `docker buildx imagetools inspect` 检查 manifest。BuildKit provenance 显示的 `unknown/unknown` 是附属于两种运行时镜像的证明，不是第三种架构。
 
 ### Docker Compose
 
@@ -617,23 +634,30 @@ HARNESS_VERIFIER_PASSWORD=...
 docker compose up -d --build
 
 # 查看日志
-docker compose logs -f pr-agent
+docker compose logs -f pr-agent worker recovery
 
 # 重启
-docker compose restart pr-agent
+docker compose restart pr-agent worker recovery
 
 # 停止
 docker compose down
 ```
 
 `docker-compose.yml` 使用：
-- `harness-postgres` — PostgreSQL 业务状态与迁移账本
-- `verifier-snapshots` — 可选 verifier 快照
-- `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App 私钥
 
-全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用和 verifier 角色；一次性 `database-init` 服务在 `pr-agent` 启动前应用 schema。修改 `.env` 不会轮换已有 volume 中的密码。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
+- `harness-postgres` — PostgreSQL 业务状态与迁移账本
+- `pr-agent` — 只承载公网 `web` 进程
+- `worker` 与 `recovery` — 独立的持久执行进程
+- `PRIVATE_KEY` — 默认以内联方式提供 GitHub App PEM，适合 Coolify 等密钥环境变量管理器
+- `docker-compose.secret-file.yml` — 可选的 PEM 文件 overlay，供已管理 secret 文件的主机使用
+
+全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用和 verifier 角色；一次性 `database-init` 服务在三个应用角色启动前应用 schema。修改 `.env` 不会轮换已有 volume 中的密码。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
 
 Compose 只把 `.env` 用于插值。应用服务通过显式运行配置白名单接收变量，不会整体加载该文件，因此应用容器中不存在 bootstrap、迁移或 verifier 凭据。
+
+所有应用角色都使用固定 UID/GID `10001:10001`、只读根文件系统、有上限的 tmpfs、`cap-drop ALL` 和 `no-new-privileges`。基础 Compose 只接收内联 `PRIVATE_KEY`，并让 `PRIVATE_KEY_PATH` 保持为空，因此 Coolify 不需要宿主 PEM 文件。需要文件时使用 `docker compose -f docker-compose.yml -f docker-compose.secret-file.yml up -d`；overlay 会清空内联 key，只挂 PEM 路径。本地 Compose 不保证 file secret 的 `uid/gid/mode` 重映射，因此 Linux 宿主必须把源文件设置为 UID/GID `10001:10001`、权限 `0400`，或使用平台原生 secret-file。应用容器均不挂 Docker socket 或 verifier 快照目录。
+
+普通 Compose 不部署 Fix verifier。启用 Fix 时，只能在拥有独立本地 Docker daemon 的专用主机或 VM 上运行 `docker-compose.verifier-operator.yml`。operator 只接收受限 PostgreSQL URL、冻结策略和本地 daemon socket，不开放 HTTP，也不接收 GitHub、GitLab、模型或 webhook 凭据。普通 Compose 内置的 PostgreSQL 没有宿主端口，因此远端 operator 需要单独托管的 PostgreSQL 端点或受保护的私网链路，绝不能把 PostgreSQL 直接暴露到公网。Docker socket 即使只读挂载也拥有 Docker API 控制权，因此绝不能进入应用部署。
 
 ### Nixpacks（仅前端）
 
@@ -680,8 +704,8 @@ graph TD
 
 ```env
 APP_ID=123456
-PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
-# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+# PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
@@ -712,7 +736,9 @@ pnpm --filter backend start
 
 ```bash
 docker build -t pr-agent:latest .
-docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
+docker run -d --name pr-agent --user 10001:10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+  -p 3000:3000 --env-file .env pr-agent:latest
 ```
 
 6. **验证清单**
@@ -767,14 +793,14 @@ server {
 
 ```env
 APP_ID=123456
-PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
-# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+# PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
 - GitHub App 启用条件（见 `backend/src/bootstrap/github-app/github-app-bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
-- `docker-compose.yml` 默认挂载私钥路径为 `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`。如果本地缺少 `secrets/` 目录或 PEM 文件，`docker compose up` 会失败。
-- 建议本地预先创建：`mkdir -p secrets data`。`data` 目录通常可由 Docker 自动创建，但手动创建更可控。
+- 基础 `docker-compose.yml` 使用内联 `PRIVATE_KEY`，不要求宿主 PEM 文件，这也是 Coolify 兼容路径。可选 `docker-compose.secret-file.yml` overlay 从 `./secrets/github-app.private-key.pem` 创建文件 secret；Linux 上必须先把它设置为 UID/GID `10001:10001`、权限 `0400`。
+- 仅在使用可选文件 overlay 时创建受管秘钥目录：`mkdir -p secrets`。
 
 > 若未配置 `APP_ID` + `PRIVATE_KEY`（+ `WEBHOOK_SECRET`），GitHub App 模式会被禁用，此时当前 beta 部署也视为不完整。
 

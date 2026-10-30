@@ -21,7 +21,7 @@ const policies = loadFixPolicyRegistry();
 const capabilityHash = await verifierCapabilityHash();
 const worker = new VerifierWorker({
   store: new PgFixVerifierJobStore(pool),
-  verifier: new DockerFixVerifier({ snapshotRoot: process.env.FIX_VERIFIER_SNAPSHOT_ROOT ?? "/var/lib/pr-agent-verifier/snapshots" }),
+  verifier: new DockerFixVerifier(),
   policies,
   owner: `${hostname()}:${process.pid}`,
   verifierCapabilityHash: capabilityHash,

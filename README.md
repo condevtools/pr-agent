@@ -581,11 +581,15 @@ See `.env.example` for the baseline variable reference; advanced runtime knobs a
 ```mermaid
 graph LR
     subgraph Docker Build
-        B1[Stage 1: Build<br/>node:22-alpine<br/>pnpm install + backend build]
-        B2[Stage 2: Runtime<br/>node:22-alpine<br/>prod deps only]
-        B1 -->|COPY dist/| B2
+        B1[Build stage<br/>compile backend]
+        B2[Dependency stage<br/>production packages only]
+        B3[Runtime stage<br/>non-root node:22-alpine]
+        B1 -->|dist| B3
+        B2 -->|node_modules| B3
     end
-    B2 -->|Expose 3000| SRV[pr-agent container]
+    B3 --> W[web container]
+    B3 --> Q[worker container]
+    B3 --> R[recovery container]
 ```
 
 **Build & Run**
@@ -594,12 +598,25 @@ graph LR
 docker build -t pr-agent:latest .
 docker run -d \
   --name pr-agent \
+  --user 10001:10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
   -p 3000:3000 \
   --env-file .env \
   pr-agent:latest
 ```
 
-The application image does not embed PostgreSQL or initialize external database roles. A standalone container therefore requires a separately provisioned PostgreSQL database, restricted schema-owner/application roles, and a completed migration run. Use Compose below when those components are not already managed by the deployment platform.
+The application image does not embed PostgreSQL or initialize external database roles. A standalone container therefore requires a separately provisioned PostgreSQL database, restricted schema-owner/application roles, and a completed migration run. The one-container `all` role is for local evaluation. Production deployments run separate `web`, `worker`, and `recovery` instances; use Compose below when the platform does not already manage those processes.
+
+For a registry release, Buildx creates one manifest containing both supported architectures. Publish the verifier operator under a separate tag because the normal application image intentionally has no Docker CLI:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 --target default \
+  -t ghcr.io/OWNER/pr-agent:TAG --push .
+docker buildx build --platform linux/amd64,linux/arm64 --target verifier \
+  -t ghcr.io/OWNER/pr-agent-verifier:TAG --push .
+```
+
+Verify the manifest with `docker buildx imagetools inspect`. BuildKit provenance entries reported as `unknown/unknown` are attestations associated with the two images, not an additional runtime architecture.
 
 ### Docker Compose
 
@@ -617,23 +634,30 @@ HARNESS_VERIFIER_PASSWORD=...
 docker compose up -d --build
 
 # View logs
-docker compose logs -f pr-agent
+docker compose logs -f pr-agent worker recovery
 
 # Restart
-docker compose restart pr-agent
+docker compose restart pr-agent worker recovery
 
 # Stop
 docker compose down
 ```
 
 The `docker-compose.yml` uses:
-- `harness-postgres` — PostgreSQL business state and migration ledger
-- `verifier-snapshots` — optional verifier snapshots
-- `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App private key
 
-On a fresh volume, PostgreSQL bootstraps restricted migrator, application, and verifier roles. The one-shot `database-init` service applies the schema before `pr-agent` starts. Changing `.env` does not rotate passwords in an existing volume. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
+- `harness-postgres` — PostgreSQL business state and migration ledger
+- `pr-agent` — the public `web` process only
+- `worker` and `recovery` — independent durable execution processes
+- `PRIVATE_KEY` — the default inline GitHub App PEM path, suitable for Coolify and other secret environment managers
+- `docker-compose.secret-file.yml` — an optional PEM file overlay for hosts with a managed secret file
+
+On a fresh volume, PostgreSQL bootstraps restricted migrator, application, and verifier roles. The one-shot `database-init` service applies the schema before the three application roles start. Changing `.env` does not rotate passwords in an existing volume. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
 
 Compose uses `.env` only for interpolation. The application service receives an explicit runtime allowlist rather than the whole file, so bootstrap, migration, and verifier credentials are not present in the application container.
+
+All application roles use fixed UID/GID `10001:10001`, a read-only root filesystem, bounded tmpfs, no Linux capabilities, and `no-new-privileges`. Base Compose accepts the PEM only through `PRIVATE_KEY` and leaves `PRIVATE_KEY_PATH` empty, so Coolify does not need a host file. To use a file, start with `docker compose -f docker-compose.yml -f docker-compose.secret-file.yml up -d`; the overlay clears the inline key and mounts only the PEM path. Local Compose warns that file-secret `uid`, `gid`, and `mode` remapping is unsupported, so Linux hosts must provision the source file for UID/GID `10001:10001` with mode `0400` (or use the deployment platform's secret-file mechanism). None of these containers mounts a Docker socket or a verifier snapshot directory.
+
+Fix verification is absent from the normal Compose deployment. When Fix is enabled, deploy `docker-compose.verifier-operator.yml` only on a dedicated host or VM with its own local Docker daemon. The operator receives only its restricted PostgreSQL URL, frozen policy registry, and local daemon socket; it exposes no HTTP port and receives no GitHub, GitLab, model, or webhook credentials. The embedded Compose PostgreSQL has no host port, so a remote operator requires a separately managed PostgreSQL endpoint or a protected private network path; never publish PostgreSQL directly to the Internet. A read-only Docker socket still grants Docker API control, so it is never mounted into the application deployment.
 
 ### Nixpacks (Frontend Only)
 
@@ -680,8 +704,8 @@ This is a compact deployment path for Render/Railway/Fly.io/Docker/K8s.
 
 ```env
 APP_ID=123456
-PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
-# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----\\n"
+# PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
@@ -712,7 +736,9 @@ The backend listens on `PORT` (default `3000`).
 
 ```bash
 docker build -t pr-agent:latest .
-docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
+docker run -d --name pr-agent --user 10001:10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+  -p 3000:3000 --env-file .env pr-agent:latest
 ```
 
 6. **Verification checklist**
@@ -767,14 +793,14 @@ server {
 
 ```env
 APP_ID=123456
-PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
-# PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+# PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
 ```
 
 - GitHub App enablement condition (see `backend/src/bootstrap/github-app/github-app-bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
-- `docker-compose.yml` mounts the private key at `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro`. If `secrets/` or the PEM file is missing, `docker compose up` will fail.
-- Recommended local prep: `mkdir -p secrets data`. Docker usually auto-creates `data`, but pre-creating it is more predictable.
+- Base `docker-compose.yml` uses inline `PRIVATE_KEY` and does not require a host PEM, which is the Coolify-compatible path. The optional `docker-compose.secret-file.yml` overlay creates the file secret from `./secrets/github-app.private-key.pem`; on Linux, provision it for UID/GID `10001:10001` with mode `0400` before starting the overlay.
+- For the optional file overlay, create only the managed secret directory: `mkdir -p secrets`.
 
 > If `APP_ID` + `PRIVATE_KEY` (+ `WEBHOOK_SECRET`) are not configured, GitHub App mode is disabled and the beta deployment is considered incomplete.
 

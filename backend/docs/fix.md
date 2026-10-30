@@ -30,16 +30,20 @@ GitLab FixRun 可生成建议，但发布明确禁用。其 [Commit API](https:/
 
 ## Docker 配置
 
-PostgreSQL 已在根 `docker-compose.yml`。一次性 `database-init` 使用受限的 `pr_agent_migrator` 管理迁移和版本化最小授权；四个数据库角色密码都必须显式配置。旧 volume 不能由迁移 CLI 自动改变角色，必须先按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 执行显式 bootstrap。web 容器没有 Docker socket；可选 `verifier` profile 的控制器有 socket 和独立 PG 凭据，没有 provider/model 凭据。
+PostgreSQL 已在根 `docker-compose.yml`。一次性 `database-init` 使用受限的 `pr_agent_migrator` 管理迁移和版本化最小授权；四个数据库角色密码都必须显式配置。旧 volume 不能由迁移 CLI 自动改变角色，必须先按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 执行显式 bootstrap。普通 web、worker、recovery 部署没有 Docker socket，也不部署 verifier。
 
-构建 sandbox：`docker build --target verifier-sandbox -t pr-agent-fix-sandbox .`。通过 `docker image inspect pr-agent-fix-sandbox --format '{{.Id}}'` 获取不可变 image ID，在服务端 policy 使用该 SHA-256。镜像必须预先存在，运行时 `--pull never`。运行 profile：`docker compose --profile verifier up -d`。
+构建 sandbox：`docker build --target verifier-sandbox -t pr-agent-fix-sandbox .`。通过 `docker image inspect pr-agent-fix-sandbox --format '{{.Id}}'` 获取不可变 image ID，在服务端 policy 使用该 SHA-256。镜像必须预先存在，运行时 `--pull never`。另行构建 operator：`docker build --target verifier -t pr-agent-verifier:local .`。
 
-服务端配置：`FIX_DEFAULT_POLICY_ID`、`FIX_POLICY_REGISTRY_JSON`、`FIX_VERIFIER_SNAPSHOT_ROOT`、`FIX_APPROVAL_TTL_SECONDS`（300–86400 秒）。策略包含固定 image、argv、lock 路径/hash、resource limits、sandbox/publisher policy hash；`expectedSandboxPolicyHash` 计算实际隔离配置哈希。不得把 qualification 测试 fixture 当作生产资格 receipt。
+operator 只能部署在专用主机或 VM，并只连接该环境的本地隔离 Docker daemon。设置 `PR_AGENT_VERIFIER_IMAGE`、专用 `HARNESS_VERIFIER_DATABASE_URL`、daemon socket group 的 `VERIFIER_DOCKER_GID` 和 `FIX_POLICY_REGISTRY_JSON` 后，在该主机运行 `docker compose -f docker-compose.verifier-operator.yml up -d`。普通 Compose 的 PostgreSQL 不开放宿主端口；远端 operator 必须通过单独托管的数据库端点或受保护的私网访问，不能把数据库直接暴露到公网。operator Compose 不开放 HTTP，不含 provider/model/GitHub/GitLab 凭据。Docker socket 的只读 mount 不能限制 daemon API 权力，因此不能把 operator 合并进应用 Compose，也不能在应用主机复用 daemon。
 
-不可信容器使用无网络、只读 root、non-root、cap-drop ALL、no-new-privileges，以及 CPU/memory/PID/tmpfs/日志/时间限制；只挂载单个任务的只读快照，不挂整个多租户 volume。Docker socket 的只读 mount 不限制 daemon API 权力，verifier 控制器仍是可信边界，应部署在隔离主机/daemon。
+服务端配置：`FIX_DEFAULT_POLICY_ID`、`FIX_POLICY_REGISTRY_JSON`、`FIX_APPROVAL_TTL_SECONDS`（300–86400 秒）。策略包含固定 image、argv、lock 路径/hash、resource limits、sandbox/publisher policy hash；`expectedSandboxPolicyHash` 计算实际隔离配置哈希。不得把 qualification 测试 fixture 当作生产资格 receipt。
+
+快照内容以服务端生成的 hash-addressed PostgreSQL artifact 为权威。operator 按 job 中冻结的 hash 读取并验证内容，只能落到自身 tmpfs 下新建的临时目录，执行后删除；调用者不能提供宿主路径。普通应用和 operator 不共享快照 volume。
+
+不可信 seed 与 test 容器都使用无网络、只读 root、non-root、cap-drop ALL、no-new-privileges，以及 CPU/memory/PID/tmpfs/ulimit/日志/时间限制；只挂载单个任务的只读快照，不挂整个多租户存储。
 
 ## 保留与验证
 
-先按现有 `retention` 管理 DB 内容；再以 admin 身份执行 `node dist/agent-runtime/cli.js snapshot-retention --action preview` 或 `--action apply`（可选 `--days`、`--limit`）。GC 检查所有 tenant 的 queued Run、未清理 proposal/job、未消费审批及活动 publish child；不会跟随 symlink。Docker 临时资源另带 job/epoch/数据库 deadline 标签，由 verifier 启动及周期扫尾；只清理 deadline+grace 已过的资源，使用有界游标防止长期遗漏，失败会报告。生产 retention 容器需要挂载对应 snapshot volume。
+快照由 PostgreSQL artifact retention 与 hold 协议管理。活动 Run、未知外部效果、Fix/Evolution/qualification hold 会延长内容保留；引用释放后重新计算到期时间。Docker 临时资源另带 job/epoch/数据库 deadline 标签，由 verifier 启动及周期扫尾；只清理 deadline+grace 已过的资源，使用有界游标防止长期遗漏，失败会报告。
 
 验证命令：`npm --prefix backend run check`、`build`、`test`、`test:harness:pg`。真实 Docker sandbox 测试另需 `FIX_VERIFIER_SANDBOX_IMAGE_DIGEST`，默认单测中的 skip 不代表该隔离验证已经运行。阶段证据见 [P2 验证记录](../validation/engineering/p2-verification.json)。

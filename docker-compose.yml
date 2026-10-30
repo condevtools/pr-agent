@@ -1,15 +1,22 @@
-services:
-  pr-agent:
+x-runtime-services:
+  pr-agent: &runtime-service
     build: .
-    container_name: pr-agent
     restart: unless-stopped
-    environment:
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+    stop_grace_period: 45s
+    environment: &runtime-environment
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3000}
       WEBHOOK_BODY_LIMIT: ${WEBHOOK_BODY_LIMIT:-}
       PR_AGENT_LOCALE: ${PR_AGENT_LOCALE:-}
       PR_AGENT_CORE_LOGS: ${PR_AGENT_CORE_LOGS:-}
-      PR_AGENT_PROCESS_ROLE: ${PR_AGENT_PROCESS_ROLE:-}
+      PR_AGENT_PROCESS_ROLE: web
       FEATURE_DEEP_REVIEW: ${FEATURE_DEEP_REVIEW:-on}
       FEATURE_FIX: ${FEATURE_FIX:-off}
       FEATURE_EVOLUTION: ${FEATURE_EVOLUTION:-off}
@@ -32,7 +39,7 @@ services:
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_BOT_LOGIN: ${GITHUB_BOT_LOGIN:-}
       PRIVATE_KEY: ${PRIVATE_KEY:-}
-      PRIVATE_KEY_PATH: /run/secrets/github-app-private-key.pem
+      PRIVATE_KEY_PATH: ${PRIVATE_KEY_PATH:-}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
       AI_PROVIDER: ${AI_PROVIDER:-openai}
       AI_MODEL: ${AI_MODEL:-}
@@ -119,18 +126,29 @@ services:
       FIX_DEFAULT_POLICY_ID: ${FIX_DEFAULT_POLICY_ID:-}
       FIX_POLICY_REGISTRY_JSON: ${FIX_POLICY_REGISTRY_JSON:-}
       FIX_APPROVAL_TTL_SECONDS: ${FIX_APPROVAL_TTL_SECONDS:-}
-      FIX_VERIFIER_SNAPSHOT_ROOT: /var/lib/pr-agent-verifier/snapshots
       EVOLUTION_RELEASE_ACTIVATION_ENABLED: ${EVOLUTION_RELEASE_ACTIVATION_ENABLED:-}
     depends_on:
       postgres:
         condition: service_healthy
       database-init:
         condition: service_completed_successfully
+services:
+  pr-agent:
+    <<: *runtime-service
     ports:
       - "127.0.0.1:3000:3000"
-    volumes:
-      - ./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro
-      - verifier-snapshots:/var/lib/pr-agent-verifier/snapshots
+
+  worker:
+    <<: *runtime-service
+    environment:
+      <<: *runtime-environment
+      PR_AGENT_PROCESS_ROLE: worker
+
+  recovery:
+    <<: *runtime-service
+    environment:
+      <<: *runtime-environment
+      PR_AGENT_PROCESS_ROLE: recovery
 
   postgres:
     image: postgres:17-alpine
@@ -156,6 +174,13 @@ services:
   database-init:
     build: .
     restart: "no"
+    user: "10001:10001"
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     command: ["node", "dist/agent-runtime/cli.js", "migrate"]
     environment:
       HARNESS_PG_HOST: postgres
@@ -167,32 +192,5 @@ services:
       postgres:
         condition: service_healthy
 
-  verifier:
-    profiles: ["verifier"]
-    build:
-      context: .
-      target: verifier
-    restart: unless-stopped
-    command: ["node", "dist/fix/verification/cli.js"]
-    environment:
-      HARNESS_PG_HOST: postgres
-      HARNESS_PG_PORT: "5432"
-      HARNESS_PG_DATABASE: pr_agent
-      HARNESS_PG_USER: pr_agent_verifier
-      HARNESS_PG_PASSWORD: ${HARNESS_VERIFIER_PASSWORD:?Set HARNESS_VERIFIER_PASSWORD in .env}
-      FIX_POLICY_REGISTRY_JSON: ${FIX_POLICY_REGISTRY_JSON:-}
-      FIX_VERIFIER_SNAPSHOT_ROOT: /var/lib/pr-agent-verifier/snapshots
-      RUNTIME_HEARTBEAT_INTERVAL_MS: ${RUNTIME_HEARTBEAT_INTERVAL_MS:-5000}
-      RUNTIME_HEARTBEAT_STALE_MS: ${RUNTIME_HEARTBEAT_STALE_MS:-20000}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - verifier-snapshots:/var/lib/pr-agent-verifier/snapshots:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      database-init:
-        condition: service_completed_successfully
-
 volumes:
   harness-postgres:
-  verifier-snapshots:

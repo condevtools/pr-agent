@@ -1,15 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { lstat, readFile } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
 import type { FixProposal, VerificationPolicy, VerificationResult } from "../contracts.js";
 import { assertVerifierPolicy, expectedSandboxPolicyHash, isAllowedAddedTest } from "./sandbox-policy.js";
 import { evaluateVerificationResult, sandboxCommandResultSchema, sandboxRunnerResultSchema } from "./sandbox-result.js";
 import { fingerprint } from "../../agent-runtime/versions.js";
+import { RUN_ARTIFACT_LIMITS } from "../../agent-runtime/artifacts/index.js";
+import { withMaterializedSnapshot } from "../persistence/snapshot-bundle.js";
 
 const MAX_SNAPSHOT_FILES = 2_000;
-const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = RUN_ARTIFACT_LIMITS.maxRawBytes;
 
 interface SnapshotManifest {
   schemaVersion: 1;
@@ -20,7 +22,6 @@ interface SnapshotManifest {
 }
 
 export interface DockerVerifierOptions {
-  snapshotRoot: string;
   dockerBinary?: string;
 }
 
@@ -40,14 +41,15 @@ export interface VerifierSweepResult {
 export class DockerFixVerifier {
   private containerCursor = "";
   private volumeCursor = "";
-  constructor(private readonly options: DockerVerifierOptions) {
-    if (!isAbsolute(options.snapshotRoot)) throw new Error("verifier snapshot root must be absolute");
-  }
+  constructor(private readonly options: DockerVerifierOptions = {}) {}
 
   async verify(proposal: FixProposal, rawPolicy: VerificationPolicy,
-    resource: VerifierResourceContext, signal?: AbortSignal): Promise<VerificationResult> {
+    resource: VerifierResourceContext, signal: AbortSignal | undefined,
+    snapshotContent: Uint8Array): Promise<VerificationResult> {
     const policy = assertVerifierPolicy(rawPolicy);
     const resourceLabels = labelsForResource(resource);
+    const deadline = VerificationDeadline.start(policy.deadlineMs, resource.deadlineAt);
+    deadline.remaining(signal);
     if (policy.sandboxHash !== expectedSandboxPolicyHash(policy)) {
       throw new Error("sandbox policy hash does not match the implemented isolation profile");
     }
@@ -61,17 +63,24 @@ export class DockerFixVerifier {
         || proposal.dependencyLockHash !== policy.dependencyLockHash) {
       return unavailable(proposal, policy, "verification_policy_mismatch");
     }
-    const snapshot = await this.loadSnapshot(proposal, policy);
-    const targetTestFiles = addedTestFiles(proposal.testPatch, policy);
-    const relevance = attestRelevance(proposal.testPatch, targetTestFiles, policy.relevanceTokens);
-    if (targetTestFiles.length === 0) return unavailable(proposal, policy, "target_test_missing", relevance);
-    if (signal?.aborted) throw signal.reason ?? new Error("verification aborted");
-    const runner = await this.runContainer(snapshot, policy, proposal, targetTestFiles, resource, resourceLabels, signal);
-    const logHashes = Object.fromEntries(Object.entries(runner).filter(([key]) => key !== "protocolVersion")
-      .map(([key, value]) => [key, sha256((value as { log: string }).log)])) as VerificationResult["logHashes"];
-    return evaluateVerificationResult({ runner, relevance: relevance.status,
-      relevanceReasons: relevance.reasonCodes, imageDigest: policy.nodeImageDigest,
-      policyHash: policy.hash, proposalHash: proposal.proposalHash, logHashes });
+    deadline.remaining(signal);
+    return withMaterializedSnapshot({ content: snapshotContent, sourceBundleRef: proposal.sourceBundleRef,
+      sourceBundleHash: proposal.sourceBundleHash }, async (directory) => {
+      deadline.remaining(signal);
+      const snapshot = await this.loadSnapshot(directory, proposal, policy);
+      deadline.remaining(signal);
+      const targetTestFiles = addedTestFiles(proposal.testPatch, policy);
+      const relevance = attestRelevance(proposal.testPatch, targetTestFiles, policy.relevanceTokens);
+      if (targetTestFiles.length === 0) return unavailable(proposal, policy, "target_test_missing", relevance);
+      deadline.remaining(signal);
+      const runner = await this.runContainer(snapshot, policy, proposal, targetTestFiles, resource, resourceLabels,
+        deadline, signal);
+      const logHashes = Object.fromEntries(Object.entries(runner).filter(([key]) => key !== "protocolVersion")
+        .map(([key, value]) => [key, sha256((value as { log: string }).log)])) as VerificationResult["logHashes"];
+      return evaluateVerificationResult({ runner, relevance: relevance.status,
+        relevanceReasons: relevance.reasonCodes, imageDigest: policy.nodeImageDigest,
+        policyHash: policy.hash, proposalHash: proposal.proposalHash, logHashes });
+    });
   }
 
   sweepExpiredResources(databaseNow: Date, graceMs = 60_000, limit = 100): VerifierSweepResult {
@@ -104,13 +113,10 @@ export class DockerFixVerifier {
     return result;
   }
 
-  private async loadSnapshot(proposal: FixProposal, policy: VerificationPolicy): Promise<{
+  private async loadSnapshot(directory: string, proposal: FixProposal, policy: VerificationPolicy): Promise<{
     manifest: SnapshotManifest; files: Array<{ path: string; content: string }>;
   }> {
-    if (proposal.sourceBundleRef !== `snapshot:${proposal.sourceBundleHash}`) throw new Error("source bundle reference is not content addressed");
-    const root = await realpath(this.options.snapshotRoot);
-    const directory = await realpath(join(root, proposal.sourceBundleHash));
-    if (relative(root, directory).startsWith("..")) throw new Error("source snapshot escapes verifier root");
+    if (proposal.sourceBundleRef !== `artifact:${proposal.sourceBundleHash}`) throw new Error("source bundle reference is not content addressed");
     const manifestPath = join(directory, "manifest.json");
     const manifestInfo = await lstat(manifestPath);
     if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink() || manifestInfo.size > 2 * 1024 * 1024) {
@@ -122,12 +128,8 @@ export class DockerFixVerifier {
         || !Array.isArray(manifest.files) || manifest.files.length > MAX_SNAPSHOT_FILES) {
       throw new Error("source snapshot manifest mismatch");
     }
-    const normalized = [...manifest.files].sort((left, right) => left.path.localeCompare(right.path));
-    if (new Set(normalized.map(({ path }) => path)).size !== normalized.length
-        || fingerprint({ schemaVersion: 1, headSha: manifest.headSha,
-          dependencyLockHash: manifest.dependencyLockHash, files: normalized }) !== manifest.sourceBundleHash) {
-      throw new Error("source snapshot manifest hash mismatch");
-    }
+    const normalized = [...manifest.files].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+    if (new Set(normalized.map(({ path }) => path)).size !== normalized.length) throw new Error("source snapshot manifest mismatch");
     let bytes = 0;
     const files: Array<{ path: string; content: string }> = [];
     for (const file of normalized) {
@@ -161,6 +163,7 @@ export class DockerFixVerifier {
     targetTestFiles: readonly string[],
     resource: VerifierResourceContext,
     resourceLabels: readonly string[],
+    deadline: VerificationDeadline,
     signal?: AbortSignal,
   ) {
     const docker = this.options.dockerBinary ?? "docker";
@@ -168,27 +171,32 @@ export class DockerFixVerifier {
     const volume = `pr-agent-fix-snapshot-${resourceSuffix}-${randomUUID().slice(0, 8)}`;
     const volumeLabelArgs = resourceLabels.flatMap((label) => ["--label", label]);
     const created = spawnSync(docker, ["volume", "create", ...volumeLabelArgs, volume],
-      { timeout: 10_000, encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
+      { timeout: Math.min(10_000, deadline.remaining(signal)), encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
+    deadline.remaining(signal);
     if (created.status !== 0) throw new Error("could not create isolated verifier snapshot volume");
     const seedName = `pr-agent-fix-seed-${resourceSuffix}-${randomUUID().slice(0, 8)}`;
     try {
       const seedScript = `const fs=require('node:fs'),p=require('node:path');let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const x=JSON.parse(s),safe=v=>{if(!v||v[0]=='/'||v.includes('\\\\')||v.split('/').some(q=>!q||q=='.'||q=='..'))throw Error('path');return v};fs.writeFileSync('/seed/manifest.json',JSON.stringify(x.manifest),{mode:0o444});for(const f of x.files){const d=p.join('/seed/files',safe(f.path));fs.mkdirSync(p.dirname(d),{recursive:true,mode:0o755});fs.writeFileSync(d,Buffer.from(f.content,'base64'),{mode:0o444})}});`;
-      const seeded = spawnSync(docker, ["run", "--rm", "-i", "--name", seedName,
+      const seedArgs = ["run", "--rm", "-i", "--name", seedName,
         ...volumeLabelArgs, "--pull", "never", "--network", "none",
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--user", "65532:65532", "--pids-limit", String(policy.pidsLimit),
+        "--memory", `${policy.memoryMb}m`, "--memory-swap", `${policy.memoryMb}m`,
+        "--cpus", String(policy.cpuCount), "--ulimit", "nofile=256:256", "--ipc", "none",
+        "--hostname", "fix-seed", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777",
         "--mount", `type=volume,src=${volume},dst=/seed`, "--entrypoint", "node",
-        policy.nodeImageDigest, "-e", seedScript], {
-        input: JSON.stringify(snapshot), timeout: 30_000, maxBuffer: 256 * 1024,
-        encoding: "utf8", env: { PATH: process.env.PATH ?? "" },
-      });
-      if (seeded.status !== 0) {
-        removeContainerOrThrow(docker, seedName);
-        throw new Error("could not seed isolated verifier snapshot volume");
-      }
+        policy.nodeImageDigest, "-e", seedScript];
+      deadline.remaining(signal);
+      await this.seedSnapshotVolume(docker, seedArgs, seedName, snapshot,
+        Math.min(30_000, deadline.remaining(signal)), signal);
       const phaseDeadline = Math.max(1_000, Math.floor(policy.deadlineMs / 4));
-      const phase = (patches: readonly string[], argv: readonly string[]) => this.runSeededContainer(volume, policy, {
-        protocolVersion: 1, patches, argv, deadlineMs: phaseDeadline, maxLogBytes: policy.maxLogBytes,
-      }, resourceSuffix, resourceLabels, signal, phaseDeadline + 2_000);
+      const phase = (patches: readonly string[], argv: readonly string[]) => {
+        const remaining = deadline.remaining(signal);
+        const commandDeadline = Math.max(1, Math.min(phaseDeadline, remaining));
+        return this.runSeededContainer(volume, policy, {
+          protocolVersion: 1, patches, argv, deadlineMs: commandDeadline, maxLogBytes: policy.maxLogBytes,
+        }, resourceSuffix, resourceLabels, signal, remaining);
+      };
       return sandboxRunnerResultSchema.parse({ protocolVersion: 1,
         baselineTarget: await phase([proposal.testPatch], ["node", "--test", ...targetTestFiles]),
         patchedTarget: await phase([proposal.testPatch, proposal.codePatch], ["node", "--test", ...targetTestFiles]),
@@ -197,6 +205,43 @@ export class DockerFixVerifier {
       });
     } finally {
       removeVolumeOrThrow(docker, volume);
+    }
+  }
+
+  private async seedSnapshotVolume(docker: string, args: readonly string[], name: string,
+    snapshot: { manifest: SnapshotManifest; files: Array<{ path: string; content: string }> },
+    timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    const child = spawn(docker, args, { stdio: ["pipe", "ignore", "pipe"], env: { PATH: process.env.PATH ?? "" } });
+    const stderr: Buffer[] = []; let captured = 0; let timedOut = false;
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (captured >= 256 * 1024) return;
+      const remaining = 256 * 1024 - captured;
+      stderr.push(chunk.subarray(0, remaining)); captured += Math.min(chunk.length, remaining);
+    });
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(JSON.stringify(snapshot));
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
+    timer.unref();
+    const abort = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const exit = await new Promise<{ code: number | null; error?: Error }>((resolveExit) => {
+      child.once("error", (error) => resolveExit({ code: null, error }));
+      child.once("close", (code) => resolveExit({ code }));
+    });
+    clearTimeout(timer); signal?.removeEventListener("abort", abort);
+    if (signal?.aborted) {
+      removeContainerOrThrow(docker, name);
+      throw signal.reason ?? new Error("verification aborted");
+    }
+    if (timedOut) {
+      removeContainerOrThrow(docker, name);
+      throw new VerifierSandboxTimeoutError();
+    }
+    if (exit.error || exit.code !== 0) {
+      removeContainerOrThrow(docker, name);
+      const detail = redact(Buffer.concat(stderr).toString("utf8")).replace(/\s+/g, " ").slice(0, 512);
+      throw new Error(`could not seed isolated verifier snapshot volume${detail ? `: ${detail}` : ""}`);
     }
   }
 
@@ -232,18 +277,24 @@ export class DockerFixVerifier {
       target.push(chunk.subarray(0, remaining)); captured += Math.min(chunk.length, remaining);
     };
     child.stdout.on("data", capture(stdout)); child.stderr.on("data", capture(stderr));
+    child.stdin.on("error", () => undefined);
     child.stdin.end(JSON.stringify(input));
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
     timer.unref();
     const abort = () => child.kill("SIGKILL");
     signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     const exit = await new Promise<{ code: number | null; error?: Error }>((resolveExit) => {
       child.once("error", (error) => resolveExit({ code: null, error }));
       child.once("close", (code) => resolveExit({ code }));
     });
     clearTimeout(timer); signal?.removeEventListener("abort", abort);
-    if (timedOut || signal?.aborted) {
+    if (signal?.aborted) {
+      removeContainerOrThrow(docker, name);
+      throw signal.reason ?? new Error("verification aborted");
+    }
+    if (timedOut) {
       removeContainerOrThrow(docker, name);
       throw new VerifierSandboxTimeoutError();
     }
@@ -260,6 +311,24 @@ export class DockerFixVerifier {
 
 export class VerifierSandboxTimeoutError extends Error {
   constructor() { super("sandbox verification timed out"); this.name = "VerifierSandboxTimeoutError"; }
+}
+
+class VerificationDeadline {
+  private constructor(private readonly expiresAt: number) {}
+
+  static start(policyDeadlineMs: number, jobDeadlineAt: string): VerificationDeadline {
+    const jobDeadlineMs = new Date(jobDeadlineAt).getTime();
+    const jobRemainingMs = jobDeadlineMs - Date.now();
+    const budgetMs = Math.min(policyDeadlineMs, jobRemainingMs);
+    return new VerificationDeadline(performance.now() + Math.max(0, budgetMs));
+  }
+
+  remaining(signal?: AbortSignal): number {
+    if (signal?.aborted) throw signal.reason ?? new Error("verification aborted");
+    const remaining = Math.floor(this.expiresAt - performance.now());
+    if (remaining <= 0) throw new VerifierSandboxTimeoutError();
+    return remaining;
+  }
 }
 
 function addedTestFiles(patch: string, policy: VerificationPolicy): string[] {

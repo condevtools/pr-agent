@@ -4,13 +4,14 @@ import { createFixWorkflowPolicy } from "./policy.js";
 import { PgFixStore } from "../persistence/store.js";
 import { executeFixProposal } from "./workflow.js";
 import { assertVerifierPolicy } from "../verification/sandbox-policy.js";
-import { readSnapshotBundle } from "../persistence/snapshot-bundle.js";
+import { FIX_SNAPSHOT_CONTENT_TYPE, readSnapshotBundleContent } from "../persistence/snapshot-bundle.js";
 import { enqueueVerificationJob, waitForVerification } from "../verification/jobs.js";
 import { createStructuredModel } from "../../model/structured-model.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";
 import { RunExecutionContractError, type RunLease } from "../../agent-runtime/runs/contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
+import { PgRunArtifactStore } from "../../agent-runtime/artifacts/index.js";
 
 export async function executeFixProposalRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
   const context = currentRunExecutionContext();
@@ -30,8 +31,14 @@ export async function executeFixProposalRun(lease: RunLease, binding: Publicatio
     throw new RunExecutionContractError("Frozen FixRun policy does not match its input");
   }
   const services = await getAgentRuntimeServices();
-  const snapshot = await readSnapshotBundle({ root: snapshotRoot(), sourceBundleRef: input.source.sourceBundleRef,
-    sourceBundleHash: input.source.sourceBundleHash });
+  const stored = await new PgRunArtifactStore(services.db).read({ tenantId: lease.tenantId,
+    integrationId: lease.integrationId, runId: lease.runId }, input.source.sourceBundleHash);
+  if (!stored || stored.status !== "available" || stored.ref.purpose !== "fix_snapshot"
+      || stored.ref.contentType !== FIX_SNAPSHOT_CONTENT_TYPE) {
+    throw new RunExecutionContractError("FixRun source snapshot artifact is unavailable");
+  }
+  const snapshot = readSnapshotBundleContent({ content: stored.content,
+    sourceBundleRef: input.source.sourceBundleRef, sourceBundleHash: input.source.sourceBundleHash });
   if (snapshot.manifest.headSha !== lease.headSha || snapshot.manifest.dependencyLockHash !== fixPolicy.dependencyLockHash) {
     throw new RunExecutionContractError("FixRun snapshot identity mismatch");
   }
@@ -56,5 +63,3 @@ export class FixProposalFailedError extends Error {
     super("Fix proposal could not produce a valid bounded patch"); this.name = "FixProposalFailedError";
   }
 }
-
-function snapshotRoot(): string { return process.env.FIX_VERIFIER_SNAPSHOT_ROOT?.trim() || "/var/lib/pr-agent-verifier/snapshots"; }

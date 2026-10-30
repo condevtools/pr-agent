@@ -1,6 +1,6 @@
 # Harness 运行、恢复与验证
 
-数据库仍由根目录 `docker-compose.yml` 提供。API、Run worker 和 publication recovery 在现有后端进程中运行；PostgreSQL 是任务、执行权、事件、预算和外部写入事实的权威。当前没有跨服务消息投递需求，因此没有再引入 Redis、Kafka 或第二套任务队列。每个 API 实例都能从持久事件游标恢复 SSE；内存只负责本实例的连接分发。
+数据库仍由根目录 `docker-compose.yml` 提供。API、Run worker 和 publication recovery 分别运行在 `pr-agent`、`worker` 和 `recovery` 容器中；PostgreSQL 是任务、执行权、事件、预算和外部写入事实的权威。当前没有跨服务消息投递需求，因此没有再引入 Redis、Kafka 或第二套任务队列。每个 API 实例都能从持久事件游标恢复 SSE；内存只负责本实例的连接分发。
 
 ## 按仓库暂停与恢复
 
@@ -67,13 +67,14 @@ Apply 会删除候选的旧事件前缀，清除 Run 输入、Step 内联输出�
 
 ### 旧 volume 角色升级
 
-本节只适用于旧版以 `POSTGRES_USER=pr_agent_migrator` 首次创建、且数据库名为 `pr_agent` 的 volume。脚本不会自动运行。执行前必须完成数据库备份、验证可恢复性，并停止 `pr-agent`、verifier 和其他 writer。旧 schema 及其中对象必须仍由 `pr_agent_migrator` 拥有；如果不是，脚本会中止，不能用 `REASSIGN OWNED` 绕过人工复核。
+本节只适用于旧版以 `POSTGRES_USER=pr_agent_migrator` 首次创建、且数据库名为 `pr_agent` 的 volume。脚本不会自动运行。执行前必须完成数据库备份、验证可恢复性，并停止 `pr-agent`、`worker`、`recovery`、隔离 verifier operator 和其他 writer。旧 schema 及其中对象必须仍由 `pr_agent_migrator` 拥有；如果不是，脚本会中止，不能用 `REASSIGN OWNED` 绕过人工复核。
 
 先把 `.env.example` 中四个数据库密码替换为互不相同的随机值。然后从终端安全读取旧 migrator 密码；下列命令只把密码作为环境变量传入容器，不放在命令参数或 SQL 文件中：
 
 ```sh
-docker compose stop pr-agent
-docker compose --profile verifier stop verifier
+docker compose stop pr-agent worker recovery
+# 在 verifier 专用主机上另行执行：
+docker compose -f docker-compose.verifier-operator.yml stop verifier-operator
 docker compose up -d --no-deps postgres
 
 read -rsp 'Current legacy pr_agent_migrator password: ' PGPASSWORD
@@ -86,7 +87,7 @@ docker compose exec -T -e PGPASSWORD postgres \
 unset PGPASSWORD
 
 docker compose run --rm database-init node dist/agent-runtime/cli.js migrate
-docker compose up -d pr-agent
+docker compose up -d pr-agent worker recovery
 ```
 
 脚本先创建或轮换受密码保护的 `postgres` bootstrap 管理角色、`pr_agent_app` 和 `pr_agent_verifier`，再为所有已有 FORCE RLS 表安装 schema-owner maintenance policy；最后在 `SET ROLE postgres` 后把 `pr_agent_migrator` 降为 `NOSUPERUSER NOBYPASSRLS NOCREATEROLE`。这样迁移 021 的数据回填发生在降权后，但仍受明确 owner policy 授权。脚本限定数据库名和 namespace owner，保留现有数据与对象所有权，可安全重复执行；任何前置条件不符都必须停止并调查。

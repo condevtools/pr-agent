@@ -6,7 +6,7 @@ import { Pool } from "pg";
 
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
-import { enqueueVerificationJob, verificationResultIdentityHash } from "../../src/fix/verification/jobs.js";
+import { enqueueVerificationJob, PgFixVerifierJobStore, verificationResultIdentityHash } from "../../src/fix/verification/jobs.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { createRunInTransaction } from "../../src/agent-runtime/postgres/run-store.js";
 import { approveFixApprovalInTransaction, createApprovalInTransaction } from "../../src/fix/approval/store.js";
@@ -19,6 +19,8 @@ import { RunControlError } from "../../src/agent-runtime/runs/control-contracts.
 import { FixesService } from "../../src/http/fixes/fixes.service.js";
 import { RunApiContextService } from "../../src/http/common/run-api-context.service.js";
 import { closeAgentRuntime } from "../../src/agent-runtime/runtime.js";
+import { PgRunArtifactStore } from "../../src/agent-runtime/artifacts/index.js";
+import { prepareSnapshotBundle } from "../../src/fix/persistence/snapshot-bundle.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -35,10 +37,7 @@ if (!databaseUrl) {
   const proposalId = fingerprint("proposal-id"); const proposalHash = fingerprint("proposal");
   const verifierCapability = fingerprint("verifier-capability-a");
   const otherVerifierCapability = fingerprint("verifier-capability-b");
-  const verificationInputHash = fingerprint({ proposalHash, sourceBundleHash: fingerprint("bundle"),
-    policyHash: fingerprint("policy"), trustedCommandHash: fingerprint(["node", "--test"]),
-    dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
-    sandboxPolicyHash: fingerprint("sandbox"), verifierCapabilityHash: verifierCapability });
+  let sourceBundleHash = ""; let sourceBundleRef = ""; let verificationInputHash = "";
   const version = fingerprint("version"); const imageDigest = `sha256:${"a".repeat(64)}`;
   const verificationResult: VerificationResult = { outcome: "suggestion_only", reasonCodes: ["relevance_not_verified"],
     baselineTarget: "fail", patchedTarget: "pass", baselineRegression: [],
@@ -65,6 +64,22 @@ if (!databaseUrl) {
          'active',1,1,'harness_async',1,'active','{}'::jsonb,true)`, [integrationId, tenantId]);
     await insertRun(sourceRunId, "review.deep.v1", "succeeded");
     await insertRun(fixRunId, "fix.propose.v1", "running");
+    const snapshot = await prepareSnapshotBundle({ headSha: "2".repeat(40),
+      dependencyLockHash: fingerprint("lock"), files: [
+        { path: "package-lock.json", content: Buffer.from("{}\n") },
+        { path: "src/a.ts", content: Buffer.from("export const value = 1;\n") },
+      ] });
+    sourceBundleHash = snapshot.sourceBundleHash; sourceBundleRef = snapshot.sourceBundleRef;
+    verificationInputHash = fingerprint({ proposalHash, sourceBundleHash,
+      policyHash: fingerprint("policy"), trustedCommandHash: fingerprint(["node", "--test"]),
+      dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
+      sandboxPolicyHash: fingerprint("sandbox"), verifierCapabilityHash: verifierCapability });
+    const artifacts = new PgRunArtifactStore(appDb);
+    await appDb.transaction(tenantId, async (client) => {
+      await artifacts.putPreparedInTransaction(client, { tenantId, integrationId, runId: fixRunId }, snapshot.artifact);
+      await artifacts.holdInTransaction(client, { tenantId, integrationId, runId: fixRunId },
+        sourceBundleHash, `fix-source:${fixRunId}`, "fix");
+    });
     await pool.query(
       `INSERT INTO pr_agent_harness.agent_steps
          (id,tenant_id,run_id,step_key,step_kind,input_hash,status,output_hash,output_json,last_lease_epoch,attempt_count,completed_at)
@@ -89,22 +104,22 @@ if (!databaseUrl) {
       [fingerprint("artifact"), tenantId, integrationId, sourceRunId, "2".repeat(40), fingerprint({})]);
     const source = { tenantId, integrationId, runId: fixRunId, sourceReviewRunId: sourceRunId, findingId,
       platform: "github", repository: "acme/fix", baseSha: "1".repeat(40), headSha: "2".repeat(40),
-      sourceBundleRef: "bundle/ref", sourceBundleHash: fingerprint("bundle"), allowedPaths: ["src/a.ts"],
+      sourceBundleRef, sourceBundleHash, allowedPaths: ["src/a.ts"],
       finding: { title: "unsafe", body: "unsafe value", path: "src/a.ts", startLine: 1, endLine: 1 } };
     await pool.query(
       `INSERT INTO pr_agent_harness.fix_run_sources
          (tenant_id,integration_id,run_id,source_review_run_id,finding_id,repository,base_sha,head_sha,
           source_bundle_ref,source_bundle_hash,allowed_paths_json,source_json,content_hash)
-       VALUES ($1,$2,$3,$4,$5,'acme/fix',$6,$7,'bundle/ref',$8,'["src/a.ts"]'::jsonb,$9::jsonb,$10)`,
+       VALUES ($1,$2,$3,$4,$5,'acme/fix',$6,$7,$8,$9,'["src/a.ts"]'::jsonb,$10::jsonb,$11)`,
       [tenantId, integrationId, fixRunId, sourceRunId, findingId, "1".repeat(40), "2".repeat(40),
-        source.sourceBundleHash, JSON.stringify(source), fingerprint(source)]);
+        sourceBundleRef, source.sourceBundleHash, JSON.stringify(source), fingerprint(source)]);
     await pool.query(
       `INSERT INTO pr_agent_harness.fix_run_findings
          (tenant_id,run_id,source_review_run_id,finding_id,gate_decision_id,finding_hash)
        VALUES ($1,$2,$3,$4,$5,$6)`, [tenantId, fixRunId, sourceRunId, findingId, gateId, fingerprint(source.finding)]);
     const proposal = { id: proposalId, tenantId, integrationId, runId: fixRunId, sourceReviewRunId: sourceRunId,
       findingId, revision: 1, repository: "acme/fix", baseSha: "1".repeat(40), headSha: "2".repeat(40),
-      sourceBundleRef: "bundle/ref", sourceBundleHash: source.sourceBundleHash, codePatch: "code", testPatch: "test",
+      sourceBundleRef, sourceBundleHash: source.sourceBundleHash, codePatch: "code", testPatch: "test",
       codePatchHash: fingerprint("code"), testPatchHash: fingerprint("test"), proposalHash,
       policyId: "node", policyHash: fingerprint("policy"), trustedCommandHash: fingerprint(["node", "--test"]),
       dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"), sandboxPolicyHash: fingerprint("sandbox"),
@@ -115,10 +130,10 @@ if (!databaseUrl) {
           source_bundle_ref,source_bundle_hash,code_patch,test_patch,code_patch_hash,test_patch_hash,proposal_hash,
           policy_id,policy_hash,trusted_command_hash,dependency_lock_path,dependency_lock_hash,sandbox_policy_hash,image_digest,
           publisher_policy_hash,qualification_status,proposal_json,content_hash)
-       VALUES ($1,$2,$3,$4,$5,$6,1,'acme/fix',$7,$8,'bundle/ref',$9,'code','test',$10,$11,$12,
-         'node',$13,$14,'package-lock.json',$15,$16,$17,$18,'not_verified',$19::jsonb,$20)`,
+       VALUES ($1,$2,$3,$4,$5,$6,1,'acme/fix',$7,$8,$9,$10,'code','test',$11,$12,$13,
+         'node',$14,$15,'package-lock.json',$16,$17,$18,$19,'not_verified',$20::jsonb,$21)`,
       [proposalId, tenantId, integrationId, fixRunId, sourceRunId, findingId, "1".repeat(40), "2".repeat(40),
-        source.sourceBundleHash, proposal.codePatchHash, proposal.testPatchHash, proposalHash, proposal.policyHash,
+        sourceBundleRef, source.sourceBundleHash, proposal.codePatchHash, proposal.testPatchHash, proposalHash, proposal.policyHash,
         proposal.trustedCommandHash, proposal.dependencyLockHash, proposal.sandboxPolicyHash, imageDigest,
         proposal.publisherPolicyHash, JSON.stringify(proposal), fingerprint(proposal)]);
     await pool.query(
@@ -126,8 +141,8 @@ if (!databaseUrl) {
          (tenant_id,integration_id,run_id,proposal_id,proposal_hash,source_bundle_ref,source_bundle_hash,policy_hash,
           verifier_capability_hash,verification_input_hash,trusted_command_hash,dependency_lock_path,dependency_lock_hash,sandbox_policy_hash,image_digest,
           claimed_run_epoch,deadline_at)
-       VALUES ($1,$2,$3,$4,$5,'bundle/ref',$6,$7,$8,$9,$10,'package-lock.json',$11,$12,$13,1,clock_timestamp()+interval '5 minutes')`,
-      [tenantId, integrationId, fixRunId, proposalId, proposalHash, source.sourceBundleHash, proposal.policyHash,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'package-lock.json',$12,$13,$14,1,clock_timestamp()+interval '5 minutes')`,
+      [tenantId, integrationId, fixRunId, proposalId, proposalHash, sourceBundleRef, source.sourceBundleHash, proposal.policyHash,
         verifierCapability, verificationInputHash, proposal.trustedCommandHash, proposal.dependencyLockHash,
         proposal.sandboxPolicyHash, imageDigest]);
   });
@@ -142,17 +157,19 @@ if (!databaseUrl) {
         "SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user");
       assert.deepEqual(role.rows[0], { rolsuper: false, rolbypassrls: false });
       const privileges = await verifier.query<{ claim: boolean; heartbeat: boolean; complete: boolean; relinquish: boolean; fail: boolean;
-        jobs_select: boolean; runs_select: boolean; verifications_insert: boolean }>(
+        snapshot: boolean; jobs_select: boolean; runs_select: boolean; artifacts_select: boolean; verifications_insert: boolean }>(
         `SELECT has_function_privilege(current_user,'pr_agent_harness.claim_verification_job(text,integer,text)','EXECUTE') AS claim,
           has_function_privilege(current_user,'pr_agent_harness.heartbeat_verification_job(uuid,uuid,text,bigint,integer)','EXECUTE') AS heartbeat,
           has_function_privilege(current_user,'pr_agent_harness.complete_verification_job(uuid,uuid,text,bigint,jsonb,text,text,text,text)','EXECUTE') AS complete,
           has_function_privilege(current_user,'pr_agent_harness.relinquish_verification_job(uuid,uuid,text,bigint)','EXECUTE') AS relinquish,
           has_function_privilege(current_user,'pr_agent_harness.fail_verification_job(uuid,uuid,text,bigint,text,integer)','EXECUTE') AS fail,
+          has_function_privilege(current_user,'pr_agent_harness.read_leased_verification_snapshot(uuid,uuid,text,bigint,text)','EXECUTE') AS snapshot,
           has_table_privilege(current_user,'pr_agent_harness.verification_jobs','SELECT') AS jobs_select,
           has_table_privilege(current_user,'pr_agent_harness.agent_runs','SELECT') AS runs_select,
+          has_table_privilege(current_user,'pr_agent_harness.run_artifacts','SELECT') AS artifacts_select,
           has_table_privilege(current_user,'pr_agent_harness.fix_verifications','INSERT') AS verifications_insert`);
       assert.deepEqual(privileges.rows[0], { claim: true, heartbeat: true, complete: true, relinquish: true, fail: true,
-        jobs_select: false, runs_select: false, verifications_insert: false });
+        snapshot: true, jobs_select: false, runs_select: false, artifacts_select: false, verifications_insert: false });
     } finally { await verifier.end(); }
   });
 
@@ -174,32 +191,47 @@ if (!databaseUrl) {
     const afterMismatch = await pool.query("SELECT status,attempt_count,lease_epoch FROM pr_agent_harness.verification_jobs WHERE tenant_id=$1 AND run_id=$2",
       [tenantId, fixRunId]);
     assert.deepEqual(afterMismatch.rows, beforeMismatch.rows, "an incompatible verifier must perform zero job writes");
-    const claim = await pool.query<{ id: string; lease_epoch: string; proposal_json: { proposalHash: string } }>(
-      "SELECT * FROM pr_agent_harness.claim_verification_job($1,$2,$3)", ["verifier-a", 60, verifierCapability]);
-    assert.equal(claim.rowCount, 1); assert.equal(claim.rows[0]!.proposal_json.proposalHash, proposalHash);
-    const jobId = claim.rows[0]!.id; const staleEpoch = Number(claim.rows[0]!.lease_epoch);
-    await pool.query("UPDATE pr_agent_harness.verification_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [jobId]);
-    const reclaimed = await pool.query<{ id: string; lease_epoch: string; attempt_count: number }>(
-      "SELECT * FROM pr_agent_harness.claim_verification_job($1,$2,$3)", ["verifier-c", 60, verifierCapability]);
-    assert.equal(reclaimed.rows[0]!.id, jobId); assert.equal(reclaimed.rows[0]!.attempt_count, 2);
-    const epoch = Number(reclaimed.rows[0]!.lease_epoch); assert.ok(epoch > staleEpoch);
+    const verifierUrl = new URL(databaseUrl); verifierUrl.username = "pr_agent_verifier";
+    verifierUrl.password = "verifier-test-password-123";
+    const verifier = new Pool({ connectionString: verifierUrl.toString(), max: 1 });
+    try {
+      const verifierStore = new PgFixVerifierJobStore(verifier);
+      const claimed = await verifierStore.claim("verifier-a", verifierCapability);
+      assert.ok(claimed); assert.equal(claimed.proposal.proposalHash, proposalHash);
+      const jobId = claimed.id; const staleEpoch = claimed.epoch;
+      const snapshotContent = await verifierStore.readSnapshot(claimed);
+      assert.equal(fingerprint(JSON.parse(snapshotContent.toString("utf8"))), sourceBundleHash);
+      const exact = await verifier.query<{ artifact_hash: string; content_compressed: Buffer }>(
+        "SELECT * FROM pr_agent_harness.read_leased_verification_snapshot($1,$2,$3,$4,$5)",
+        [tenantId, jobId, "verifier-a", staleEpoch, sourceBundleHash]);
+      assert.equal(exact.rows[0]?.artifact_hash, sourceBundleHash);
+      assert.ok(exact.rows[0]!.content_compressed.byteLength > 0);
+      assert.equal((await verifier.query(
+        "SELECT * FROM pr_agent_harness.read_leased_verification_snapshot($1,$2,$3,$4,$5)",
+        [tenantId, jobId, "wrong-owner", staleEpoch, sourceBundleHash])).rowCount, 0);
+      assert.equal((await verifier.query(
+        "SELECT * FROM pr_agent_harness.read_leased_verification_snapshot($1,$2,$3,$4,$5)",
+        [tenantId, jobId, "verifier-a", staleEpoch + 1, sourceBundleHash])).rowCount, 0);
+      await assert.rejects(verifier.query("SELECT * FROM pr_agent_harness.run_artifacts"), /permission denied/);
+      await pool.query("UPDATE pr_agent_harness.verification_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [jobId]);
+      const reclaimed = await verifierStore.claim("verifier-c", verifierCapability);
+      assert.ok(reclaimed); assert.equal(reclaimed.id, jobId); assert.equal(reclaimed.attempt, 2);
+      const epoch = reclaimed.epoch; assert.ok(epoch > staleEpoch);
     const wrong = await pool.query<{ heartbeat_verification_job: boolean }>(
       "SELECT pr_agent_harness.heartbeat_verification_job($1,$2,$3,$4,$5)", [tenantId, jobId, "verifier-a", staleEpoch, 60]);
     assert.equal(wrong.rows[0]!.heartbeat_verification_job, false);
-    const resumedClient = await pool.connect();
-    try {
-      const resumedInputHash = fingerprint({ proposalHash, sourceBundleHash: fingerprint("bundle"),
+    const resumedInputHash = fingerprint({ proposalHash, sourceBundleHash,
         policyHash: fingerprint("policy"), trustedCommandHash: fingerprint(["node", "--test"]),
         dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
         sandboxPolicyHash: fingerprint("sandbox"), verifierCapabilityHash: otherVerifierCapability });
-      assert.equal(await enqueueVerificationJob(resumedClient, { tenantId, integrationId, runId: fixRunId,
-        proposalId, proposalHash, sourceBundleRef: "bundle/ref", sourceBundleHash: fingerprint("bundle"),
+    assert.equal(await appDb.transaction(tenantId, (client) => enqueueVerificationJob(client, {
+        tenantId, integrationId, runId: fixRunId,
+        proposalId, proposalHash, sourceBundleRef, sourceBundleHash,
         policyHash: fingerprint("policy"), verifierCapabilityHash: otherVerifierCapability,
         verificationInputHash: resumedInputHash, trustedCommandHash: fingerprint(["node", "--test"]),
         dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
-        sandboxPolicyHash: fingerprint("sandbox"), imageDigest, claimedRunEpoch: 99 }), jobId,
+        sandboxPolicyHash: fingerprint("sandbox"), imageDigest, claimedRunEpoch: 99 })), jobId,
       "a resumed Run must keep waiting on the already leased old-capability verifier job");
-    } finally { resumedClient.release(); }
     const staleComplete = await pool.query<{ complete_verification_job: boolean }>(
       "SELECT pr_agent_harness.complete_verification_job($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)",
       [tenantId, jobId, "verifier-a", staleEpoch, JSON.stringify(verificationResult), fingerprint(verificationResult),
@@ -224,34 +256,34 @@ if (!databaseUrl) {
         verificationInputHash, verifierCapability,
         verificationResultIdentityHash(fingerprint(verificationResult), verificationInputHash, verifierCapability)]);
     assert.equal(late.rows[0]!.complete_verification_job, false);
+    } finally { await verifier.end(); }
   });
 
   test("a resumed FixRun reuses the old verifier capability and completed job after a verifier-only rollout", async () => {
-    const client = await pool.connect();
-    try {
-      const newInputHash = fingerprint({ proposalHash, sourceBundleHash: fingerprint("bundle"),
+      const newInputHash = fingerprint({ proposalHash, sourceBundleHash,
         policyHash: fingerprint("policy"), trustedCommandHash: fingerprint(["node", "--test"]),
         dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
         sandboxPolicyHash: fingerprint("sandbox"), verifierCapabilityHash: otherVerifierCapability });
-      const reused = await enqueueVerificationJob(client, { tenantId, integrationId, runId: fixRunId,
-        proposalId, proposalHash, sourceBundleRef: "bundle/ref", sourceBundleHash: fingerprint("bundle"),
+      const reused = await appDb.transaction(tenantId, (client) => enqueueVerificationJob(client, {
+        tenantId, integrationId, runId: fixRunId,
+        proposalId, proposalHash, sourceBundleRef, sourceBundleHash,
         policyHash: fingerprint("policy"), verifierCapabilityHash: otherVerifierCapability,
         verificationInputHash: newInputHash, trustedCommandHash: fingerprint(["node", "--test"]),
         dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
-        sandboxPolicyHash: fingerprint("sandbox"), imageDigest, claimedRunEpoch: 99 });
+        sandboxPolicyHash: fingerprint("sandbox"), imageDigest, claimedRunEpoch: 99 }));
       const frozen = await pool.query<{ id: string; verifier_capability_hash: string;
         verification_input_hash: string; status: string; result_hash: string }>(
         "SELECT id,verifier_capability_hash,verification_input_hash,status,result_hash FROM pr_agent_harness.verification_jobs WHERE id=$1",
         [reused]);
       assert.deepEqual(frozen.rows[0], { id: reused, verifier_capability_hash: verifierCapability,
         verification_input_hash: verificationInputHash, status: "succeeded", result_hash: fingerprint(verificationResult) });
-      await assert.rejects(enqueueVerificationJob(client, { tenantId, integrationId, runId: fixRunId,
-        proposalId, proposalHash: fingerprint("different"), sourceBundleRef: "bundle/ref", sourceBundleHash: fingerprint("bundle"),
+      await assert.rejects(appDb.transaction(tenantId, (client) => enqueueVerificationJob(client, {
+        tenantId, integrationId, runId: fixRunId,
+        proposalId, proposalHash: fingerprint("different"), sourceBundleRef, sourceBundleHash,
         policyHash: fingerprint("policy"), verifierCapabilityHash: otherVerifierCapability,
         verificationInputHash: newInputHash, trustedCommandHash: fingerprint(["node", "--test"]),
         dependencyLockPath: "package-lock.json", dependencyLockHash: fingerprint("lock"),
-        sandboxPolicyHash: fingerprint("sandbox"), imageDigest, claimedRunEpoch: 99 }), /input hash mismatch|identity conflict/);
-    } finally { client.release(); }
+        sandboxPolicyHash: fingerprint("sandbox"), imageDigest, claimedRunEpoch: 99 })), /input hash mismatch|identity conflict/);
   });
 
   test("exhausted and deadline-expired verifier jobs become failed and are never reclaimed", async () => {
@@ -343,7 +375,7 @@ if (!databaseUrl) {
     (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
     await setFixCapability(true);
     const intent: FixApprovalIntent = { proposalId, proposalHash, sourceReviewRunId: sourceRunId, findingId,
-      headSha: "2".repeat(40), sourceBundleHash: fingerprint("bundle"), codePatchHash: fingerprint("code"),
+      headSha: "2".repeat(40), sourceBundleHash, codePatchHash: fingerprint("code"),
       testPatchHash: fingerprint("test"), policyHash: verificationResult.policyHash,
       trustedCommandHash: fingerprint(["node", "--test"]), dependencyLockHash: fingerprint("lock"),
       sandboxPolicyHash: fingerprint("sandbox"), verificationResultHash: fingerprint(verificationResult),

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const composeAvailable = spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0;
 
-test("Compose isolates database role credentials while preserving runtime configuration", {
+test("application Compose isolates credentials, process roles, and container privileges", {
   skip: composeAvailable ? false : "docker compose is unavailable",
 }, () => {
   const secrets = {
@@ -16,7 +17,7 @@ test("Compose isolates database role credentials while preserving runtime config
     verifier: "sentinel-verifier-only",
   };
   const result = spawnSync("docker",
-    ["compose", "--env-file", "/dev/null", "-f", "docker-compose.yml", "--profile", "verifier",
+    ["compose", "--env-file", "/dev/null", "-f", "docker-compose.yml",
       "config", "--format", "json"], {
       cwd: repositoryRoot, encoding: "utf8", timeout: 30_000,
       env: compactEnvironment({
@@ -28,10 +29,12 @@ test("Compose isolates database role credentials while preserving runtime config
         HARNESS_APP_PASSWORD: secrets.app,
         HARNESS_VERIFIER_PASSWORD: secrets.verifier,
         APP_ID: "runtime-app-id",
+        PRIVATE_KEY: "runtime-inline-private-key",
         WEBHOOK_SECRET: "runtime-webhook-secret",
         OPENAI_API_KEY: "runtime-openai-key",
         GITHUB_TOKEN: "runtime-github-token",
         GITLAB_TOKEN: "runtime-gitlab-token",
+        GITHUB_APP_PRIVATE_KEY_FILE: "/definitely/missing.pem",
         HTTP_TIMEOUT_MS: "12345",
         HARNESS_MODEL_PRICING_JSON: '{"version":"runtime-pricing"}',
       }),
@@ -39,16 +42,21 @@ test("Compose isolates database role credentials while preserving runtime config
   assert.equal(result.status, 0, result.stderr);
   const config = JSON.parse(result.stdout) as { services: Record<string, {
     environment?: Record<string, string>; env_file?: unknown;
+    user?: string; read_only?: boolean; cap_drop?: string[]; security_opt?: string[];
+    volumes?: Array<{ source?: string; target?: string }>; ports?: unknown[];
+    secrets?: Array<{ source?: string; target?: string; mode?: string | number }>;
   }> };
   const services = config.services;
-  assert.equal("env_file" in services["pr-agent"]!, false);
+  assert.deepEqual(Object.keys(services).sort(), ["database-init", "postgres", "pr-agent", "recovery", "worker"]);
   assert.deepEqual(servicesContaining(services, secrets.bootstrap), ["postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.migration), ["database-init", "postgres"]);
-  assert.deepEqual(servicesContaining(services, secrets.app), ["postgres", "pr-agent"]);
-  assert.deepEqual(servicesContaining(services, secrets.verifier), ["postgres", "verifier"]);
+  assert.deepEqual(servicesContaining(services, secrets.app), ["postgres", "pr-agent", "recovery", "worker"]);
+  assert.deepEqual(servicesContaining(services, secrets.verifier), ["postgres"]);
 
   const app = services["pr-agent"]!.environment!;
   assert.equal(app.APP_ID, "runtime-app-id");
+  assert.equal(app.PRIVATE_KEY, "runtime-inline-private-key");
+  assert.equal(app.PRIVATE_KEY_PATH, "");
   assert.equal(app.WEBHOOK_SECRET, "runtime-webhook-secret");
   assert.equal(app.OPENAI_API_KEY, "runtime-openai-key");
   assert.equal(app.GITHUB_TOKEN, "runtime-github-token");
@@ -57,7 +65,103 @@ test("Compose isolates database role credentials while preserving runtime config
   assert.equal(app.HARNESS_MODEL_PRICING_JSON, '{"version":"runtime-pricing"}');
   assert.equal(app.HARNESS_PG_PASSWORD, secrets.app);
   assert.equal(services["database-init"]!.environment!.HARNESS_PG_PASSWORD, secrets.migration);
-  assert.equal(services.verifier!.environment!.HARNESS_PG_PASSWORD, secrets.verifier);
+  assert.equal(services["pr-agent"]!.environment!.PR_AGENT_PROCESS_ROLE, "web");
+  assert.equal(services.worker!.environment!.PR_AGENT_PROCESS_ROLE, "worker");
+  assert.equal(services.recovery!.environment!.PR_AGENT_PROCESS_ROLE, "recovery");
+  assert.ok((services["pr-agent"]!.ports?.length ?? 0) > 0);
+  assert.equal(services.worker!.ports, undefined);
+  assert.equal(services.recovery!.ports, undefined);
+
+  for (const name of ["pr-agent", "worker", "recovery", "database-init"]) {
+    const service = services[name]!;
+    assert.equal("env_file" in service, false);
+    assert.equal(service.user, "10001:10001");
+    assert.equal(service.read_only, true);
+    assert.deepEqual(service.cap_drop, ["ALL"]);
+    assert.ok(service.security_opt?.includes("no-new-privileges:true"));
+    assert.equal(JSON.stringify(service.volumes ?? []).includes("docker.sock"), false);
+    assert.equal(JSON.stringify(service.volumes ?? []).includes("snapshot"), false);
+  }
+  for (const name of ["pr-agent", "worker", "recovery"]) assert.equal(services[name]!.secrets, undefined);
+});
+
+test("optional PEM overlay clears inline key and mounts the fixed-UID-readable secret path", {
+  skip: composeAvailable ? false : "docker compose is unavailable",
+}, () => {
+  const result = spawnSync("docker", ["compose", "--env-file", "/dev/null", "-f", "docker-compose.yml",
+    "-f", "docker-compose.secret-file.yml", "config", "--format", "json"], {
+    cwd: repositoryRoot, encoding: "utf8", timeout: 30_000,
+    env: compactEnvironment({ PATH: process.env.PATH, HOME: process.env.HOME,
+      DOCKER_CONFIG: process.env.DOCKER_CONFIG, HARNESS_BOOTSTRAP_PASSWORD: "bootstrap",
+      HARNESS_MIGRATION_PASSWORD: "migration", HARNESS_APP_PASSWORD: "app",
+      HARNESS_VERIFIER_PASSWORD: "verifier", APP_ID: "overlay-app-id", PRIVATE_KEY: "must-be-cleared" }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const config = JSON.parse(result.stdout) as { services: Record<string, {
+    environment?: Record<string, string>; user?: string;
+    secrets?: Array<{ source?: string; target?: string; uid?: string; gid?: string; mode?: string | number }>;
+  }> };
+  for (const name of ["pr-agent", "worker", "recovery"]) {
+    const service = config.services[name]!;
+    assert.equal(service.user, "10001:10001");
+    assert.equal(service.environment?.PRIVATE_KEY, "");
+    assert.equal(service.environment?.PRIVATE_KEY_PATH, "/run/secrets/github-app-private-key.pem");
+    assert.equal(service.environment?.APP_ID, "overlay-app-id");
+    assert.ok(service.secrets?.some((secret) => secret.source === "github-app-private-key"
+      && secret.target === "/run/secrets/github-app-private-key.pem"
+      && secret.uid === "10001" && secret.gid === "10001" && String(secret.mode) === "0400"));
+  }
+});
+
+test("isolated verifier operator is a separate no-HTTP deployment with no provider credentials", {
+  skip: composeAvailable ? false : "docker compose is unavailable",
+}, () => {
+  const result = spawnSync("docker", ["compose", "--env-file", "/dev/null",
+    "-f", "docker-compose.verifier-operator.yml", "config", "--format", "json"], {
+    cwd: repositoryRoot, encoding: "utf8", timeout: 30_000,
+    env: compactEnvironment({ PATH: process.env.PATH, HOME: process.env.HOME,
+      DOCKER_CONFIG: process.env.DOCKER_CONFIG,
+      HARNESS_VERIFIER_DATABASE_URL: "postgresql://verifier:secret@database.invalid/pr_agent",
+      VERIFIER_DOCKER_GID: "998", FIX_POLICY_REGISTRY_JSON: '{"policies":[]}' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const config = JSON.parse(result.stdout) as { services: Record<string, {
+    environment?: Record<string, string>; ports?: unknown[]; user?: string; read_only?: boolean;
+    cap_drop?: string[]; security_opt?: string[]; group_add?: string[];
+    volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
+  }> };
+  assert.deepEqual(Object.keys(config.services), ["verifier-operator"]);
+  const operator = config.services["verifier-operator"]!;
+  assert.equal(operator.ports, undefined);
+  assert.equal(operator.user, "10001:10001");
+  assert.equal(operator.read_only, true);
+  assert.deepEqual(operator.cap_drop, ["ALL"]);
+  assert.ok(operator.security_opt?.includes("no-new-privileges:true"));
+  assert.ok(operator.group_add?.includes("998"));
+  assert.ok(operator.volumes?.some((volume) => volume.source === "/var/run/docker.sock"
+    && volume.target === "/var/run/docker.sock"));
+  const serialized = JSON.stringify(operator.environment ?? {});
+  for (const forbidden of ["APP_ID", "PRIVATE_KEY", "WEBHOOK_SECRET", "OPENAI_API_KEY", "GITHUB_TOKEN", "GITLAB_TOKEN"]) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+});
+
+test("container build contracts pin non-root runtime and sandbox users", () => {
+  const dockerfile = readFileSync(`${repositoryRoot}/Dockerfile`, "utf8");
+  const ignored = new Set(readFileSync(`${repositoryRoot}/.dockerignore`, "utf8")
+    .split(/\r?\n/u).map((entry) => entry.trim()).filter(Boolean));
+  const runtime = dockerStage(dockerfile, "runtime");
+  const sandbox = dockerStage(dockerfile, "verifier-sandbox");
+  const verifier = dockerStage(dockerfile, "verifier");
+  assert.match(runtime, /USER 10001:10001/u);
+  assert.match(runtime, /HEALTHCHECK[\s\S]*dist\/agent-runtime\/health-cli\.js/u);
+  assert.doesNotMatch(runtime, /docker-cli|pnpm install/u);
+  assert.match(sandbox, /USER 65532:65532/u);
+  assert.match(sandbox, /chown -R 65532:65532 \/opt\/pr-agent-verifier \/seed/u);
+  assert.match(verifier, /apk add --no-cache docker-cli[\s\S]*USER 10001:10001/u);
+  for (const excluded of [".env", ".env.*", ".git", ".codex", ".omx*", "secrets", "frontend", "backend/tests"]) {
+    assert.ok(ignored.has(excluded), `Docker build context must exclude ${excluded}`);
+  }
 });
 
 function servicesContaining(
@@ -72,4 +176,13 @@ function servicesContaining(
 
 function compactEnvironment(values: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined));
+}
+
+function dockerStage(dockerfile: string, name: string): string {
+  const marker = new RegExp(`^FROM .+ AS ${name}$`, "mu");
+  const match = marker.exec(dockerfile);
+  assert.ok(match, `missing Docker stage ${name}`);
+  const start = match.index;
+  const next = dockerfile.slice(start + match[0].length).search(/^FROM /mu);
+  return next < 0 ? dockerfile.slice(start) : dockerfile.slice(start, start + match[0].length + next);
 }
