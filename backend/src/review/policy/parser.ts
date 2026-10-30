@@ -3,326 +3,186 @@ import { z } from "zod";
 
 import { parseYamlBooleanMaybe } from "../../core/config/yaml.js";
 
-const reviewPolicyOverridesSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    mode: z.enum(["comment", "report"]).optional(),
-    onOpened: z.boolean().optional(),
-    onEdited: z.boolean().optional(),
-    onSynchronize: z.boolean().optional(),
-    describeEnabled: z.boolean().optional(),
-    describeAllowApply: z.boolean().optional(),
-    checksCommandEnabled: z.boolean().optional(),
-    includeCiChecks: z.boolean().optional(),
-    secretScanEnabled: z.boolean().optional(),
-    secretScanCustomPatterns: z.array(z.string()).optional(),
-    autoLabelEnabled: z.boolean().optional(),
-    askCommandEnabled: z.boolean().optional(),
-    generateTestsCommandEnabled: z.boolean().optional(),
-    changelogCommandEnabled: z.boolean().optional(),
-    changelogAllowApply: z.boolean().optional(),
-    feedbackCommandEnabled: z.boolean().optional(),
-    improveCommandEnabled: z.boolean().optional(),
-    addDocCommandEnabled: z.boolean().optional(),
-    customPromptCommandEnabled: z.boolean().optional(),
-    helpDocsCommandEnabled: z.boolean().optional(),
-    analyzeCommandEnabled: z.boolean().optional(),
-    complianceCommandEnabled: z.boolean().optional(),
-    similarCodeCommandEnabled: z.boolean().optional(),
-    scanRepoDiscussionsCommandEnabled: z.boolean().optional(),
-    customRules: z.array(z.string()).optional(),
-  })
-  .strict()
-  .partial();
+export const reviewPolicyOverridesSchema = z.object({
+  enabled: z.boolean().optional(), mode: z.enum(["comment", "report"]).optional(),
+  onOpened: z.boolean().optional(), onEdited: z.boolean().optional(),
+  onSynchronize: z.boolean().optional(), describeEnabled: z.boolean().optional(),
+  describeAllowApply: z.boolean().optional(), checksCommandEnabled: z.boolean().optional(),
+  includeCiChecks: z.boolean().optional(), secretScanEnabled: z.boolean().optional(),
+  secretScanCustomPatterns: z.array(z.string()).optional(), autoLabelEnabled: z.boolean().optional(),
+  askCommandEnabled: z.boolean().optional(), generateTestsCommandEnabled: z.boolean().optional(),
+  changelogCommandEnabled: z.boolean().optional(), changelogAllowApply: z.boolean().optional(),
+  feedbackCommandEnabled: z.boolean().optional(), improveCommandEnabled: z.boolean().optional(),
+  addDocCommandEnabled: z.boolean().optional(), customPromptCommandEnabled: z.boolean().optional(),
+  helpDocsCommandEnabled: z.boolean().optional(), analyzeCommandEnabled: z.boolean().optional(),
+  complianceCommandEnabled: z.boolean().optional(), similarCodeCommandEnabled: z.boolean().optional(),
+  scanRepoDiscussionsCommandEnabled: z.boolean().optional(), customRules: z.array(z.string()).optional(),
+}).strict().partial();
+
+const policySectionOverridesSchema = z.object({
+  enabled: z.boolean().optional(),
+  minBodyLength: z.number().int().optional(),
+  requiredSections: z.array(z.string()).optional(),
+}).strict().partial();
+
+const pullRequestPolicyOverridesSchema = policySectionOverridesSchema.extend({
+  requireLinkedIssue: z.boolean().optional(),
+}).strict().partial();
+
+export const repositoryPolicyOverridesSchema = z.object({
+  mode: z.enum(["remind", "enforce"]).optional(),
+  issue: policySectionOverridesSchema.optional(),
+  pullRequest: pullRequestPolicyOverridesSchema.optional(),
+  review: reviewPolicyOverridesSchema.optional(),
+}).strict().partial();
 
 export type ReviewPolicyOverrides = z.infer<typeof reviewPolicyOverridesSchema>;
+export type RepositoryPolicyOverrides = z.infer<typeof repositoryPolicyOverridesSchema>;
+
+type Coercer = (value: unknown) => unknown;
+
+const reviewFields: Readonly<Record<string, readonly [keyof ReviewPolicyOverrides, Coercer]>> = {
+  enabled: ["enabled", coerceBoolean],
+  mode: ["mode", (value) => coerceEnum(value, ["comment", "report"])],
+  onopened: ["onOpened", coerceBoolean], onedited: ["onEdited", coerceBoolean],
+  onsynchronize: ["onSynchronize", coerceBoolean], describeenabled: ["describeEnabled", coerceBoolean],
+  describeallowapply: ["describeAllowApply", coerceBoolean],
+  checkscommandenabled: ["checksCommandEnabled", coerceBoolean],
+  includecichecks: ["includeCiChecks", coerceBoolean],
+  secretscanenabled: ["secretScanEnabled", coerceBoolean],
+  secretscancustompatterns: ["secretScanCustomPatterns", coerceStringList],
+  autolabelenabled: ["autoLabelEnabled", coerceBoolean],
+  askcommandenabled: ["askCommandEnabled", coerceBoolean],
+  generatetestscommandenabled: ["generateTestsCommandEnabled", coerceBoolean],
+  changelogcommandenabled: ["changelogCommandEnabled", coerceBoolean],
+  changelogallowapply: ["changelogAllowApply", coerceBoolean],
+  feedbackcommandenabled: ["feedbackCommandEnabled", coerceBoolean],
+  improvecommandenabled: ["improveCommandEnabled", coerceBoolean],
+  adddoccommandenabled: ["addDocCommandEnabled", coerceBoolean],
+  custompromptcommandenabled: ["customPromptCommandEnabled", coerceBoolean],
+  helpdocscommandenabled: ["helpDocsCommandEnabled", coerceBoolean],
+  analyzecommandenabled: ["analyzeCommandEnabled", coerceBoolean],
+  compliancecommandenabled: ["complianceCommandEnabled", coerceBoolean],
+  similarcodecommandenabled: ["similarCodeCommandEnabled", coerceBoolean],
+  scanrepodiscussionscommandenabled: ["scanRepoDiscussionsCommandEnabled", coerceBoolean],
+  customrules: ["customRules", coerceStringList],
+};
+
+const sectionFields: Readonly<Record<string, readonly [string, Coercer]>> = {
+  enabled: ["enabled", coerceBoolean], minbodylength: ["minBodyLength", coerceInteger],
+  requiredsections: ["requiredSections", coerceStringList],
+};
+const pullRequestFields = {
+  ...sectionFields,
+  requirelinkedissue: ["requireLinkedIssue", coerceBoolean] as const,
+};
 
 export function parseReviewPolicyOverridesFromConfigText(raw: string): ReviewPolicyOverrides {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
-
-  let parsed: unknown;
-  if (trimmed.startsWith("{")) {
-    parsed = JSON.parse(trimmed) as unknown;
-  } else {
-    parsed = loadYaml(trimmed, { json: true });
-  }
-
-  if (parsed === null || parsed === undefined) {
-    return {};
-  }
-
-  const root = asRecord(parsed);
-  if (!root) {
-    throw new Error("review policy config root must be a mapping object");
-  }
-
-  const reviewSource = asRecord(root.review) ?? root;
-  const normalized = normalizeReviewPolicyOverrides(reviewSource);
-  const validated = reviewPolicyOverridesSchema.safeParse(normalized);
-  if (!validated.success) {
-    throw new Error(
-      `invalid review policy config: ${validated.error.issues[0]?.message ?? "schema validation failed"}`,
-    );
-  }
-
-  return validated.data;
+  const parsed = parseConfigText(raw);
+  if (parsed === null || parsed === undefined) return {};
+  const root = requireRecord(parsed, "review policy config root must be a mapping object");
+  const reviewSource = asRecord(findAliasedValue(root, "review")) ?? root;
+  return validate(reviewPolicyOverridesSchema, normalizeFields(reviewSource, reviewFields),
+    "invalid review policy config");
 }
 
-function normalizeReviewPolicyOverrides(
-  source: Record<string, unknown>,
-): ReviewPolicyOverrides {
-  const target: ReviewPolicyOverrides = {};
-  for (const [rawKey, rawValue] of Object.entries(source)) {
-    const key = normalizeConfigKey(rawKey);
-    if (key === "enabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.enabled = bool;
-      }
-      continue;
-    }
-    if (key === "mode") {
-      const mode = coerceMode(rawValue);
-      if (mode) {
-        target.mode = mode;
-      }
-      continue;
-    }
-    if (key === "onopened") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.onOpened = bool;
-      }
-      continue;
-    }
-    if (key === "onedited") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.onEdited = bool;
-      }
-      continue;
-    }
-    if (key === "onsynchronize") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.onSynchronize = bool;
-      }
-      continue;
-    }
-    if (key === "describeenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.describeEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "describeallowapply") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.describeAllowApply = bool;
-      }
-      continue;
-    }
-    if (key === "checkscommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.checksCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "includecichecks") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.includeCiChecks = bool;
-      }
-      continue;
-    }
-    if (key === "secretscanenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.secretScanEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "secretscancustompatterns") {
-      const list = coerceStringList(rawValue);
-      if (list) {
-        target.secretScanCustomPatterns = list;
-      }
-      continue;
-    }
-    if (key === "autolabelenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.autoLabelEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "askcommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.askCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "generatetestscommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.generateTestsCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "changelogcommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.changelogCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "changelogallowapply") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.changelogAllowApply = bool;
-      }
-      continue;
-    }
-    if (key === "feedbackcommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.feedbackCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "improvecommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.improveCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "adddoccommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.addDocCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "custompromptcommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.customPromptCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "helpdocscommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.helpDocsCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "analyzecommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.analyzeCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "compliancecommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.complianceCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "similarcodecommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.similarCodeCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "scanrepodiscussionscommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.scanRepoDiscussionsCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "customrules") {
-      const list = coerceStringList(rawValue);
-      if (list) {
-        target.customRules = list;
-      }
-    }
+export function parseRepositoryPolicyOverridesFromConfigText(raw: string): RepositoryPolicyOverrides {
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith("{")) {
+    return validate(repositoryPolicyOverridesSchema, JSON.parse(trimmed) as unknown,
+      "Invalid JSON policy config");
   }
+  let parsed: unknown;
+  try {
+    parsed = loadYaml(trimmed, { json: true });
+  } catch (error) {
+    throw new Error(`Invalid YAML policy config: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (parsed === null || parsed === undefined) return {};
+  const root = requireRecord(parsed, "Invalid YAML policy config: root must be a mapping object");
+  const normalized: Record<string, unknown> = {};
+  const mode = coerceEnum(findAliasedValue(root, "mode"), ["remind", "enforce"]);
+  if (mode !== undefined) normalized.mode = mode;
+  const issue = asRecord(findAliasedValue(root, "issue"));
+  if (issue) normalized.issue = normalizeFields(issue, sectionFields);
+  const pullRequest = asRecord(findAliasedValue(root, "pullrequest"));
+  if (pullRequest) normalized.pullRequest = normalizeFields(pullRequest, pullRequestFields);
+  const review = asRecord(findAliasedValue(root, "review"));
+  if (review) normalized.review = normalizeFields(review, reviewFields);
+  return validate(repositoryPolicyOverridesSchema, normalized, "Invalid YAML policy config");
+}
 
+function parseConfigText(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  return trimmed.startsWith("{") ? JSON.parse(trimmed) as unknown : loadYaml(trimmed, { json: true });
+}
+
+function normalizeFields(source: Record<string, unknown>,
+  fields: Readonly<Record<string, readonly [string, Coercer]>>): Record<string, unknown> {
+  const target: Record<string, unknown> = {};
+  for (const [rawKey, rawValue] of Object.entries(source)) {
+    const field = fields[normalizeKey(rawKey)];
+    if (!field) continue;
+    const value = field[1](rawValue);
+    if (value !== undefined) target[field[0]] = value;
+  }
   return target;
 }
 
-function normalizeConfigKey(raw: string): string {
-  return raw.replace(/[_-]/g, "").trim().toLowerCase();
+function findAliasedValue(source: Record<string, unknown>, normalizedKey: string): unknown {
+  for (const [key, value] of Object.entries(source)) {
+    if (normalizeKey(key) === normalizedKey) return value;
+  }
+  return undefined;
+}
+
+function normalizeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[_-]/g, "");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+function requireRecord(value: unknown, message: string): Record<string, unknown> {
+  const record = asRecord(value);
+  if (!record) throw new Error(message);
+  return record;
 }
 
 function coerceBoolean(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (value === 1) {
-      return true;
-    }
-    if (value === 0) {
-      return false;
-    }
-    return undefined;
-  }
-  if (typeof value === "string") {
-    return parseYamlBooleanMaybe(value);
-  }
-  return undefined;
+  if (typeof value === "boolean") return value;
+  if (value === 1) return true;
+  if (value === 0) return false;
+  return typeof value === "string" ? parseYamlBooleanMaybe(value) : undefined;
 }
 
-function coerceMode(value: unknown): "comment" | "report" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
+function coerceInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.floor(value);
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function coerceEnum<const T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === "comment" || normalized === "report") {
-    return normalized;
-  }
-  return undefined;
+  return allowed.find((candidate) => candidate === normalized);
 }
 
 function coerceStringList(value: unknown): string[] | undefined {
-  if (Array.isArray(value)) {
-    const list = value
-      .map((item) => (typeof item === "string" ? item.trim() : ""))
-      .filter(Boolean);
-    return list;
+  const values = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : undefined;
+  if (!values) return undefined;
+  return values.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean);
+}
+
+function validate<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new Error(`${label}: ${result.error.issues[0]?.message ?? "schema validation failed"}`);
   }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    if (trimmed.includes(",")) {
-      return trimmed
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-    }
-    return [trimmed];
-  }
-  return undefined;
+  return result.data;
 }

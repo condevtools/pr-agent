@@ -2,7 +2,6 @@ import { ProviderHttpError } from "../../core/http/provider-error.js";
 import { fetchWithRetry, readNumberEnv, readOptionalStringEnv } from "#core";
 import { parseJsonFromModelText } from "./json.js";
 import {
-  currentModelExecutionContext,
   currentModelAbortSignal,
   currentModelOutputLimit,
   estimateInputTokenUpperBound,
@@ -22,6 +21,8 @@ export async function callGeminiJson(params: {
   maxOutputTokens?: number;
   signal?: AbortSignal;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
+  requestKind?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<unknown> {
   const apiKey = readOptionalStringEnv("GEMINI_API_KEY");
   if (!apiKey) {
@@ -36,9 +37,7 @@ export async function callGeminiJson(params: {
     timeoutMs:
       params.timeoutMs ??
       readNumberEnv("AI_HTTP_TIMEOUT_MS", 30_000),
-    retries: currentModelExecutionContext()
-      ? 0
-      : readNumberEnv("AI_HTTP_RETRIES", 2),
+    retries: 0,
     backoffMs: readNumberEnv("AI_HTTP_RETRY_BACKOFF_MS", 400),
   } as const;
 
@@ -61,11 +60,11 @@ export async function callGeminiJson(params: {
       {
         provider: "gemini",
         model: params.model,
-        requestKind: includeSchema ? "generate-content-schema" : "generate-content-json",
+        requestKind: `${params.requestKind ? `${params.requestKind}:` : ""}${includeSchema ? "generate-content-schema" : "generate-content-json"}`,
         requestHash: modelRequestHash(requestBody),
         inputTokenUpperBound: estimateInputTokenUpperBound(requestBody),
         maxOutputTokens: generationConfig.maxOutputTokens,
-        metadata: { physicalAttempt },
+        metadata: { ...params.metadata, physicalAttempt },
       },
       async () => {
         const response = await fetchWithRetry(

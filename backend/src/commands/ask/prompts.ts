@@ -1,7 +1,11 @@
 import { resolveUiLocale, type UiLocale } from "#core";
 import type { PullRequestReviewInput } from "../../review/contracts.js";
 import { buildPromptSharedSections } from "../../review/context/prompt-context.js";
-import type { AskConversationTurn } from "./session.js";
+
+export interface AskConversationTurn {
+  question: string;
+  answer: string;
+}
 
 const ASK_SYSTEM_PROMPT_ZH = [
   "你是资深代码评审助手。",

@@ -3,7 +3,12 @@ import test from "node:test";
 
 import { z } from "zod";
 
-import { withModelExecutionContext, type ModelRequestIntent } from "../../src/model/execution-context.js";
+import {
+  estimateInputTokenUpperBound,
+  modelRequestHash,
+  withModelExecutionContext,
+  type ModelRequestIntent,
+} from "../../src/model/execution-context.js";
 import { createStructuredModel } from "../../src/model/structured-model.js";
 import { createAiConcurrencyLimiter } from "../../src/model/concurrency.js";
 import type { OpenAIClientCache } from "../../src/model/client-cache.js";
@@ -31,13 +36,20 @@ test("structured Gemini transport enforces the per-turn output cap", async () =>
         return (await transport()).value;
       },
     }, () => model.generate({
-      schemaName: "bounded", jsonSchema: { type: "object" },
+      schemaName: "evolution_candidate_v1", jsonSchema: { type: "object" },
       schema: z.object({ ok: z.boolean() }).strict(),
-      systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
+      systemPrompt: "system", prompt: "prompt", role: "evolution", turn: 1,
       maxInputBytes: 10_000, maxOutputTokens: 7,
     }));
     assert.deepEqual(result, { ok: true });
     assert.equal(intents[0]?.maxOutputTokens, 7);
+    assert.equal(intents[0]?.requestKind, "structured:generate-content-schema");
+    assert.deepEqual(intents[0]?.metadata, {
+      schemaName: "evolution_candidate_v1",
+      role: "evolution",
+      turn: 1,
+      physicalAttempt: 1,
+    });
   } finally {
     globalThis.fetch = originalFetch;
     restoreEnv("GEMINI_API_KEY", originalKey);
@@ -68,6 +80,7 @@ test("structured transport rejects oversized role input before provider I/O", as
 test("OpenAI strict schemas require nullable optional fields and normalize null responses", async () => {
   const originalKey = process.env.OPENAI_API_KEY;
   const requests: Array<Record<string, any>> = [];
+  const intents: ModelRequestIntent[] = [];
   process.env.OPENAI_API_KEY = "test-key";
   const responses = [
     { action: "finish", request: null, candidates: [{ severity: "medium", title: "Issue", body: "Body",
@@ -83,7 +96,12 @@ test("OpenAI strict schemas require nullable optional fields and normalize null 
   try {
     const model = createStructuredModel({ configuration: { provider: "openai", model: "fixture" }, clientCache,
       concurrencyLimiter: createAiConcurrencyLimiter() });
-    const { role, critic } = await withTestModelContext(async () => ({
+    const { role, critic } = await withModelExecutionContext({
+      async execute(intent, transport) {
+        intents.push(intent);
+        return (await transport()).value;
+      },
+    }, async () => ({
       role: await model.generate({ schemaName: "role", jsonSchema: deepRoleTurnJsonSchema as unknown as Record<string, unknown>,
         schema: deepRoleTurnResponseSchema, systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
         maxInputBytes: 100_000, maxOutputTokens: 100 }),
@@ -98,8 +116,14 @@ test("OpenAI strict schemas require nullable optional fields and normalize null 
     assert.deepEqual(critic, { decisions: [{ candidateId: "candidate", decision: "accept", reasonCode: "supported" }] });
     assert.deepEqual(requests[0]!.messages, [{ role: "system", content: "system" },
       { role: "user", content: "prompt" }]);
+    assert.equal(requests[0]!.max_completion_tokens, 100);
     assert.deepEqual(requests[1]!.messages, [{ role: "system", content: "system" },
       { role: "user", content: "prompt" }]);
+    assert.equal(requests[1]!.max_completion_tokens, 100);
+    assert.equal(intents[0]?.requestHash, modelRequestHash(requests[0]));
+    assert.equal(intents[0]?.inputTokenUpperBound, estimateInputTokenUpperBound(requests[0]));
+    assert.equal(intents[1]?.requestHash, modelRequestHash(requests[1]));
+    assert.equal(intents[1]?.inputTokenUpperBound, estimateInputTokenUpperBound(requests[1]));
     const roleSchema = requests[0]!.response_format.json_schema;
     assert.equal(roleSchema.strict, true);
     assert.equal(roleSchema.schema.type, "object");
@@ -199,6 +223,79 @@ test("OpenAI-compatible bounds the augmented schema system prompt before provide
     restoreEnv("OPENAI_BASE_URL", originalBaseUrl);
   }
 });
+
+for (const provider of ["openai", "openai-compatible"] as const) {
+  test(`active ${provider} cancellation aborts transport without fallback or limiter leakage`, async () => {
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalCompatibleKey = process.env.OPENAI_COMPATIBLE_API_KEY;
+    const originalBaseUrl = process.env.OPENAI_BASE_URL;
+    const controller = new AbortController();
+    const limiter = createAiConcurrencyLimiter({ resolveMaxConcurrency: () => 1 });
+    const intents: ModelRequestIntent[] = [];
+    let physicalCalls = 0;
+    let transportCancelled = false;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.OPENAI_COMPATIBLE_API_KEY = "compatible-test-key";
+    process.env.OPENAI_BASE_URL = "https://compatible.invalid/v1";
+    const clientCache = { get: () => ({ chat: { completions: { create: async (
+      _body: Record<string, unknown>,
+      options: { signal?: AbortSignal },
+    ) => {
+      physicalCalls += 1;
+      const signal = options.signal;
+      assert.ok(signal);
+      assert.equal(signal.aborted, false);
+      markStarted();
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          transportCancelled = true;
+          reject(signal.reason);
+        }, { once: true });
+      });
+    } } } }) } as unknown as OpenAIClientCache;
+
+    try {
+      const model = createStructuredModel({
+        configuration: { provider, model: "fixture" },
+        clientCache,
+        concurrencyLimiter: limiter,
+      });
+      const pending = withModelExecutionContext({
+        async execute(intent, transport) {
+          intents.push(intent);
+          return (await transport()).value;
+        },
+      }, () => model.generate({
+        schemaName: "active_abort",
+        jsonSchema: { type: "object" },
+        schema: z.object({ ok: z.boolean() }).strict(),
+        systemPrompt: "system",
+        prompt: "prompt",
+        role: "fix",
+        turn: 1,
+        maxInputBytes: 10_000,
+        maxOutputTokens: 100,
+        signal: controller.signal,
+      }));
+      await started;
+      assert.equal(limiter.getStats().activeRequests, 1);
+      controller.abort(new DOMException("active request cancelled", "AbortError"));
+      await assert.rejects(pending, /active request cancelled/);
+      assert.equal(transportCancelled, true);
+      assert.equal(physicalCalls, 1);
+      assert.equal(intents.length, 1);
+      assert.equal(limiter.getStats().activeRequests, 0);
+      assert.equal(limiter.getStats().queuedRequests, 0);
+      assert.equal(await limiter.withLimit(async () => "released"), "released");
+    } finally {
+      restoreEnv("OPENAI_API_KEY", originalOpenAiKey);
+      restoreEnv("OPENAI_COMPATIBLE_API_KEY", originalCompatibleKey);
+      restoreEnv("OPENAI_BASE_URL", originalBaseUrl);
+    }
+  });
+}
 
 test("a queued deep model deadline removes its waiter before transport starts", async () => {
   const limiter = createAiConcurrencyLimiter({ resolveMaxConcurrency: () => 1 });

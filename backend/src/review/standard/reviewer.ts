@@ -15,17 +15,8 @@ import {
   buildReviewFallbackFromNonJsonText,
   normalizeReviewResultForSchema,
 } from "./normalization.js";
-import {
-  callAnthropicJson,
-} from "../../model/providers/anthropic.js";
-import {
-  callGeminiJson,
-} from "../../model/providers/gemini.js";
-import {
-  callOpenAIJsonWithFallback,
-  getSharedModelRuntime,
-  type ModelRuntime,
-} from "../../model/runtime.js";
+import { requestJsonModel } from "../../model/gateway.js";
+import { getSharedModelRuntime, type ModelRuntime } from "../../model/runtime.js";
 import { resolveModelName, resolveModelProvider } from "../../model/configuration.js";
 export { buildUserPrompt, resolveReviewSystemPrompt } from "./prompts.js";
 export { normalizeReviewResultForSchema } from "./normalization.js";
@@ -116,13 +107,20 @@ export async function analyzePullRequest(
   const prompt = buildUserPrompt(pullRequest);
 
   const parsed = await runtime.concurrencyLimiter.withLimit(async () => {
-    if (provider === "openai" || provider === "openai-compatible") {
-      return analyzeWithOpenAI({ provider, model, prompt, runtime });
-    }
-    if (provider === "anthropic") {
-      return analyzeWithAnthropic({ model, prompt });
-    }
-    return analyzeWithGemini({ model, prompt });
+    return requestJsonModel({
+      configuration: { provider, model },
+      requestKind: "single-review",
+      schemaName: "pr_review",
+      schema: reviewResultJsonSchema,
+      prompt,
+      systemPrompt: resolveReviewSystemPrompt(),
+      timeoutMs: readNumberEnv("AI_HTTP_TIMEOUT_MS", DEFAULT_AI_HTTP_TIMEOUT_MS),
+      fallbackPolicy: "permissive-json",
+      nonJsonFallback: buildReviewFallbackFromNonJsonText,
+      jsonOnlyHint: resolveUiLocale() === "en" ? "Return JSON only." : "请直接返回 JSON。",
+      runtime,
+      onFallback: logAiDebug,
+    });
   });
 
   const result = reviewResultSchema.parse(
@@ -156,55 +154,4 @@ function logAiDebug(event: string, metadata?: Record<string, unknown>): void {
   }
   const payload = metadata ? ` ${JSON.stringify(metadata)}` : "";
   console.info(`[pr-agent][ai] ${event}${payload}`);
-}
-
-async function analyzeWithOpenAI(params: {
-  provider: "openai" | "openai-compatible";
-  model: string;
-  prompt: string;
-  runtime: ModelRuntime;
-}): Promise<unknown> {
-  return callOpenAIJsonWithFallback({
-    provider: params.provider,
-    model: params.model,
-    prompt: params.prompt,
-    systemPrompt: resolveReviewSystemPrompt(),
-    timeoutMs: readNumberEnv("AI_HTTP_TIMEOUT_MS", DEFAULT_AI_HTTP_TIMEOUT_MS),
-    schemaName: "pr_review",
-    schema: reviewResultJsonSchema,
-    nonJsonFallback: buildReviewFallbackFromNonJsonText,
-    jsonOnlyHint: resolveUiLocale() === "en" ? "Return JSON only." : "请直接返回 JSON。",
-    runtime: params.runtime,
-    onFallback: logAiDebug,
-  });
-}
-
-async function analyzeWithAnthropic(params: {
-  model: string;
-  prompt: string;
-}): Promise<unknown> {
-  return callAnthropicJson({
-    model: params.model,
-    prompt: params.prompt,
-    systemPrompt: resolveReviewSystemPrompt(),
-    responseSchema: reviewResultJsonSchema,
-    onFallback: (event, metadata) => {
-      logAiDebug(event, metadata);
-    },
-  });
-}
-
-async function analyzeWithGemini(params: {
-  model: string;
-  prompt: string;
-}): Promise<unknown> {
-  return callGeminiJson({
-    model: params.model,
-    prompt: params.prompt,
-    systemPrompt: resolveReviewSystemPrompt(),
-    responseSchema: reviewResultJsonSchema,
-    onFallback: (event, metadata) => {
-      logAiDebug(event, metadata);
-    },
-  });
 }

@@ -6,7 +6,6 @@ import {
 } from "#core";
 import { parseJsonFromModelText } from "./json.js";
 import {
-  currentModelExecutionContext,
   currentModelAbortSignal,
   currentModelOutputLimit,
   estimateInputTokenUpperBound,
@@ -38,6 +37,8 @@ export async function callAnthropicJson(params: {
   maxOutputTokens?: number;
   signal?: AbortSignal;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
+  requestKind?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<unknown> {
   const apiKey = readOptionalStringEnv("ANTHROPIC_API_KEY");
   if (!apiKey) {
@@ -48,9 +49,7 @@ export async function callAnthropicJson(params: {
     timeoutMs:
       params.timeoutMs ??
       readNumberEnv("AI_HTTP_TIMEOUT_MS", 30_000),
-    retries: currentModelExecutionContext()
-      ? 0
-      : readNumberEnv("AI_HTTP_RETRIES", 2),
+    retries: 0,
     backoffMs: readNumberEnv("AI_HTTP_RETRY_BACKOFF_MS", 400),
   } as const;
 
@@ -71,11 +70,11 @@ export async function callAnthropicJson(params: {
       {
         provider: "anthropic",
         model: params.model,
-        requestKind: useTools ? "messages-tools" : "messages-plain",
+        requestKind: `${params.requestKind ? `${params.requestKind}:` : ""}${useTools ? "messages-tools" : "messages-plain"}`,
         requestHash: modelRequestHash(requestBody),
         inputTokenUpperBound: estimateInputTokenUpperBound(requestBody),
         maxOutputTokens: Number(requestBody.max_tokens),
-        metadata: { physicalAttempt },
+        metadata: { ...params.metadata, physicalAttempt },
       },
       async () => {
         const response = await fetchWithRetry(

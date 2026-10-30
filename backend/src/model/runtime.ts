@@ -16,7 +16,6 @@ import {
 import { resolveOpenAIApiKey } from "./configuration.js";
 import {
   currentModelAbortSignal,
-  currentModelExecutionContext,
   currentModelOutputLimit,
   currentOpenAiTokenParameter,
   estimateInputTokenUpperBound,
@@ -65,7 +64,7 @@ export function getModelConcurrencyStats(
 
 export function resolveOpenAIClient(params: {
   provider: "openai" | "openai-compatible";
-  timeoutMs: number;
+  timeoutMs?: number;
   runtime: ModelRuntime;
 }): OpenAI {
   const apiKey = resolveOpenAIApiKey(params.provider);
@@ -81,8 +80,8 @@ export function resolveOpenAIClient(params: {
   return params.runtime.clientCache.get({
     apiKey,
     baseURL,
-    timeout: params.timeoutMs,
-    maxRetries: currentModelExecutionContext() ? 0 : readNumberEnv("AI_HTTP_RETRIES", 2),
+    timeout: params.timeoutMs ?? readNumberEnv("AI_HTTP_TIMEOUT_MS", 30_000),
+    maxRetries: 0,
   });
 }
 
@@ -93,11 +92,17 @@ export async function requestOpenAICompletionText(params: {
   systemPrompt: string;
   prompt: string;
   responseFormat?: unknown;
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
+  requestKind: string;
+  metadata?: Record<string, unknown>;
 }): Promise<string> {
-  const maxOutputTokens = currentModelOutputLimit(Math.max(
-    1,
-    readNumberEnv("OPENAI_MAX_COMPLETION_TOKENS", 8_192),
-  ));
+  throwIfModelRequestAborted(params.signal);
+  const configuredMaximum = Math.max(1, readNumberEnv("OPENAI_MAX_COMPLETION_TOKENS", 8_192));
+  const requestedMaximum = params.maxOutputTokens === undefined
+    ? configuredMaximum
+    : positiveInteger(params.maxOutputTokens, "OpenAI output limit");
+  const maxOutputTokens = currentModelOutputLimit(Math.min(configuredMaximum, requestedMaximum));
   const request: Record<string, unknown> = {
     model: params.model,
     temperature: 0.2,
@@ -118,24 +123,18 @@ export async function requestOpenAICompletionText(params: {
     {
       provider: params.provider,
       model: params.model,
-      requestKind: typeof params.responseFormat === "undefined"
-        ? "chat-completion-raw"
-        : "chat-completion-structured",
+      requestKind: params.requestKind,
       requestHash: modelRequestHash(request),
-      inputTokenUpperBound: estimateInputTokenUpperBound(
-        params.systemPrompt,
-        params.prompt,
-        params.responseFormat,
-      ),
+      inputTokenUpperBound: estimateInputTokenUpperBound(request),
       maxOutputTokens,
-      metadata: { tokenParameter },
+      metadata: { ...params.metadata, tokenParameter },
     },
     async () => {
-      const modelSignal = currentModelAbortSignal();
-      const shutdownSignal = getHttpShutdownSignal();
+      const signal = combinedModelRequestSignal(params.signal);
+      signal.throwIfAborted();
       const response = await params.client.chat.completions.create(
         request as never,
-        { signal: modelSignal ? AbortSignal.any([shutdownSignal, modelSignal]) : shutdownSignal },
+        { signal },
       );
       return {
         value: response,
@@ -154,11 +153,16 @@ export async function callOpenAIJsonWithFallback(params: {
   model: string;
   prompt: string;
   systemPrompt: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   schemaName: string;
   schema: unknown;
-  nonJsonFallback: (text: string) => unknown;
-  jsonOnlyHint: string;
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
+  fallbackPolicy: "strict-structured" | "permissive-json";
+  nonJsonFallback?: (text: string) => unknown;
+  jsonOnlyHint?: string;
+  requestKind: string;
+  metadata?: Record<string, unknown>;
   runtime: ModelRuntime;
   onFallback?: (event: string, metadata: Record<string, unknown>) => void;
 }): Promise<unknown> {
@@ -174,16 +178,27 @@ export async function callOpenAIJsonWithFallback(params: {
         type: "json_schema",
         json_schema: { name: params.schemaName, strict: true, schema: params.schema },
       },
+      maxOutputTokens: params.maxOutputTokens,
+      signal: params.signal,
+      requestKind: `${params.requestKind}:json-schema`,
+      metadata: params.metadata,
     });
     return parseJsonFromModelText(text);
   } catch (error) {
-    if (params.provider !== "openai-compatible" || !shouldTryOpenAICompatibleFallback(error)) {
+    throwIfModelRequestAborted(params.signal);
+    if (isAbortError(error)) throw error;
+    const shouldFallback = params.fallbackPolicy === "strict-structured"
+      ? readErrorStatus(error) === 400
+      : shouldTryOpenAICompatibleFallback(error);
+    if (params.provider !== "openai-compatible" || !shouldFallback) {
       throw error;
     }
     params.onFallback?.("openai.json_schema.fallback_to_json_object", fallbackMetadata(params, error));
   }
 
-  const hintPrompt = `${params.prompt}\n\n${params.jsonOnlyHint}`;
+  const hintPrompt = params.jsonOnlyHint
+    ? `${params.prompt}\n\n${params.jsonOnlyHint}`
+    : params.prompt;
   try {
     const text = await requestOpenAICompletionText({
       client,
@@ -192,10 +207,17 @@ export async function callOpenAIJsonWithFallback(params: {
       systemPrompt: params.systemPrompt,
       prompt: hintPrompt,
       responseFormat: { type: "json_object" },
+      maxOutputTokens: params.maxOutputTokens,
+      signal: params.signal,
+      requestKind: `${params.requestKind}:json-object`,
+      metadata: params.metadata,
     });
     return parseJsonFromModelText(text);
   } catch (error) {
-    if (!shouldTryOpenAICompatibleFallback(error)) throw error;
+    throwIfModelRequestAborted(params.signal);
+    if (isAbortError(error)) throw error;
+    if (params.fallbackPolicy === "strict-structured" ||
+        !shouldTryOpenAICompatibleFallback(error)) throw error;
     params.onFallback?.("openai.json_object.fallback_to_raw", fallbackMetadata(params, error));
   }
 
@@ -205,6 +227,10 @@ export async function callOpenAIJsonWithFallback(params: {
     model: params.model,
     systemPrompt: params.systemPrompt,
     prompt: hintPrompt,
+    maxOutputTokens: params.maxOutputTokens,
+    signal: params.signal,
+    requestKind: `${params.requestKind}:raw`,
+    metadata: params.metadata,
   });
   try {
     return parseJsonFromModelText(text);
@@ -214,6 +240,7 @@ export async function callOpenAIJsonWithFallback(params: {
       provider: params.provider,
       model: params.model,
     });
+    if (!params.nonJsonFallback) throw error;
     return params.nonJsonFallback(text);
   }
 }
@@ -264,6 +291,32 @@ function shouldTryOpenAICompatibleFallback(error: unknown): boolean {
 function readErrorStatus(error: unknown): number | undefined {
   if (!error || typeof error !== "object" || !("status" in error)) return undefined;
   return typeof error.status === "number" ? error.status : undefined;
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function combinedModelRequestSignal(requestSignal?: AbortSignal): AbortSignal {
+  const signals = [
+    getHttpShutdownSignal(),
+    currentModelAbortSignal(),
+    requestSignal,
+  ].filter((signal): signal is AbortSignal => Boolean(signal));
+  return signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
+}
+
+function throwIfModelRequestAborted(requestSignal?: AbortSignal): void {
+  getHttpShutdownSignal().throwIfAborted();
+  currentModelAbortSignal()?.throwIfAborted();
+  requestSignal?.throwIfAborted();
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function normalizeOpenAIUsage(usage: {
