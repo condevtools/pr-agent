@@ -4,7 +4,6 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
@@ -19,14 +18,16 @@ import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
 import { RunWorker } from "../../src/agent-runtime/execution/run-worker.js";
 import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
 import { closeAgentRuntime } from "../../src/agent-runtime/runtime.js";
-import { runtimeVersionManifest, fingerprint } from "../../src/agent-runtime/versions.js";
-import { executeReviewRun } from "../../src/review/run.js";
+import { runtimeVersionManifest, fingerprint, verifierCapabilityHash } from "../../src/agent-runtime/versions.js";
+import { verificationResultIdentityHash } from "../../src/fix/verification/jobs.js";
+import { createWorkflowRegistry, workflowExecutor } from "../../src/agent-runtime/runtime/workflows.js";
 import type { ReviewRunInput } from "../../src/review/intake/run-input.js";
 import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { RunsService } from "../../src/http/runs/runs.service.js";
 import { FixesService } from "../../src/http/fixes/fixes.service.js";
 import { RunApiContextService } from "../../src/http/common/run-api-context.service.js";
 import { resolveModelConfiguration } from "../../src/model/configuration.js";
+import { prepareHarnessRuntimeRoles } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -106,13 +107,8 @@ if (!databaseUrl) {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("fixture did not bind");
     origin = `http://127.0.0.1:${address.port}`;
 
+    await prepareHarnessRuntimeRoles(adminPool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(adminPool);
-    const appRole = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
-    const roleDdl = await adminPool.query<{ sql: string }>(appRole.rowCount
-      ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql"
-      : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql",
-    [appPassword]);
-    await adminPool.query(roleDdl.rows[0]!.sql);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     process.env.HARNESS_DATABASE_URL = appUrl.toString();
     process.env.GITHUB_API_URL = origin; process.env.GITHUB_TOKEN = "local-read-token";
@@ -121,11 +117,6 @@ if (!databaseUrl) {
     process.env.HARNESS_MODEL_PRICING_JSON = pricing(); process.env.FIX_DEFAULT_POLICY_ID = "node-fixture";
     process.env.FIX_VERIFIER_SNAPSHOT_ROOT = snapshotRoot;
     const rawPolicy = policy(); process.env.FIX_POLICY_REGISTRY_JSON = JSON.stringify({ "node-fixture": rawPolicy });
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (configured.status !== 0) throw new Error(`runtime grant CLI failed: ${configured.stderr}`);
     appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); appDb = new RuntimeDatabase(appPool);
     binding = await bind();
     await seedAcceptedReview();
@@ -154,8 +145,9 @@ if (!databaseUrl) {
     const execution = new RunExecutionStore(appDb);
     const errors: unknown[] = [];
     const worker = new RunWorker({ store: execution, budget: new ModelBudgetStore(appDb), bindings: async () => [binding],
-      runtimeHash: async () => runtime, execute: executeReviewRun, onError: (error) => errors.push(error) }, 1);
-    const verifier = completeNextVerification(created.id);
+      runtimeHash: async () => runtime, execute: workflowExecutor(createWorkflowRegistry()),
+      onError: (error) => errors.push(error) }, 1);
+    const verifier = completeNextVerification(created.id, errors);
     await worker.tick(); await worker.drain(); await verifier;
     assert.equal((await execution.load(tenantId, created.id))?.status, "succeeded",
       errors.map((error) => error instanceof Error ? error.stack : String(error)).join("\n"));
@@ -175,11 +167,13 @@ if (!databaseUrl) {
     assert.equal(calls.filter(({ method, path }) => method === "POST" && path === "/v1/chat/completions").length, 1);
   });
 
-  async function completeNextVerification(runId: string): Promise<void> {
+  async function completeNextVerification(runId: string, workerErrors: unknown[]): Promise<void> {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const claim = await adminPool.query<{ id: string; tenant_id: string; proposal_hash: string; policy_hash: string;
-        image_digest: string; lease_epoch: string; proposal_json: FixProposal }>(
-        "SELECT * FROM pr_agent_harness.claim_verification_job($1,$2)", ["fixture-verifier", 60]);
+        image_digest: string; lease_epoch: string; verification_input_hash: string;
+        verifier_capability_hash: string; proposal_json: FixProposal }>(
+        "SELECT * FROM pr_agent_harness.claim_verification_job($1,$2,$3)",
+        ["fixture-verifier", 60, await verifierCapabilityHash()]);
       const row = claim.rows[0];
       if (row) {
         assert.equal(row.proposal_json.runId, runId);
@@ -188,13 +182,20 @@ if (!databaseUrl) {
           relevance: "unknown", logRefs: {}, logHashes: {}, imageDigest: row.image_digest,
           policyHash: row.policy_hash, proposalHash: row.proposal_hash };
         const completed = await adminPool.query<{ complete_verification_job: boolean }>(
-          "SELECT pr_agent_harness.complete_verification_job($1,$2,$3,$4,$5::jsonb,$6)",
-          [row.tenant_id,row.id,"fixture-verifier",Number(row.lease_epoch),JSON.stringify(result),fingerprint(result)]);
+          "SELECT pr_agent_harness.complete_verification_job($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)",
+          [row.tenant_id,row.id,"fixture-verifier",Number(row.lease_epoch),JSON.stringify(result),fingerprint(result),
+            row.verification_input_hash,row.verifier_capability_hash,
+            verificationResultIdentityHash(fingerprint(result), row.verification_input_hash, row.verifier_capability_hash)]);
         assert.equal(completed.rows[0]!.complete_verification_job, true); return;
       }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    throw new Error("verification job was not enqueued");
+    const diagnostic = await adminPool.query(
+      `SELECT r.status,r.error_code,
+        (SELECT count(*)::int FROM pr_agent_harness.verification_jobs j WHERE j.run_id=r.id) AS jobs
+       FROM pr_agent_harness.agent_runs r WHERE r.tenant_id=$1 AND r.id=$2`, [tenantId, runId]);
+    throw new Error(`verification job was not enqueued: ${JSON.stringify(diagnostic.rows)}\n${workerErrors.map((error) =>
+      error instanceof Error ? error.stack : String(error)).join("\n")}`);
   }
 
   async function bind(): Promise<PublicationBinding> {

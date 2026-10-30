@@ -1,6 +1,5 @@
 process.env.NODE_ENV = "test";
-const publicationMode = process.env.PR_AGENT_TEST_PUBLICATION_MODE ?? "postgres";
-if (publicationMode !== "postgres" && publicationMode !== "legacy") {
-  throw new Error("PR_AGENT_TEST_PUBLICATION_MODE must be postgres or legacy");
+if (process.env.PR_AGENT_TEST_PUBLICATION_MODE && process.env.PR_AGENT_TEST_PUBLICATION_MODE !== "postgres") {
+  throw new Error("PR_AGENT_TEST_PUBLICATION_MODE only supports postgres");
 }
-process.env.HARNESS_PUBLICATION_MODE = publicationMode;
+process.env.HARNESS_PUBLICATION_MODE = "postgres";

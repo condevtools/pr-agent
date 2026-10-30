@@ -83,12 +83,14 @@ test("OpenAI strict schemas require nullable optional fields and normalize null 
   try {
     const model = createStructuredModel({ configuration: { provider: "openai", model: "fixture" }, clientCache,
       concurrencyLimiter: createAiConcurrencyLimiter() });
-    const role = await model.generate({ schemaName: "role", jsonSchema: deepRoleTurnJsonSchema as unknown as Record<string, unknown>,
-      schema: deepRoleTurnResponseSchema, systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
-      maxInputBytes: 100_000, maxOutputTokens: 100 });
-    const critic = await model.generate({ schemaName: "critic", jsonSchema: deepCriticJsonSchema as unknown as Record<string, unknown>,
-      schema: deepCriticResponseSchema, systemPrompt: "system", prompt: "prompt", role: "critic", turn: 1,
-      maxInputBytes: 100_000, maxOutputTokens: 100 });
+    const { role, critic } = await withTestModelContext(async () => ({
+      role: await model.generate({ schemaName: "role", jsonSchema: deepRoleTurnJsonSchema as unknown as Record<string, unknown>,
+        schema: deepRoleTurnResponseSchema, systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
+        maxInputBytes: 100_000, maxOutputTokens: 100 }),
+      critic: await model.generate({ schemaName: "critic", jsonSchema: deepCriticJsonSchema as unknown as Record<string, unknown>,
+        schema: deepCriticResponseSchema, systemPrompt: "system", prompt: "prompt", role: "critic", turn: 1,
+        maxInputBytes: 100_000, maxOutputTokens: 100 }),
+    }));
 
     assert.deepEqual(role, { action: "finish", candidates: [{ severity: "medium", title: "Issue", body: "Body",
       location: { path: "src/a.ts", side: "new", startLine: 1, endLine: 1 },
@@ -133,11 +135,11 @@ test("OpenAI-compatible sends the exact schema in the system prompt for initial 
     return { id: "response", model: "compatible-fixture", choices: [{ message: { content: "{\"ok\":true}" } }] };
   } } } }) } as unknown as OpenAIClientCache;
   try {
-    const result = await createStructuredModel({ configuration: { provider: "openai-compatible", model: "fixture" },
+    const result = await withTestModelContext(() => createStructuredModel({ configuration: { provider: "openai-compatible", model: "fixture" },
       clientCache, concurrencyLimiter: createAiConcurrencyLimiter() }).generate({
       schemaName: "compatible", jsonSchema: schema, schema: z.object({ ok: z.boolean() }).strict(),
       systemPrompt: "trusted system", prompt: "unchanged user prompt", role: "security", turn: 1,
-      maxInputBytes: 10_000, maxOutputTokens: 100 });
+      maxInputBytes: 10_000, maxOutputTokens: 100 }));
     assert.deepEqual(result, { ok: true });
     assert.equal(requests.length, 2);
     for (const request of requests) {
@@ -166,10 +168,10 @@ test("OpenAI-compatible rejects invalid wrapper responses after schema prompting
   try {
     const model = createStructuredModel({ configuration: { provider: "openai-compatible", model: "fixture" },
       clientCache, concurrencyLimiter: createAiConcurrencyLimiter() });
-    await assert.rejects(model.generate({ schemaName: "role",
+    await assert.rejects(withTestModelContext(() => model.generate({ schemaName: "role",
       jsonSchema: deepRoleTurnJsonSchema as unknown as Record<string, unknown>, schema: deepRoleTurnResponseSchema,
       systemPrompt: "system", prompt: "prompt", role: "security", turn: 1,
-      maxInputBytes: 100_000, maxOutputTokens: 100 }), z.ZodError);
+      maxInputBytes: 100_000, maxOutputTokens: 100 })), z.ZodError);
   } finally {
     restoreEnv("OPENAI_COMPATIBLE_API_KEY", originalCompatibleKey);
     restoreEnv("OPENAI_BASE_URL", originalBaseUrl);
@@ -225,6 +227,14 @@ test("a queued deep model deadline removes its waiter before transport starts", 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+function withTestModelContext<T>(callback: () => Promise<T>): Promise<T> {
+  return withModelExecutionContext({
+    async execute(_intent, transport) {
+      return (await transport()).value;
+    },
+  }, callback);
 }
 
 function assertStrictObjectFields(schema: unknown): void {

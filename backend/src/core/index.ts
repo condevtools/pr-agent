@@ -5,7 +5,6 @@ export {
   type ExpiringCacheEntry,
 } from "./cache.js";
 export { ManualClock, nowMs, systemClock, type Clock } from "./time/clock.js";
-export { clearDuplicateRecord, isDuplicateRequest } from "./state/dedupe.js";
 export {
   parseBooleanEnv,
   readNumberEnv,
@@ -25,14 +24,11 @@ export {
 export { detectTextLocale, localizeText, resolveUiLocale, type UiLocale } from "./i18n/locale.js";
 export { logCore } from "./logging/logger.js";
 export { encodePath } from "./paths/encode-path.js";
-export { isRateLimited, normalizeRateLimitPart } from "./state/rate-limit.js";
 export {
-  assertRuntimeStateBackendReady,
-  deleteRuntimeStateValue,
-  loadRuntimeStateValue,
-  prepareRuntimeStateBackend,
-  resolveRuntimeStateBackend,
-  saveRuntimeStateValue,
+  deleteRefetchableCacheValue,
+  loadRefetchableCacheValue,
+  resolveRefetchableCacheBackend,
+  saveRefetchableCacheValue,
 } from "./state/registry.js";
 export {
   compileCustomSecretPatterns,

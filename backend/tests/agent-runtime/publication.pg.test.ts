@@ -15,6 +15,8 @@ import {
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
+import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -42,8 +44,10 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.publication_batch_operations, pr_agent_harness.run_publication_batches, pr_agent_harness.agent_runs TO ${roleName}`);
+    await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;
     appUrl.password = rolePassword;
@@ -111,7 +115,7 @@ if (!databaseUrl) {
     });
   });
 
-  test("an unlinked in-flight dispatch is not reconciled before its provider deadline", async () => {
+  test("a Run-linked in-flight dispatch is not reconciled before its provider deadline", async () => {
     const request = await createRequest("unlinked-dispatch-grace");
     const service = new PublicationService(store);
     let releaseDispatch!: () => void;
@@ -271,6 +275,10 @@ if (!databaseUrl) {
         buildPublicationIdentity({
           ...request,
           scope: { ...request.scope, revision: "new-head" },
+          executionLease: await createLease(
+            { ...request, scope: { ...request.scope, revision: "new-head" } },
+            "slot-new-head",
+          ),
         }),
       ),
       PublicationSlotConflictError,
@@ -321,12 +329,16 @@ if (!databaseUrl) {
           scope: { ...request.scope, authorityGeneration: 2 },
         }),
       ),
-      { name: "InactiveIntegrationBindingError" },
+      /execution lease does not match/,
     );
     const prepared = await store.prepareAndClaim(
       buildPublicationIdentity({
         ...request,
         scope: { ...request.scope, authorityGeneration: 3 },
+        executionLease: await createLease(
+          { ...request, scope: { ...request.scope, authorityGeneration: 3 } },
+          "authority-generation-3",
+        ),
       }),
     );
     assert.equal(prepared.action, "dispatch");
@@ -347,11 +359,12 @@ if (!databaseUrl) {
       `UPDATE pr_agent_harness.integration_bindings
        SET provider_repository_id=$3, provider_actor_id='900002',
            credential_ref='test-credential', publication_state='active',
-           publication_generation=1, quiescence_receipt='{"verified":true}'::jsonb
+           publication_generation=1, review_execution_mode='harness_async',
+           execution_mode_generation=1, quiescence_receipt='{"verified":true}'::jsonb
        WHERE tenant_id=$1 AND id=$2`,
       [tenantId, integrationId, String(nextProviderRepositoryId++)],
     );
-    return {
+    const request = {
       scope: {
         tenantId,
         integrationId,
@@ -365,5 +378,43 @@ if (!databaseUrl) {
       slot: "review-report",
       payload: { body: `review-${suffix}` },
     };
+    return { ...request, executionLease: await createLease(request, suffix) };
+  }
+
+  async function createLease(
+    request: { scope: { tenantId: string; integrationId: string; revision: string; authorityGeneration: number } },
+    suffix: string,
+  ): Promise<RunLease> {
+    const version = "a".repeat(64);
+    await controlRunStore.createRun({
+      tenantId: request.scope.tenantId,
+      integrationId: request.scope.integrationId,
+      actorType: "service",
+      actorId: "publication-test",
+      createScope: "test:publication:v1",
+      createKey: suffix,
+      requestHash: "b".repeat(64),
+      runType: "review",
+      baseSha: "base-sha",
+      headSha: request.scope.revision,
+      workflowVersionHash: version,
+      promptVersionHash: version,
+      modelVersionHash: version,
+      toolVersionHash: version,
+      policyVersionHash: version,
+      runtimeVersionHash: version,
+      input: { suffix },
+      authorityGeneration: request.scope.authorityGeneration,
+      executionModeGeneration: 1,
+      runtimeConfig: { maxRunMs: 60_000 },
+    });
+    const lease = await new RunExecutionStore(new RuntimeDatabase(adminPool)).claim({
+      tenantId: request.scope.tenantId,
+      integrationId: request.scope.integrationId,
+      authorityGeneration: request.scope.authorityGeneration,
+      executionModeGeneration: 1,
+    }, `publication-worker-${suffix}`, version);
+    assert.ok(lease);
+    return lease;
   }
 }

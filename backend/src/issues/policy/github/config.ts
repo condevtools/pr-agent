@@ -53,13 +53,11 @@ export interface ReviewPolicyConfig {
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
-  implementCommandEnabled: boolean;
   customPromptCommandEnabled: boolean;
   helpDocsCommandEnabled: boolean;
   analyzeCommandEnabled: boolean;
   complianceCommandEnabled: boolean;
   similarCodeCommandEnabled: boolean;
-  autoApproveCommandEnabled: boolean;
   scanRepoDiscussionsCommandEnabled: boolean;
   customRules: string[];
 }
@@ -112,13 +110,11 @@ const repoPolicyReviewSchema = z
     feedbackCommandEnabled: z.boolean().optional(),
     improveCommandEnabled: z.boolean().optional(),
     addDocCommandEnabled: z.boolean().optional(),
-    implementCommandEnabled: z.boolean().optional(),
     customPromptCommandEnabled: z.boolean().optional(),
     helpDocsCommandEnabled: z.boolean().optional(),
     analyzeCommandEnabled: z.boolean().optional(),
     complianceCommandEnabled: z.boolean().optional(),
     similarCodeCommandEnabled: z.boolean().optional(),
-    autoApproveCommandEnabled: z.boolean().optional(),
     scanRepoDiscussionsCommandEnabled: z.boolean().optional(),
     customRules: z.array(z.string()).optional(),
   })
@@ -176,13 +172,11 @@ export const defaultPolicyConfig: RepoPolicyConfig = {
     feedbackCommandEnabled: true,
     improveCommandEnabled: true,
     addDocCommandEnabled: true,
-    implementCommandEnabled: true,
     customPromptCommandEnabled: true,
     helpDocsCommandEnabled: true,
     analyzeCommandEnabled: true,
     complianceCommandEnabled: true,
     similarCodeCommandEnabled: true,
-    autoApproveCommandEnabled: false,
     scanRepoDiscussionsCommandEnabled: true,
     customRules: [],
   },
@@ -419,13 +413,11 @@ function normalizeRepoPolicyConfig(raw: Partial<RepoPolicyConfig>): RepoPolicyCo
       feedbackCommandEnabled: review.feedbackCommandEnabled !== false,
       improveCommandEnabled: review.improveCommandEnabled !== false,
       addDocCommandEnabled: review.addDocCommandEnabled !== false,
-      implementCommandEnabled: review.implementCommandEnabled !== false,
       customPromptCommandEnabled: review.customPromptCommandEnabled !== false,
       helpDocsCommandEnabled: review.helpDocsCommandEnabled !== false,
       analyzeCommandEnabled: review.analyzeCommandEnabled !== false,
       complianceCommandEnabled: review.complianceCommandEnabled !== false,
       similarCodeCommandEnabled: review.similarCodeCommandEnabled !== false,
-      autoApproveCommandEnabled: Boolean(review.autoApproveCommandEnabled),
       scanRepoDiscussionsCommandEnabled: review.scanRepoDiscussionsCommandEnabled !== false,
       customRules: normalizeStringList(review.customRules).slice(0, 30),
     },
@@ -687,13 +679,6 @@ function normalizeYamlReviewConfig(
       }
       continue;
     }
-    if (key === "implementcommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.implementCommandEnabled = bool;
-      }
-      continue;
-    }
     if (key === "custompromptcommandenabled") {
       const bool = coerceBoolean(rawValue);
       if (bool !== undefined) {
@@ -726,13 +711,6 @@ function normalizeYamlReviewConfig(
       const bool = coerceBoolean(rawValue);
       if (bool !== undefined) {
         target.similarCodeCommandEnabled = bool;
-      }
-      continue;
-    }
-    if (key === "autoapprovecommandenabled") {
-      const bool = coerceBoolean(rawValue);
-      if (bool !== undefined) {
-        target.autoApproveCommandEnabled = bool;
       }
       continue;
     }

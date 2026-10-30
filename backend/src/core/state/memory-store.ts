@@ -1,18 +1,17 @@
-import {
-  createEmptyRuntimeStateSnapshot,
-  type RuntimeStateEntry,
-  type RuntimeStateSnapshot,
-} from "./snapshot.js";
 import { nowMs } from "../time/clock.js";
 
-export class InMemoryRuntimeStateStore {
-  protected snapshot: RuntimeStateSnapshot;
+interface RefetchableCacheEntry { value: unknown; expiresAt: number; updatedAt: number }
+interface RefetchableCacheSnapshot { scopes: Record<string, Record<string, RefetchableCacheEntry>> }
+function emptySnapshot(): RefetchableCacheSnapshot { return { scopes: {} }; }
+
+export class InMemoryRefetchableCacheStore {
+  protected snapshot: RefetchableCacheSnapshot;
   private readonly scopeLastPruneAt = new Map<string, number>();
   private readonly pruneIntervalMs: number;
 
-  constructor(pruneIntervalMs: number, initialSnapshot?: RuntimeStateSnapshot) {
+  constructor(pruneIntervalMs: number, initialSnapshot?: RefetchableCacheSnapshot) {
     this.pruneIntervalMs = Math.max(1, Math.floor(pruneIntervalMs));
-    this.snapshot = initialSnapshot ?? createEmptyRuntimeStateSnapshot();
+    this.snapshot = initialSnapshot ?? emptySnapshot();
   }
 
   loadValue<T>(scope: string, key: string, now: number): T | undefined {
@@ -73,7 +72,7 @@ export class InMemoryRuntimeStateStore {
   }
 
   clearAll(): void {
-    this.snapshot = createEmptyRuntimeStateSnapshot();
+    this.snapshot = emptySnapshot();
     this.scopeLastPruneAt.clear();
     this.onStateChanged();
   }
@@ -82,7 +81,7 @@ export class InMemoryRuntimeStateStore {
     return Object.keys(this.snapshot.scopes[scope] ?? {}).length;
   }
 
-  protected getSnapshot(): RuntimeStateSnapshot {
+  protected getSnapshot(): RefetchableCacheSnapshot {
     return this.snapshot;
   }
 
@@ -90,12 +89,12 @@ export class InMemoryRuntimeStateStore {
     // no-op for memory backend
   }
 
-  private getOrCreateScope(scope: string): Record<string, RuntimeStateEntry> {
+  private getOrCreateScope(scope: string): Record<string, RefetchableCacheEntry> {
     const existing = this.snapshot.scopes[scope];
     if (existing) {
       return existing;
     }
-    const created: Record<string, RuntimeStateEntry> = {};
+    const created: Record<string, RefetchableCacheEntry> = {};
     this.snapshot.scopes[scope] = created;
     return created;
   }

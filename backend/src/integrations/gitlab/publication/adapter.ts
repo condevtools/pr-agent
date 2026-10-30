@@ -14,7 +14,6 @@ import { buildManagedCommentBody, buildManagedCommentMarker } from "../../../rev
 import { gitLabApiRequest } from "../api/http-client.js";
 import type { PublicationAdapterFactory, PublicationBatchCoordinator, PublicationBatchStore } from "../../../agent-runtime/publication/batches.js";
 import type { PublicationBinding } from "../../../agent-runtime/authority/publication-authority.js";
-import { isDurablePublicationEnabled } from "../../../agent-runtime/publication/mode.js";
 import { gitLabPublicationReconciliationGraceMs } from "../../../core/http/retry-options.js";
 
 const PAGE_SIZE = 100;
@@ -59,7 +58,7 @@ export async function publishGitLabNoteDurably(params: {
     managedTargetId: managedTarget?.id ?? null,
     managedTargetBodySha256: managedTarget?.bodySha256 ?? null,
   };
-  return publishOrPlan(params.runtime, request(params, payload), makeAdapter(params.token, undefined, undefined, payload));
+  return publishOrPlan(params.runtime, request(params, payload));
 }
 
 export async function publishGitLabDiscussionDurably(params: {
@@ -71,7 +70,7 @@ export async function publishGitLabDiscussionDurably(params: {
     body: params.body, position: params.position,
     revision: params.revision,
   };
-  return publishOrPlan(params.runtime, request(params, payload), makeAdapter(params.token, undefined, undefined, payload));
+  return publishOrPlan(params.runtime, request(params, payload));
 }
 
 export async function publishGitLabLabelsDurably(params: {
@@ -83,15 +82,12 @@ export async function publishGitLabLabelsDurably(params: {
     labels: [...new Set(params.labels)].sort(),
     revision: params.revision,
   };
-  return publishOrPlan(params.runtime, request(params, payload), makeAdapter(params.token, undefined, undefined, payload));
+  return publishOrPlan(params.runtime, request(params, payload));
 }
 
-function publishOrPlan(runtime: GitLabPublicationRuntime, publication: ReturnType<typeof request>, adapter: PublicationAdapter): Promise<PublicationResult> {
+function publishOrPlan(runtime: GitLabPublicationRuntime, publication: ReturnType<typeof request>): Promise<PublicationResult> {
   if (!runtime.planOperation) {
-    if (isDurablePublicationEnabled()) {
-      throw new Error("durable publication must be planned as a frozen batch operation");
-    }
-    return runtime.service.publish(publication, adapter);
+    throw new Error("durable publication must be planned as a frozen batch operation");
   }
   runtime.planOperation({ slot: publication.slot, payload: publication.payload });
   return Promise.resolve({ businessOperationId: "planned", marker: "", remoteId: "planned", reused: false, reconciled: false });

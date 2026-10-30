@@ -1,6 +1,6 @@
 import { readNumberEnv } from "../../core/config/env.js";
 import { nowMs } from "../../core/time/clock.js";
-import { loadRuntimeStateValue, saveRuntimeStateValue } from "../../core/state/registry.js";
+import { loadRefetchableCacheValue, saveRefetchableCacheValue } from "../../core/state/registry.js";
 
 export interface AskConversationTurn {
   question: string;
@@ -21,7 +21,7 @@ export function loadAskConversationTurns(sessionKey: string): AskConversationTur
 
   const now = nowMs();
   const turns =
-    loadRuntimeStateValue<AskConversationTurn[]>(ASK_SESSION_STATE_SCOPE, key, now) ?? [];
+    loadRefetchableCacheValue<AskConversationTurn[]>(ASK_SESSION_STATE_SCOPE, key, now) ?? [];
   return turns.map((turn) => ({ ...turn }));
 }
 
@@ -46,11 +46,11 @@ export function rememberAskConversationTurn(params: {
   );
 
   const current =
-    loadRuntimeStateValue<AskConversationTurn[]>(ASK_SESSION_STATE_SCOPE, key, now) ?? [];
+    loadRefetchableCacheValue<AskConversationTurn[]>(ASK_SESSION_STATE_SCOPE, key, now) ?? [];
   const next = [...current, { question, answer }];
   const trimmed = next.slice(Math.max(0, next.length - maxTurns));
 
-  saveRuntimeStateValue({
+  saveRefetchableCacheValue({
     scope: ASK_SESSION_STATE_SCOPE,
     key,
     value: trimmed,

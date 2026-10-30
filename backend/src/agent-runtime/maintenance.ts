@@ -335,8 +335,11 @@ async function scrubRunContent(
 
 async function administrativeIdentity(client: PoolClient): Promise<string> {
   const authority = await client.query<{ allowed: boolean; role_name: string }>(
-    `SELECT (r.rolsuper OR r.rolbypassrls) AS allowed,r.rolname AS role_name
-     FROM pg_roles r WHERE r.rolname=current_user`,
+    `SELECT (r.rolsuper OR r.rolbypassrls OR n.nspowner=r.oid) AS allowed,
+            r.rolname AS role_name
+     FROM pg_roles r
+     JOIN pg_namespace n ON n.nspname='pr_agent_harness'
+     WHERE r.rolname=current_user`,
   );
   if (!authority.rows[0]?.allowed) {
     throw new Error("Harness retention requires an administrative PostgreSQL role");

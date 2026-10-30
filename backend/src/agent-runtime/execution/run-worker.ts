@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { ZodError } from "zod";
 import { FixProposalFailedError } from "../../fix/proposal/run.js";
 import { EvolutionProposalFailedError } from "../../evolution/proposals/run.js";
 
 import type { PublicationBinding } from "../authority/publication-authority.js";
-import { createBudgetedModelExecutionContext, ModelBudgetExceededError, type ModelBudgetStore, type ModelExecutionPolicy } from "../budget/model-budget-store.js";
+import { createBudgetedModelExecutionContext, ModelBudgetExceededError, ModelCallConflictError,
+  type ModelBudgetStore, type ModelExecutionPolicy } from "../budget/model-budget-store.js";
 import { withModelExecutionContext } from "../../model/execution-context.js";
 import { PendingPublicationError, PublicationDefiniteFailureError, StalePublicationError } from "../publication/publication.js";
-import { RunCheckpointCompatibilityError, RunLeaseLostError, type RunLease, type RunStepKind } from "../runs/contracts.js";
+import { RunCheckpointCompatibilityError, RunExecutionContractError, RunLeaseLostError,
+  RunOutputLimitError, RunStepAttemptLimitError, RunStepConflictError,
+  type RunLease, type RunStepKind } from "../runs/contracts.js";
 import type { RunExecutionStore } from "./store.js";
 import { DeepReviewAnalysisFailedError, ReviewRunRevisionChangedError, withRunExecutionContext, type RunExecutionContext } from "./run-context.js";
 import { fingerprint, AGENT_RUNTIME_CONFIG } from "../versions.js";
@@ -133,12 +137,19 @@ export class RunWorker {
     const store = this.dependencies.store;
     let active = true;
     let heartbeating = false;
+    let leaseExpiresAt = Date.parse(lease.leaseExpiresAt);
     const heartbeat = setInterval(() => {
       if (heartbeating || !active || controller.signal.aborted) return;
       heartbeating = true;
-      void store.heartbeat(lease).catch((error: unknown) => {
-        controller.abort(error);
+      void store.heartbeat(lease).then((renewed) => {
+        leaseExpiresAt = Date.parse(renewed.leaseExpiresAt);
+      }).catch((error: unknown) => {
         this.dependencies.onError(error, lease.runId);
+        const safetyWindowMs = Math.max(1_000, AGENT_RUNTIME_CONFIG.heartbeatMs * 2);
+        if (error instanceof RunLeaseLostError || !Number.isFinite(leaseExpiresAt)
+            || leaseExpiresAt <= Date.now() + safetyWindowMs) {
+          controller.abort(error);
+        }
       }).finally(() => {
         heartbeating = false;
       });
@@ -202,9 +213,16 @@ export class RunWorker {
           )
           : await action();
         await assertActive();
-        const output = JSON.parse(JSON.stringify({ value: result })) as Record<string, unknown>;
-        if (Buffer.byteLength(JSON.stringify(output)) > AGENT_RUNTIME_CONFIG.maxCheckpointBytes) {
-          throw new Error("Run checkpoint exceeds its frozen size limit");
+        let output: Record<string, unknown>;
+        try {
+          output = JSON.parse(JSON.stringify({ value: result })) as Record<string, unknown>;
+        } catch (error) {
+          throw new RunExecutionContractError(`Run step output is not JSON-serializable: ${
+            error instanceof Error ? error.message : "unknown serialization error"}`);
+        }
+        const checkpointLimit = frozenCheckpointLimit(lease);
+        if (Buffer.byteLength(JSON.stringify(output)) > checkpointLimit) {
+          throw new RunOutputLimitError(checkpointLimit);
         }
         const state = { stage: key, stepId: step.id, outputHash: fingerprint(output) };
         await store.completeStep(lease, {
@@ -243,11 +261,21 @@ export class RunWorker {
       lease.input.workflow === "fix.publish.v1" ? undefined
         : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
     } catch (error) {
+      const abortReason = controller.signal.reason;
+      if (controller.signal.aborted && !(abortReason instanceof RunLeaseLostError)) {
+        try {
+          await store.relinquishSettledLease(lease,
+            this.stopped ? "worker_shutdown" : "heartbeat_lease_uncertain");
+        } catch (releaseError) {
+          if (!(releaseError instanceof RunLeaseLostError)) throw releaseError;
+        }
+        return;
+      }
       if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
       if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
         await store.retrySpecialJob(
           lease,
-          1_000,
+          retryBackoffMs(lease.jobAttempt),
           error instanceof Error ? error.name : "publication_outcome_retry",
         );
         this.dependencies.onError(error, lease.runId);
@@ -264,7 +292,8 @@ export class RunWorker {
         error instanceof EvolutionProposalFailedError ||
         error instanceof ModelBudgetExceededError ||
         error instanceof RunCheckpointCompatibilityError ||
-        lease.jobAttempt >= AGENT_RUNTIME_CONFIG.maxJobAttempts
+        isPermanentExecutionError(error) ||
+        lease.jobAttempt >= frozenMaxJobAttempts(lease)
       ) {
         await store.transition(lease, {
           to: "failed",
@@ -275,7 +304,7 @@ export class RunWorker {
         await store.transition(lease, {
           to: "retry_wait",
           reasonCode: error instanceof Error ? error.name : "review_retry",
-          retryDelayMs: 1_000,
+          retryDelayMs: retryBackoffMs(lease.jobAttempt),
         });
       }
       this.dependencies.onError(error, lease.runId);
@@ -289,6 +318,56 @@ export class RunWorker {
     }
   }
 }
+
+export function retryBackoffMs(
+  attempt: number,
+  random: () => number = Math.random,
+  initialMs = 1_000,
+  maximumMs = 60_000,
+): number {
+  if (!Number.isSafeInteger(attempt) || attempt < 1) {
+    throw new RunExecutionContractError("job attempt must be positive");
+  }
+  const base = Math.min(initialMs * 2 ** Math.max(0, attempt - 1), maximumMs);
+  const jitter = 0.75 + Math.max(0, Math.min(1, random())) * 0.5;
+  return Math.max(1, Math.min(maximumMs, Math.round(base * jitter)));
+}
+
+function frozenMaxJobAttempts(lease: RunLease): number {
+  const value = lease.runtimeConfig.maxJobAttempts;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new RunExecutionContractError("Run is missing its frozen maxJobAttempts contract");
+  }
+  return value;
+}
+
+function frozenCheckpointLimit(lease: RunLease): number {
+  const value = lease.runtimeConfig.maxCheckpointBytes;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new RunExecutionContractError("Run is missing its frozen maxCheckpointBytes contract");
+  }
+  return value;
+}
+
+function isPermanentExecutionError(error: unknown): boolean {
+  return error instanceof RunStepConflictError
+    || error instanceof RunStepAttemptLimitError
+    || error instanceof RunOutputLimitError
+    || error instanceof RunExecutionContractError
+    || error instanceof ModelCallConflictError
+    || error instanceof ZodError
+    || (error instanceof Error && PERMANENT_CONTRACT_MESSAGES.has(error.message));
+}
+
+const PERMANENT_CONTRACT_MESSAGES = new Set([
+  "Durable review binding or revision mismatch",
+  "Deep review identity does not match the fixed Run lease",
+  "fix verification does not match the immutable proposal policy",
+  "fix source does not match the fixed Run lease",
+  "unsupported model provider in pricing policy",
+  "OpenAI token parameter capability must be frozen in the pricing policy",
+  "model pricing policy hash mismatch",
+]);
 
 function claimBinding(binding: PublicationBinding) {
   return {

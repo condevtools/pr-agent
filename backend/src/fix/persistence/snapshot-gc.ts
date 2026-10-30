@@ -19,9 +19,10 @@ export async function collectFixSnapshots(input: {
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error("Invalid snapshot retention bounds");
   const cutoff = await input.db.trustedTransaction(async (client) => {
     const result = await client.query<{ admin: boolean; cutoff: Date }>(
-      `SELECT (rolsuper OR rolbypassrls) AS admin,
+      `SELECT (r.rolsuper OR r.rolbypassrls OR n.nspowner=r.oid) AS admin,
          clock_timestamp()-($1::integer*interval '1 day') AS cutoff
-       FROM pg_roles WHERE rolname=current_user`, [days]);
+       FROM pg_roles r JOIN pg_namespace n ON n.nspname='pr_agent_harness'
+       WHERE r.rolname=current_user`, [days]);
     if (!result.rows[0]?.admin) throw new Error("Snapshot retention requires an administrative PostgreSQL role");
     return result.rows[0].cutoff;
   });

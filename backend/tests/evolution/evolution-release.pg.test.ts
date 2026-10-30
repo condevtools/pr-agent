@@ -3,7 +3,6 @@ import "reflect-metadata";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { spawnSync } from "node:child_process";
 import test, { after, before } from "node:test";
 
 import { Module } from "@nestjs/common";
@@ -31,6 +30,7 @@ import { getModelExecutionPolicy, ModelBudgetStore } from "../../src/agent-runti
 import { resolveModelConfiguration } from "../../src/model/configuration.js";
 import { AgentRuntimeModule } from "../../src/http/runs/agent-runtime.module.js";
 import { EvolutionModule } from "../../src/http/evolution/evolution.module.js";
+import { prepareHarnessRuntimeRoles } from "../support/harness-runtime-roles.js";
 
 @Module({ imports: [AgentRuntimeModule, EvolutionModule] })
 class EvolutionReleaseTestModule {}
@@ -105,18 +105,8 @@ if (!databaseUrl) {
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-key";
     process.env.GITHUB_API_URL = origin; process.env.GITHUB_TOKEN = "local-read-token";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing();
+    await prepareHarnessRuntimeRoles(pool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(pool);
-    const role = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
-    const ddl = await pool.query<{ sql: string }>(role.rowCount
-      ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql"
-      : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql",
-    [appPassword]);
-    await pool.query(ddl.rows[0]!.sql);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (configured.status !== 0) throw new Error(`P3c runtime grants failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     process.env.HARNESS_DATABASE_URL = appUrl.toString();
     appPool = new Pool({ connectionString: appUrl.toString(), max: 12 }); db = new RuntimeDatabase(appPool);

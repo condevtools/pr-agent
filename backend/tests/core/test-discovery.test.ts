@@ -7,9 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  buildNodeTestArguments, discoverTests, isPostgresTestFile, LEGACY_PUBLICATION_PG_TESTS,
-  LEGACY_PUBLICATION_TESTS, parseTestRunnerRequest, partitionTestsByPublicationMode,
-  publicationModeForPostgresTest, selectTests, validateSuiteSelection,
+  buildNodeTestArguments, discoverTests, isPostgresTestFile,
+  parseTestRunnerRequest, publicationModeForPostgresTest, selectTests,
 } from "../../scripts/test-discovery.mjs";
 
 test("discovers nested tests in stable order while excluding support and fixtures", async () => {
@@ -80,26 +79,9 @@ test("a Node option value ending in .test.ts is not treated as a cross-suite fil
     hasExplicitSelection: false,
     tests: available,
   });
-  const partitioned = partitionTestsByPublicationMode(parsed.tests);
-  assert.doesNotThrow(() => validateSuiteSelection("legacy", parsed.hasExplicitSelection, partitioned));
-  assert.doesNotThrow(() => validateSuiteSelection("durable", parsed.hasExplicitSelection, partitioned));
-  assert.throws(
-    () => validateSuiteSelection("legacy", true, partitioned),
-    /Durable tests cannot run in the legacy suite/,
-  );
 });
 
-test("partitions only the explicit temporary legacy inventory out of durable tests", () => {
-  const legacy = LEGACY_PUBLICATION_TESTS[0]!;
-  assert.deepEqual(partitionTestsByPublicationMode([legacy, "core/test-discovery.test.ts"]), {
-    durable: ["core/test-discovery.test.ts"],
-    legacy: [legacy],
-  });
-  assert.equal(LEGACY_PUBLICATION_TESTS.includes("commands/command-authorization.test.ts"), false);
-});
-
-test("keeps new PostgreSQL tests durable unless explicitly inventoried as an old prototype", () => {
-  assert.deepEqual(LEGACY_PUBLICATION_PG_TESTS, []);
+test("all PostgreSQL tests use the durable publication mode", () => {
   assert.equal(publicationModeForPostgresTest("agent-runtime/publication.pg.test.ts"), "postgres");
   assert.equal(publicationModeForPostgresTest("agent-runtime/recovery.pg.test.ts"), "postgres");
   assert.equal(publicationModeForPostgresTest("agent-runtime/new-behavior.pg.test.ts"), "postgres");

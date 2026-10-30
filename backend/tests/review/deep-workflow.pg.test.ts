@@ -12,7 +12,6 @@ import { PublicationAuthorityStore, type PublicationBinding } from "../../src/ag
 import { DeepReviewEvidenceError, DeepReviewStore } from "../../src/review/deep/persistence/store.js";
 import { ModelBudgetStore, type ModelExecutionPolicy } from "../../src/agent-runtime/budget/model-budget-store.js";
 import { executeModelRequest, modelRequestHash } from "../../src/model/execution-context.js";
-import { PublicationBatchStore } from "../../src/agent-runtime/publication/batches.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
@@ -70,15 +69,10 @@ if (!databaseUrl) {
       credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });
     binding = await authority.transition({ tenantId, integrationId, expectedVersion: 1, action: "activate",
       actor: "deep-test", actorType: "service", quiescenceEvidence: "isolated deep workflow fixture" });
-    await new PublicationBatchStore(appDb).freeze({ executionModeGeneration: 0,
-      scope: { tenantId, integrationId, platform: "github", origin, repository, target: "pull:old", revision: "old-head",
-        authorityGeneration: binding.generation }, sourceKey: "preexisting-batch", sourceHash: hash("preexisting-batch"),
-      operations: [{ slot: "old-comment", payload: { body: "do not dispatch" } }] });
+    assert.equal(binding.reviewExecutionMode, "harness_async");
+    assert.equal(binding.reviewExecutionState, "active");
+    assert.equal(binding.executionModeGeneration, 1);
     publicationBaseline = await publicationCounts();
-    await adminPool.query(`UPDATE pr_agent_harness.integration_bindings
-      SET review_execution_mode='harness_async',review_execution_state='active',execution_mode_generation=1
-      WHERE tenant_id=$1 AND id=$2`, [tenantId, integrationId]);
-    binding = { ...binding, reviewExecutionMode: "harness_async", reviewExecutionState: "active", executionModeGeneration: 1 };
     const fixture = await enqueue("runtime-probe");
     runtimeHash = await runRuntimeHash(fixture);
     await cancelFixture(fixture);
@@ -186,7 +180,7 @@ if (!databaseUrl) {
     assert.ok(errors.some((error) => error instanceof Error && error.message === "fixture_after_artifact_commit"));
   });
 
-  test("zero-diff deep review remains shadow-only and never advances an old publication batch", async () => {
+  test("zero-diff deep review remains shadow-only and creates no publication operation", async () => {
     const runId = await enqueue("zero-diff");
     let artifact: DeepReviewArtifact | undefined;
     const worker = makeWorker(async (lease) => {
@@ -197,9 +191,9 @@ if (!databaseUrl) {
     assert.equal(artifact?.verdict, "no_findings");
     assert.equal(artifact?.publicationMode, "shadow");
     assert.deepEqual(await publicationCounts(), publicationBaseline);
-    const old = await appDb.transaction(tenantId, (client) => client.query<{ status: string; attempt_count: number }>(
+    const operations = await appDb.transaction(tenantId, (client) => client.query<{ status: string; attempt_count: number }>(
       "SELECT status,attempt_count FROM pr_agent_harness.repository_operations WHERE tenant_id=$1", [tenantId]));
-    assert.deepEqual(old.rows, [{ status: "prepared", attempt_count: 0 }]);
+    assert.deepEqual(operations.rows, []);
     assert.equal((await execution.load(tenantId, runId))?.status, "succeeded");
   });
 
@@ -402,8 +396,6 @@ async function grantRuntime(pool: Pool, role: string): Promise<void> {
       pr_agent_harness.skip_failed_batch_successors(uuid,uuid),
       pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
-      pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
-      pr_agent_harness.lock_resumable_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
       pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role};
     GRANT SELECT,INSERT,UPDATE ON pr_agent_harness.agent_steps,pr_agent_harness.step_attempts,

@@ -1,3 +1,4 @@
+import { RouteAccess } from "../../common/route-access.js";
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
 
@@ -11,8 +12,10 @@ export class EvaluationsController {
 
   @Post()
   @HttpCode(202)
+  @RouteAccess("evaluations:create")
   create(@Req() request: Request, @Body() body: unknown) { return this.service.create(request, body); }
 
   @Get(":id")
+  @RouteAccess("evaluations:read")
   read(@Req() request: Request, @Param("id") id: string) { return this.service.read(request, id); }
 }

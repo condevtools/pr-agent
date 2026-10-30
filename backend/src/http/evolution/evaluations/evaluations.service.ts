@@ -5,7 +5,7 @@ import { z } from "zod";
 import { admitEvaluation } from "../../../evolution/evaluations/intake.js";
 import { PgEvolutionEvaluationStore } from "../../../evolution/evaluations/store.js";
 import { RunControlError } from "../../../agent-runtime/runs/control-contracts.js";
-import { getAgentRuntimeServices } from "../../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { RunApiContextService } from "../../common/run-api-context.service.js";
 
 @Injectable()

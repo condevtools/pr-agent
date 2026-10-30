@@ -7,7 +7,7 @@ import {
 } from "./candidate-contracts.js";
 import { reviewStrategyTextJsonSchema, reviewStrategyTextSchema } from "../../review/strategy/contracts.js";
 import { PgEvolutionCandidateStore } from "./candidate-store.js";
-import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 
 const MODEL_STEP_KEY = "evolution.proposal.model";
 

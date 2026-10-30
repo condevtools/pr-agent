@@ -120,6 +120,28 @@ if (!databaseUrl) {
     assert.ok(timing.rows[0]!.delay_ms >= 900 && timing.rows[0]!.delay_ms <= 1_000);
   });
 
+  test("source build hash is persisted as explicit audit metadata and never as compatibility", async () => {
+    const unavailable = await createFixture("audit-unavailable");
+    const unavailableConfig = await adminPool.query<{ audit: Record<string, unknown> }>(
+      "SELECT runtime_config_json->'audit' AS audit FROM pr_agent_harness.agent_runs WHERE id=$1",
+      [unavailable.runId],
+    );
+    assert.deepEqual(unavailableConfig.rows[0]?.audit,
+      { sourceHash: null, sourceHashAvailability: "unavailable" });
+
+    const sourceAuditHash = hash("full-server-build");
+    const created = await runStore.createRun({ ...unavailable.input,
+      createKey: "audit-available", requestHash: hash("audit-available"), sourceAuditHash });
+    const availableConfig = await adminPool.query<{ audit: Record<string, unknown> }>(
+      "SELECT runtime_config_json->'audit' AS audit FROM pr_agent_harness.agent_runs WHERE id=$1",
+      [created.id],
+    );
+    assert.deepEqual(availableConfig.rows[0]?.audit,
+      { sourceHash: sourceAuditHash, sourceHashAvailability: "available" });
+    assert.equal((await storeA.claim(unavailable.binding, "audit-worker", unavailable.runtimeHash))?.runId,
+      unavailable.runId);
+  });
+
   test("expired leases fence late writes and a replacement reuses the logical step", async () => {
     const fixture = await createFixture("lease-fencing");
     const first = (await storeA.claim(fixture.binding, "old-worker", fixture.runtimeHash))!;
@@ -265,12 +287,70 @@ if (!databaseUrl) {
     assert.equal((await storeA.load(cancelled.binding.tenantId, cancelled.runId))?.status, "cancelled");
   });
 
-  test("a queued Run pinned to another runtime is explicitly dead-lettered", async () => {
+  test("an incompatible worker leaves the queued Run and job byte-for-byte claimable", async () => {
     const fixture = await createFixture("runtime-mismatch");
+    const before = (await adminPool.query(
+      `SELECT r.status,r.version,r.execution_attempt_count,r.error_code,
+              j.status AS job_status,j.attempt_count,j.claimed_run_epoch,j.last_error_code
+       FROM pr_agent_harness.agent_runs r
+       JOIN pr_agent_harness.job_queue j ON j.tenant_id=r.tenant_id AND j.run_id=r.id
+       WHERE r.id=$1`, [fixture.runId])).rows[0];
     assert.equal(await storeA.claim(fixture.binding, "wrong-runtime", hash("new-runtime")), undefined);
-    const snapshot = await storeA.load(fixture.binding.tenantId, fixture.runId);
-    assert.equal(snapshot?.status, "failed");
-    assert.equal(snapshot?.errorCode, "runtime_version_incompatible");
+    const backlog = await storeA.compatibilityBacklog(fixture.binding, hash("new-runtime"));
+    assert.equal(backlog.queuedRuns, 1);
+    assert.deepEqual(backlog.runtimeVersionHashes, [fixture.runtimeHash]);
+    assert.ok(backlog.oldestQueuedAt);
+    const after = (await adminPool.query(
+      `SELECT r.status,r.version,r.execution_attempt_count,r.error_code,
+              j.status AS job_status,j.attempt_count,j.claimed_run_epoch,j.last_error_code
+       FROM pr_agent_harness.agent_runs r
+       JOIN pr_agent_harness.job_queue j ON j.tenant_id=r.tenant_id AND j.run_id=r.id
+       WHERE r.id=$1`, [fixture.runId])).rows[0];
+    assert.deepEqual(after, before);
+    assert.ok(await storeB.claim(fixture.binding, "compatible-runtime", fixture.runtimeHash));
+  });
+
+  test("a checkpointed Run waits for its compatible worker without clearing saved results", async () => {
+    const fixture = await createFixture("checkpoint-runtime-wait");
+    const first = (await storeA.claim(fixture.binding, "old-runtime", fixture.runtimeHash))!;
+    const step = await storeA.beginStep(first, {
+      stepKey: "review", kind: "model", inputHash: hash("frozen-input"),
+    });
+    await storeA.completeStep(first, completion(step.id, step.attemptId, "saved-result"));
+    await storeA.transition(first, { to: "retry_wait", retryDelayMs: 1, reasonCode: "rollout" });
+    await adminPool.query("SELECT pg_sleep(0.01)");
+    assert.equal(await storeB.claim(fixture.binding, "new-runtime", hash("incompatible-runtime")), undefined);
+    const compatible = (await storeA.claim(fixture.binding, "old-runtime-replacement", fixture.runtimeHash))!;
+    const reused = await storeA.beginStep(compatible, {
+      stepKey: "review", kind: "model", inputHash: hash("frozen-input"),
+    });
+    assert.equal(reused.reused, true);
+    assert.deepEqual(reused.output, { value: "saved-result" });
+  });
+
+  test("three graceful rolling stops return the lease without spending attempt budget", async () => {
+    const fixture = await createFixture("graceful-rollout", { maxJobAttempts: 2 });
+    for (let rollout = 0; rollout < 3; rollout += 1) {
+      const lease = (await storeA.claim(fixture.binding, `worker-${rollout}`, fixture.runtimeHash))!;
+      await storeA.beginStep(lease, {
+        stepKey: "long-running-step", kind: "model", inputHash: hash("stable-step-input"),
+      });
+      await storeA.relinquishSettledLease(lease);
+      const state = (await adminPool.query<{
+        status: string; execution_attempt_count: number; job_status: string; attempt_count: number;
+      }>(`SELECT r.status,r.execution_attempt_count,j.status AS job_status,j.attempt_count
+           FROM pr_agent_harness.agent_runs r
+           JOIN pr_agent_harness.job_queue j ON j.tenant_id=r.tenant_id AND j.run_id=r.id
+           WHERE r.id=$1`, [fixture.runId])).rows[0]!;
+      assert.deepEqual(state, { status: "queued", execution_attempt_count: 0,
+        job_status: "ready", attempt_count: 0 });
+    }
+    const finalLease = await storeB.claim(fixture.binding, "post-rollout-worker", fixture.runtimeHash);
+    assert.equal(finalLease?.jobAttempt, 1);
+    const resumed = await storeB.beginStep(finalLease!, {
+      stepKey: "long-running-step", kind: "model", inputHash: hash("stable-step-input"),
+    });
+    assert.equal(resumed.attemptNumber, 4);
   });
 
   async function createFixture(

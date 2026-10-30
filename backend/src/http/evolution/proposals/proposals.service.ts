@@ -6,7 +6,7 @@ import { evolutionProposalRequestSchema } from "../../../evolution/proposals/can
 import { PgEvolutionCandidateStore } from "../../../evolution/proposals/candidate-store.js";
 import { admitEvolutionProposalRun } from "../../../evolution/proposals/intake.js";
 import { requireRunPermission, type RunPrincipal } from "../../../agent-runtime/runs/control-contracts.js";
-import { getAgentRuntimeServices } from "../../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { RunApiContextService } from "../../common/run-api-context.service.js";
 
 @Injectable()

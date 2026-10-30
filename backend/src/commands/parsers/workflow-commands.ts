@@ -2,7 +2,6 @@ const SIMILAR_ISSUE_COMMAND_RE =
   /^\/(?:similar[_-]?issue|ai-review\s+similar[_-]?issue)(?:\s+([\s\S]+))?\s*$/i;
 const FEEDBACK_COMMAND_RE =
   /^\/(?:feedback|ai-review\s+feedback)\s+(resolved|dismissed|up|down)(?:\s+([\s\S]+))?\s*$/i;
-const IMPLEMENT_COMMAND_RE = /^\/(?:implement|ai-review\s+implement)\s*$/i;
 const SCAN_REPO_DISCUSSIONS_COMMAND_RE =
   /^\/(?:scan[_-]?repo[_-]?discussions|ai-review\s+scan[_-]?repo[_-]?discussions)\s*$/i;
 
@@ -46,10 +45,6 @@ export function parseFeedbackCommand(rawBody: string): {
     action,
     note: matched[2]?.trim() ?? "",
   };
-}
-
-export function parseImplementCommand(rawBody: string): { matched: boolean } {
-  return { matched: IMPLEMENT_COMMAND_RE.test(rawBody.trim()) };
 }
 
 export function parseScanRepoDiscussionsCommand(rawBody: string): { matched: boolean } {

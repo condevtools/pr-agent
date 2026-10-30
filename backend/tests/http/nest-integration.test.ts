@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 import "reflect-metadata";
 
@@ -50,19 +51,27 @@ test("nestjs controllers expose health/metrics and validate webhook payloads", a
   const gitlabHealth = await gitlabController.health();
   assert.equal(gitlabHealth.ok, true);
 
-  await assert.rejects(
-    () =>
-      githubController.trigger(
-        {
-          body: {},
-          rawBody: "{}",
-        } as never,
-        {
-          "content-type": "application/json",
-        },
-      ),
-    /missing x-github-event header/i,
-  );
+  const previousSecret = process.env.GITHUB_WEBHOOK_SECRET;
+  process.env.GITHUB_WEBHOOK_SECRET = "test-webhook-secret";
+  try {
+    await assert.rejects(
+      () =>
+        githubController.trigger(
+          {
+            body: {},
+            rawBody: "{}",
+          } as never,
+          {
+            "content-type": "application/json",
+            "x-hub-signature-256": `sha256=${createHmac("sha256", "test-webhook-secret").update("{}").digest("hex")}`,
+          },
+        ),
+      /missing x-github-event header/i,
+    );
+  } finally {
+    if (previousSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
+    else process.env.GITHUB_WEBHOOK_SECRET = previousSecret;
+  }
 
   await assert.rejects(
     () =>

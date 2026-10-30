@@ -1,3 +1,4 @@
+import { RouteAccess } from "../../common/route-access.js";
 import {
   Controller,
   Get,
@@ -8,7 +9,7 @@ import {
   Req,
 } from "@nestjs/common";
 
-import { BadWebhookRequestError, readOptionalStringEnv } from "#core";
+import { readOptionalStringEnv } from "#core";
 import type { GitLabWebhookBody } from "../../../integrations/gitlab/webhooks/contracts.js";
 import {
   GitlabWebhookService,
@@ -21,19 +22,25 @@ import {
 } from "../../system/health.js";
 import { incrementMetricCounter } from "../../system/metrics-runtime.js";
 import {
-  assertWebhookReplayAuthorized,
   getStoredWebhookEventById,
-  scheduleWebhookEventRecord,
+  recordWebhookEvent,
+  replayNotFound,
   resolveStoredWebhookReplayPayload,
+  resolveWebhookReplayScope,
+  VerifiedWebhookHandlingError,
 } from "../replay/store.js";
 import { readHeaderValue, readRawBody, safeJsonStringify } from "../../common/webhook-utils.js";
 import type { RawBodyRequest } from "../../common/types/raw-body-request.js";
+import { RunApiContextService } from "../../common/run-api-context.service.js";
+import { requireRunPermission } from "../../../agent-runtime/runs/control-contracts.js";
 
 @Controller("gitlab")
 export class GitlabWebhookController {
-  constructor(private readonly gitlabWebhookService: GitlabWebhookService) {}
+  constructor(private readonly gitlabWebhookService: GitlabWebhookService,
+    private readonly context: RunApiContextService) {}
 
   @Get("health")
+  @RouteAccess("public")
   health(@Query("deep") deep?: string): Promise<HealthStatus> {
     const requiresSecret = shouldRequireGitLabWebhookSecret();
     const webhookConfigured =
@@ -49,6 +56,7 @@ export class GitlabWebhookController {
   }
 
   @Post("trigger")
+  @RouteAccess("signed-webhook")
   async trigger(
     @Req() request: RawBodyRequest,
     @Headers() headers: Record<string, string | string[] | undefined>,
@@ -70,44 +78,47 @@ export class GitlabWebhookController {
         platform: "gitlab",
         result: "ok",
       });
-      scheduleWebhookEventRecord({
-        platform: "gitlab",
-        eventName,
-        headers,
-        payload: request.body as GitLabWebhookBody | undefined,
-        rawBody:
-          readRawBody(request.rawBody) ??
-          (typeof request.body === "undefined"
-            ? undefined
-            : safeJsonStringify(request.body, "")),
-      });
+      const scope = await resolveWebhookReplayScope("gitlab", request.body);
+      if (scope) await recordWebhookEvent({ scope, eventName, headers, payload: request.body,
+        rawBody: readRawBody(request.rawBody) ?? safeJsonStringify(request.body, ""),
+        outcome: "succeeded", outcomeCode: "handled" });
       return result;
     } catch (error) {
       incrementMetricCounter("pr_agent_webhook_results_total", {
         platform: "gitlab",
         result: "error",
       });
+      if (error instanceof VerifiedWebhookHandlingError) {
+        const scope = await resolveWebhookReplayScope("gitlab", request.body);
+        if (scope) await recordWebhookEvent({ scope, eventName, headers, payload: request.body,
+          rawBody: readRawBody(request.rawBody) ?? safeJsonStringify(request.body, ""), outcome: "failed",
+          outcomeCode: error.cause instanceof Error ? error.cause.name : "handler_error" });
+        throw error.cause;
+      }
       throw error;
     }
   }
 
   @Post("replay/:eventId")
+  @RouteAccess("replay:execute")
   async replay(
     @Param("eventId") eventId: string,
+    @Req() request: RawBodyRequest,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
-    assertWebhookReplayAuthorized(headers);
+    const principal = this.context.authenticate(request);
+    requireRunPermission(principal, "replay:execute");
     const event = await getStoredWebhookEventById({
-      id: eventId,
+      principal, id: eventId,
       platform: "gitlab",
     });
     if (!event) {
-      throw new BadWebhookRequestError(`webhook replay event not found: ${eventId}`);
+      throw replayNotFound(eventId);
     }
 
     const payload = resolveStoredWebhookReplayPayload(event);
     if (!payload || typeof payload !== "object") {
-      throw new BadWebhookRequestError(`replay payload is invalid for event: ${eventId}`);
+      throw replayNotFound(eventId);
     }
 
     const replayHeaders: Record<string, string> = {

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { RunControlError } from "../../agent-runtime/runs/control-contracts.js";
 import { reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
-import { publicationRuntimeForBinding } from "../../agent-runtime/runtime.js";
+import { publicationRuntimeForBinding } from "../../agent-runtime/runtime/publication.js";
 import { createRestBackedOctokit } from "../../integrations/github/api/http-client.js";
 import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
 

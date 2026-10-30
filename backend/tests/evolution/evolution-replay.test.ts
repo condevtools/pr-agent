@@ -6,6 +6,8 @@ import type { DatasetFixtureV1 } from "../../src/evolution/datasets/contracts.js
 import { ReplayFixtureAdapter } from "../../src/evolution/evaluations/fixture-adapter.js";
 import { replayRunInputSchema } from "../../src/evolution/evaluations/contracts.js";
 import { scoreReplayArtifact } from "../../src/evolution/evaluations/scorer.js";
+import { parseCollectedFixture } from "../../src/evolution/evaluations/run.js";
+import { RunExecutionContractError } from "../../src/agent-runtime/runs/contracts.js";
 
 test("replay input rejects caller URLs, provider seeds and arbitrary fields", () => {
   const base = { schemaVersion: 1, workflow: "eval.replay.v1", evaluationId: id(1), resultId: id(2),
@@ -23,6 +25,19 @@ test("fixture adapter returns only frozen files and CI without a network capabil
   assert.equal(Buffer.from((await adapter.readFile("src/a.ts"))!.bytes).toString(), "export const a = 1;");
   assert.equal(await adapter.readFile("src/missing.ts"), undefined);
   assert.deepEqual(await adapter.readCiStatus(), [{ name: "test", status: "completed" }]);
+});
+
+test("malformed frozen replay collections fail with a permanent execution contract error", () => {
+  const validFile = { newPath: "src/a.ts", oldPath: "src/a.ts", status: "modified", patch: "",
+    additions: 0, deletions: 0, extendedDiff: "", oldLinesWithNumber: [], newLinesWithNumber: [] };
+  for (const fixture of [
+    { input: {}, files: "invalid" },
+    { input: {}, files: [null] },
+    { input: {}, files: [{ ...validFile, patch: 1 }] },
+    { input: {}, files: [{ ...validFile, oldLinesWithNumber: [["not-a-line", "value"]] }] },
+  ]) {
+    assert.throws(() => parseCollectedFixture(fixture as Record<string, unknown>), RunExecutionContractError);
+  }
 });
 
 test("scorer includes every accepted finding and flags high-severity false positives", () => {

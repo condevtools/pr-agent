@@ -30,7 +30,7 @@ GitLab FixRun 可生成建议，但发布明确禁用。其 [Commit API](https:/
 
 ## Docker 配置
 
-PostgreSQL 已在根 `docker-compose.yml`。`harness-migrate` 管理迁移和最小权限；旧 volume 在提供 `HARNESS_VERIFIER_PASSWORD` 时可安全自举 verifier role。web 容器没有 Docker socket；可选 `verifier` profile 的控制器有 socket 和独立 PG 凭据，没有 provider/model 凭据。
+PostgreSQL 已在根 `docker-compose.yml`。一次性 `database-init` 使用受限的 `pr_agent_migrator` 管理迁移和版本化最小授权；四个数据库角色密码都必须显式配置。旧 volume 不能由迁移 CLI 自动改变角色，必须先按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 执行显式 bootstrap。web 容器没有 Docker socket；可选 `verifier` profile 的控制器有 socket 和独立 PG 凭据，没有 provider/model 凭据。
 
 构建 sandbox：`docker build --target verifier-sandbox -t pr-agent-fix-sandbox .`。通过 `docker image inspect pr-agent-fix-sandbox --format '{{.Id}}'` 获取不可变 image ID，在服务端 policy 使用该 SHA-256。镜像必须预先存在，运行时 `--pull never`。运行 profile：`docker compose --profile verifier up -d`。
 

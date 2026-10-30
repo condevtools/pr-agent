@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { RunApiAuthenticator } from "../../src/http/common/run-auth.js";
 import test from "node:test";
 
 import type { ServerResponse } from "node:http";
@@ -128,6 +129,36 @@ test("shutdown closes active responses and rejects new streams", async () => {
   await assert.rejects(hub.open(principal, runId, undefined, new FakeResponse().asResponse()), (error: unknown) =>
     error instanceof RunControlError && error.code === "SHUTTING_DOWN" && error.status === 503);
 });
+
+for (const firstExpires of [false, true]) {
+  test(`same-subject streams retain individual credential expiry (first expires=${firstExpires})`, async (t) => {
+    let now = Date.now();
+    t.mock.method(Date, "now", () => now);
+    const records = ["first", "second"].map((token, index) => ({ ...principal,
+      tokenSha256: createHash("sha256").update(token).digest("hex"),
+      expiresAt: new Date(now + ((index === 0) === firstExpires ? 1000 : 60_000)).toISOString() }));
+    const auth = new RunApiAuthenticator(JSON.stringify(records));
+    const first = auth.authenticate("Bearer first"), second = auth.authenticate("Bearer second");
+    let emit = false;
+    const hub = new RunEventStreamHub({ events: async () => emit
+      ? { ...page(3, [{ sequence: 3, type: "run.changed" }], "running"), highWater: `${runId}:3` }
+      : page(0, [], "running") } as never, options(), (candidate) => auth.assertCurrent(candidate));
+    const responses = [new FakeResponse(), new FakeResponse()];
+    try {
+      await hub.open(first, runId, undefined, responses[0]!.asResponse());
+      await hub.open(second, runId, undefined, responses[1]!.asResponse());
+      await settle();
+      now += 1500; emit = true;
+      await hub.poll();
+      const expired = responses[firstExpires ? 0 : 1]!;
+      const current = responses[firstExpires ? 1 : 0]!;
+      assert.equal(expired.ended, true);
+      assert.doesNotMatch(expired.body, /event: run.changed/);
+      assert.equal(current.ended, false);
+      assert.match(current.body, /event: run.changed/);
+    } finally { await hub.stop(); }
+  });
+}
 
 function page(after: number, events: Array<{ sequence: number; type: string }>, status: string): RunEventPage {
   return {

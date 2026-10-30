@@ -1,3 +1,4 @@
+import { RouteAccess } from "../../common/route-access.js";
 import { Body, Controller, Headers, HttpCode, Inject, Param, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
 
@@ -11,6 +12,7 @@ export class EvolutionFeedbackController {
 
   @Post(":id/feedback")
   @HttpCode(201)
+  @RouteAccess("feedback:create")
   feedback(@Req() request: Request, @Param("id") id: string,
     @Headers("idempotency-key") key: string | undefined, @Body() body: unknown) {
     return this.service.feedback(this.service.authenticate(request), id, key, body);
@@ -18,6 +20,7 @@ export class EvolutionFeedbackController {
 
   @Post(":id/annotations")
   @HttpCode(201)
+  @RouteAccess("annotations:create")
   annotate(@Req() request: Request, @Param("id") id: string,
     @Headers("idempotency-key") key: string | undefined, @Body() body: unknown) {
     return this.service.annotate(this.service.authenticate(request), id, key, body);
@@ -25,6 +28,7 @@ export class EvolutionFeedbackController {
 
   @Post(":id/annotations/arbitrate")
   @HttpCode(201)
+  @RouteAccess("annotations:arbitrate")
   arbitrate(@Req() request: Request, @Param("id") id: string,
     @Headers("idempotency-key") key: string | undefined, @Body() body: unknown) {
     return this.service.arbitrate(this.service.authenticate(request), id, key, body);

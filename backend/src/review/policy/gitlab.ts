@@ -1,4 +1,4 @@
-import { loadRuntimeStateValue, nowMs, readNumberEnv, saveRuntimeStateValue } from "#core";
+import { loadRefetchableCacheValue, nowMs, readNumberEnv, saveRefetchableCacheValue } from "#core";
 import type { ReviewMode } from "#review";
 import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
 import { parseReviewPolicyOverridesFromConfigText } from "./parser.js";
@@ -26,13 +26,11 @@ export interface GitLabReviewPolicy {
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
-  implementCommandEnabled: boolean;
   customPromptCommandEnabled: boolean;
   helpDocsCommandEnabled: boolean;
   analyzeCommandEnabled: boolean;
   complianceCommandEnabled: boolean;
   similarCodeCommandEnabled: boolean;
-  autoApproveCommandEnabled: boolean;
   scanRepoDiscussionsCommandEnabled: boolean;
   customRules: string[];
 }
@@ -57,13 +55,11 @@ const defaultGitLabReviewPolicy: GitLabReviewPolicy = {
   feedbackCommandEnabled: true,
   improveCommandEnabled: true,
   addDocCommandEnabled: true,
-  implementCommandEnabled: true,
   customPromptCommandEnabled: true,
   helpDocsCommandEnabled: true,
   analyzeCommandEnabled: true,
   complianceCommandEnabled: true,
   similarCodeCommandEnabled: true,
-  autoApproveCommandEnabled: false,
   scanRepoDiscussionsCommandEnabled: true,
   customRules: [],
 };
@@ -77,7 +73,7 @@ export async function resolveGitLabReviewPolicy(params: {
 }): Promise<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }> {
   const cacheKey = `${params.baseUrl}:${params.projectId}@${params.ref}`;
   const now = nowMs();
-  const cached = loadRuntimeStateValue<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }>(
+  const cached = loadRefetchableCacheValue<{ policy: GitLabReviewPolicy; hasConfigFile: boolean }>(
     GITLAB_POLICY_CACHE_SCOPE,
     cacheKey,
     now,
@@ -113,7 +109,7 @@ export async function resolveGitLabReviewPolicy(params: {
         ],
       };
   const resolved = { policy, hasConfigFile };
-  saveRuntimeStateValue({
+  saveRefetchableCacheValue({
     scope: GITLAB_POLICY_CACHE_SCOPE,
     key: cacheKey,
     value: resolved,
@@ -171,8 +167,6 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
       overrides.improveCommandEnabled ?? basePolicy.improveCommandEnabled,
     addDocCommandEnabled:
       overrides.addDocCommandEnabled ?? basePolicy.addDocCommandEnabled,
-    implementCommandEnabled:
-      overrides.implementCommandEnabled ?? basePolicy.implementCommandEnabled,
     customPromptCommandEnabled:
       overrides.customPromptCommandEnabled ?? basePolicy.customPromptCommandEnabled,
     helpDocsCommandEnabled:
@@ -183,8 +177,6 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
       overrides.complianceCommandEnabled ?? basePolicy.complianceCommandEnabled,
     similarCodeCommandEnabled:
       overrides.similarCodeCommandEnabled ?? basePolicy.similarCodeCommandEnabled,
-    autoApproveCommandEnabled:
-      overrides.autoApproveCommandEnabled ?? basePolicy.autoApproveCommandEnabled,
     scanRepoDiscussionsCommandEnabled:
       overrides.scanRepoDiscussionsCommandEnabled ?? basePolicy.scanRepoDiscussionsCommandEnabled,
     customRules: normalizePolicyStringList(overrides.customRules, 30),

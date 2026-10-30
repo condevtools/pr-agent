@@ -5,7 +5,7 @@ import { getModelExecutionPolicy } from "../../agent-runtime/budget/model-budget
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
 import { requireRunPermission, runConflict, runNotFound, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { createRunInTransaction } from "../../agent-runtime/postgres/run-store.js";
-import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 import { approveFixApprovalInTransaction, createApprovalInTransaction, PgFixApprovalStore, revokeApprovalInTransaction } from "../../fix/approval/store.js";
 import type { FixArtifact } from "../../fix/contracts.js";

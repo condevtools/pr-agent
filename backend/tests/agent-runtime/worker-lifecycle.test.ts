@@ -4,9 +4,11 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 
 import type { PublicationBinding } from "../../src/agent-runtime/authority/publication-authority.js";
 import type { ModelBudgetStore } from "../../src/agent-runtime/budget/model-budget-store.js";
-import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
+import { RunLeaseLostError, type RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import type { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
-import { RunWorker } from "../../src/agent-runtime/execution/run-worker.js";
+import { currentRunExecutionContext } from "../../src/agent-runtime/execution/run-context.js";
+import { retryBackoffMs, RunWorker } from "../../src/agent-runtime/execution/run-worker.js";
+import { z } from "zod";
 
 test("an old attempt finishing its heartbeat cannot remove the replacement task from drain tracking", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
@@ -16,7 +18,7 @@ test("an old attempt finishing its heartbeat cannot remove the replacement task 
   let claimed = 0;
   let ready = true;
   let started = 0;
-  const lease = { runId: "same-run", runtimeVersionHash: "runtime", jobAttempt: 1 } as RunLease;
+  const lease = workerLease("same-run");
   const store = {
     claimPublicationOutcome: async () => undefined,
     claimManualResume: async () => undefined,
@@ -61,6 +63,203 @@ test("an old attempt finishing its heartbeat cannot remove the replacement task 
   await drain;
   await worker.stop();
 });
+
+test("retry backoff is exponential, bounded, and jittered deterministically", () => {
+  assert.equal(retryBackoffMs(1, () => 0), 750);
+  assert.equal(retryBackoffMs(2, () => 0.5), 2_000);
+  assert.equal(retryBackoffMs(20, () => 1), 60_000);
+});
+
+test("shutdown waits for abort cleanup before returning the settled lease", async () => {
+  const cleanup = deferred();
+  const started = deferred();
+  let relinquished = false;
+  let claimed = false;
+  const lease = workerLease("shutdown-run");
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    relinquishSettledLease: async () => { relinquished = true; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    const signal = currentRunExecutionContext()!.signal!;
+    started.resolve();
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await cleanup.promise;
+    signal.throwIfAborted();
+  }));
+  await worker.tick();
+  await started.promise;
+  let stopped = false;
+  const stopping = worker.stop().then(() => { stopped = true; });
+  await nextTurn();
+  assert.equal(stopped, false);
+  assert.equal(relinquished, false, "lease cannot move while abort cleanup may still write");
+  cleanup.resolve();
+  await stopping;
+  assert.equal(relinquished, true);
+});
+
+test("shutdown requeues after an abort-aware action finishes normally at the barrier", async () => {
+  const cleanup = deferred();
+  const started = deferred();
+  let relinquished = 0;
+  let claimed = false;
+  const lease = workerLease("shutdown-normal-return");
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    relinquishSettledLease: async () => { relinquished += 1; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    const signal = currentRunExecutionContext()!.signal!;
+    started.resolve();
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    await cleanup.promise;
+    // Some HTTP clients resolve a response while cancellation is racing. The
+    // worker's post-action assertActive barrier must still hand the lease back.
+  }));
+  await worker.tick();
+  await started.promise;
+  const stopping = worker.stop();
+  await nextTurn();
+  assert.equal(relinquished, 0);
+  cleanup.resolve();
+  await stopping;
+  assert.equal(relinquished, 1);
+});
+
+test("a transient heartbeat failure is tolerated while the lease has a safe validity window", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const finish = deferred();
+  const started = deferred();
+  let heartbeatCalls = 0;
+  let transitioned = "";
+  let claimed = false;
+  const lease = workerLease("heartbeat-run", 120_000);
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    heartbeat: async () => {
+      heartbeatCalls += 1;
+      if (heartbeatCalls === 1) throw new Error("temporary database timeout");
+      return lease;
+    },
+    transition: async (_lease, input) => { transitioned = input.to; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    const signal = currentRunExecutionContext()!.signal!;
+    started.resolve();
+    await finish.promise;
+    assert.equal(signal.aborted, false);
+  }));
+  await worker.tick();
+  await started.promise;
+  t.mock.timers.tick(15_000);
+  await nextTurn();
+  finish.resolve();
+  await worker.drain();
+  assert.equal(transitioned, "succeeded");
+  await worker.stop();
+});
+
+test("an authoritative heartbeat lease loss aborts the action without a stale write", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  let claimed = false;
+  let transitioned = false;
+  let relinquished = false;
+  const started = deferred();
+  const lease = workerLease("lease-lost-run");
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    heartbeat: async () => { throw new RunLeaseLostError(lease.runId); },
+    transition: async () => { transitioned = true; },
+    relinquishSettledLease: async () => { relinquished = true; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    const signal = currentRunExecutionContext()!.signal!;
+    started.resolve();
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    signal.throwIfAborted();
+  }));
+  await worker.tick();
+  await started.promise;
+  t.mock.timers.tick(15_000);
+  await worker.drain();
+  assert.equal(transitioned, false);
+  assert.equal(relinquished, false, "a stale owner must not attempt to release a lease it lost");
+  await worker.stop();
+});
+
+test("deterministic schema errors fail once instead of entering retry_wait", async () => {
+  let claimed = false;
+  let transitioned = "";
+  const lease = workerLease("schema-run");
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    transition: async (_lease, input) => { transitioned = input.to; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    z.object({ required: z.string() }).parse({});
+  }));
+  await worker.tick();
+  await worker.drain();
+  assert.equal(transitioned, "failed");
+  await worker.stop();
+});
+
+test("frozen binding contract mismatches are permanent", async () => {
+  let claimed = false;
+  let transitioned = "";
+  const lease = workerLease("binding-contract-run");
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    transition: async (_lease, input) => { transitioned = input.to; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => {
+    throw new Error("Durable review binding or revision mismatch");
+  }));
+  await worker.tick();
+  await worker.drain();
+  assert.equal(transitioned, "failed");
+  await worker.stop();
+});
+
+function workerLease(runId: string, validForMs = 120_000): RunLease {
+  return {
+    tenantId: "tenant", runId, integrationId: "integration", jobId: `job-${runId}`,
+    jobKind: "start", owner: "owner", epoch: 1, jobAttempt: 1,
+    authorityGeneration: 1, executionModeGeneration: 1,
+    deadlineAt: new Date(Date.now() + 300_000).toISOString(), baseSha: "base", headSha: "head",
+    workflowVersionHash: "workflow", promptVersionHash: "prompt", modelVersionHash: "model",
+    toolVersionHash: "tool", policyVersionHash: "policy", runtimeVersionHash: "runtime",
+    input: { workflow: "review.single.v1" }, limits: {},
+    runtimeConfig: { maxJobAttempts: 3, maxCheckpointBytes: 4 * 1024 * 1024 },
+    leaseExpiresAt: new Date(Date.now() + validForMs).toISOString(),
+  };
+}
+
+function workerStore(overrides: Partial<RunExecutionStore>): RunExecutionStore {
+  return {
+    claimPublicationOutcome: async () => undefined,
+    claimManualResume: async () => undefined,
+    claim: async () => undefined,
+    latestCheckpoint: async () => undefined,
+    withLease: async (_lease: RunLease, action: () => Promise<unknown>) => action(),
+    heartbeat: async (lease: RunLease) => lease,
+    transition: async () => undefined,
+    relinquishSettledLease: async () => undefined,
+    ...overrides,
+  } as unknown as RunExecutionStore;
+}
+
+function workerDependencies(store: RunExecutionStore, execute: () => Promise<void>) {
+  return {
+    store,
+    budget: { closeRunBudgetInTransaction: async () => "closed" } as unknown as ModelBudgetStore,
+    bindings: async () => [{ reviewExecutionMode: "harness_async" } as PublicationBinding],
+    runtimeHash: async () => "runtime",
+    execute,
+    onError: () => undefined,
+  };
+}
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
   let resolve!: () => void;

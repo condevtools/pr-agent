@@ -118,9 +118,30 @@ export class RunStepConflictError extends Error {
   }
 }
 
+export class RunStepAttemptLimitError extends Error {
+  constructor(readonly stepKey: string) {
+    super(`run step attempt limit exhausted: ${stepKey}`);
+    this.name = "RunStepAttemptLimitError";
+  }
+}
+
 export class RunCheckpointCompatibilityError extends Error {
   constructor(readonly runId: string) {
     super(`run checkpoint is incompatible with the requested runtime: ${runId}`);
     this.name = "RunCheckpointCompatibilityError";
+  }
+}
+
+export class RunOutputLimitError extends Error {
+  constructor(readonly limitBytes: number) {
+    super(`run checkpoint exceeds its frozen ${limitBytes}-byte size limit`);
+    this.name = "RunOutputLimitError";
+  }
+}
+
+export class RunExecutionContractError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunExecutionContractError";
   }
 }

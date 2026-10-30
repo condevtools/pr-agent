@@ -5,10 +5,11 @@ import {
 } from "@nestjs/common";
 import { HttpAdapterHost } from "@nestjs/core";
 import type { Express, RequestHandler } from "express";
-import { createNodeMiddleware, createProbot } from "probot";
+import { createNodeMiddleware } from "probot";
 import { readOptionalStringEnv } from "#core";
 
 import { app as githubApp } from "../probot-app.js";
+import { getSharedGitHubProbot } from "../../agent-runtime/runtime/credentials.js";
 
 @Injectable()
 export class GithubAppBootstrapService implements OnModuleInit {
@@ -30,7 +31,7 @@ export class GithubAppBootstrapService implements OnModuleInit {
       return;
     }
 
-    const probot = createProbot();
+    const probot = getSharedGitHubProbot();
     const middleware = createNodeMiddleware(githubApp, {
       probot,
       webhooksPath: "/api/github/webhooks",

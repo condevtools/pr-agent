@@ -10,15 +10,10 @@ import { executeDeepReviewRun } from "./deep/run.js";
 import type { PublicationBinding } from "../agent-runtime/authority/publication-authority.js";
 import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import { reviewRunInputSchema } from "./intake/run-input.js";
-import { publicationRuntimeForBinding } from "../agent-runtime/runtime.js";
-import { executeFixProposalRun } from "../fix/proposal/run.js";
+import { publicationRuntimeForBinding } from "../agent-runtime/runtime/publication.js";
 
 /** The production worker reuses the same collectors, analyzer, renderers and publisher. */
 export async function executeReviewRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
-  if (lease.input.workflow === "fix.propose.v1") {
-    await executeFixProposalRun(lease, binding);
-    return;
-  }
   const input = reviewRunInputSchema.parse(lease.input);
   if (lease.tenantId !== binding.tenantId || lease.integrationId !== binding.id
       || input.platform !== binding.platform

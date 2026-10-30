@@ -2,34 +2,30 @@
 
 数据库仍由根目录 `docker-compose.yml` 提供。API、Run worker 和 publication recovery 在现有后端进程中运行；PostgreSQL 是任务、执行权、事件、预算和外部写入事实的权威。当前没有跨服务消息投递需求，因此没有再引入 Redis、Kafka 或第二套任务队列。每个 API 实例都能从持久事件游标恢复 SSE；内存只负责本实例的连接分发。
 
-## 按仓库启用与回滚
+## 按仓库暂停与恢复
 
-Publication authority 管理能否发布；execution authority 管理评审调度。两者分别排空，避免停止新任务时连正在执行的 Run 也无法完成发布。
+Publication authority 管理能否发布；execution authority 管理评审调度。生产绑定固定使用持久异步执行，不支持运行时模式切换。两种 authority 仍分别排空，避免停止新任务时连正在执行的 Run 也无法完成发布。
 
 对已完成 publication enrollment 的单个测试 integration，先运行 `inspect` 获取当前 version，再执行：
 
 ```sh
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js execution-drain \
+docker compose run --rm database-init node dist/agent-runtime/cli.js execution-drain \
   --tenant <tenant-uuid> --id <integration-uuid> --version <current-version> \
   --evidence '<verified rollout/change record>'
-
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js execution-switch \
-  --tenant <tenant-uuid> --id <integration-uuid> --version <version-returned-by-drain> \
-  --mode harness_async --evidence '<fault/backup/capacity evidence and allowlist decision>'
 ```
 
-这些命令不会全局启用异步评审。每次操作只修改指定绑定，需要管理数据库角色和 version CAS，并记录操作者与证据。证据是管理员声明，不能替代真实部署和验收。
+该命令只暂停指定绑定的新 intake，需要管理数据库角色和 version CAS，并记录操作者与证据。证据是管理员声明，不能替代真实部署和验收。
 
 Draining 阻止新 intake 和普通 claim。已取得租约的 Run 可以完成冻结和发布；特殊人工恢复与发布结局处理可继续收敛。切换要求该绑定没有非终态 Run，也没有 `prepared/in_flight/unknown/manual_review` publication。待领取、重试、人工等待任务需要先处理或通过 Run API 取消；不能直接删除数据库记录。取消后的外部未知效果仍须对账。
 
-如果需要撤销排空，执行 `execution-resume --tenant … --id … --version … --evidence …`。它恢复原模式，不改变 execution generation。切回同步分析使用同样的 drain/switch 流程，将 `--mode` 改为 `legacy_sync`；发布仍经过持久账和相同权限边界。
+如果需要撤销排空，执行 `docker compose run --rm database-init node dist/agent-runtime/cli.js execution-resume --tenant … --id … --version … --evidence …`。它恢复该绑定的异步 intake，不改变 execution generation。
 
-每次成功切换递增 execution generation。迟到的旧 legacy 分析不能冻结新批次，dispatch 领取也在同一数据库事务中校验模式和 generation。旧 sealed batch 被 async Run 复用前，必须校验固定 SHA、关联唯一 Run 并提交 publication checkpoint。其他 Run 不能偷偷占用同一 batch。
+dispatch 领取在同一数据库事务中校验异步模式和 generation。旧 sealed batch 被 Run 复用前，必须校验固定 SHA、关联唯一 Run 并提交 publication checkpoint。其他 Run 不能偷偷占用同一 batch。
 
 ## 状态诊断
 
 ```sh
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js metrics \
+docker compose run --rm database-init node dist/agent-runtime/cli.js metrics \
   --tenant <tenant-uuid> --id <integration-uuid>
 ```
 
@@ -52,10 +48,10 @@ docker compose run --rm harness-migrate node dist/agent-runtime/cli.js metrics \
 保留操作使用管理数据库角色，默认选择 30 天前终结的 Run，最小 7 天，单批最多 1,000 个。先查看候选，再由管理员按既定数据策略执行：
 
 ```sh
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js retention \
+docker compose run --rm database-init node dist/agent-runtime/cli.js retention \
   --tenant <tenant-uuid> --action preview --days 30 --limit 100
 
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js retention \
+docker compose run --rm database-init node dist/agent-runtime/cli.js retention \
   --tenant <tenant-uuid> --action apply --days 30 --limit 100
 ```
 
@@ -66,6 +62,34 @@ Apply 会删除候选的旧事件前缀，清除 Run 输入、Step 输出、chec
 此策略不删除 publication 的冻结 payload、外部平台评论或数据库备份，也不是全仓库数据擦除接口。它没有配置自动定时删除；备份保存期、磁盘加密、外部效果审计与平台内容删除需要部署方分别管理。
 
 ## 备份、恢复和前滚
+
+### 旧 volume 角色升级
+
+本节只适用于旧版以 `POSTGRES_USER=pr_agent_migrator` 首次创建、且数据库名为 `pr_agent` 的 volume。脚本不会自动运行。执行前必须完成数据库备份、验证可恢复性，并停止 `pr-agent`、verifier 和其他 writer。旧 schema 及其中对象必须仍由 `pr_agent_migrator` 拥有；如果不是，脚本会中止，不能用 `REASSIGN OWNED` 绕过人工复核。
+
+先把 `.env.example` 中四个数据库密码替换为互不相同的随机值。然后从终端安全读取旧 migrator 密码；下列命令只把密码作为环境变量传入容器，不放在命令参数或 SQL 文件中：
+
+```sh
+docker compose stop pr-agent
+docker compose --profile verifier stop verifier
+docker compose up -d --no-deps postgres
+
+read -rsp 'Current legacy pr_agent_migrator password: ' PGPASSWORD
+export PGPASSWORD
+printf '\n'
+docker compose exec -T -e PGPASSWORD postgres \
+  psql -X --no-psqlrc -v ON_ERROR_STOP=1 \
+  -U pr_agent_migrator -d pr_agent \
+  < docker/postgres/upgrade-runtime-roles.sql
+unset PGPASSWORD
+
+docker compose run --rm database-init node dist/agent-runtime/cli.js migrate
+docker compose up -d pr-agent
+```
+
+脚本先创建或轮换受密码保护的 `postgres` bootstrap 管理角色、`pr_agent_app` 和 `pr_agent_verifier`，再为所有已有 FORCE RLS 表安装 schema-owner maintenance policy；最后在 `SET ROLE postgres` 后把 `pr_agent_migrator` 降为 `NOSUPERUSER NOBYPASSRLS NOCREATEROLE`。这样迁移 021 的数据回填发生在降权后，但仍受明确 owner policy 授权。脚本限定数据库名和 namespace owner，保留现有数据与对象所有权，可安全重复执行；任何前置条件不符都必须停止并调查。
+
+迁移成功后检查 `docker compose ps`、`docker compose logs database-init` 和 `/ready`。不要删除 volume 来“修复”角色或迁移失败，也不要把 bootstrap 密码交给应用服务。
 
 ```sh
 npm --prefix backend run test:harness:backup
@@ -91,7 +115,7 @@ npm --prefix backend run test:harness:backup
 | cancel 与 finish 并发、死信重驱幂等 | `agent-runtime/crash-recovery.pg.test.ts`：重驱以新 Run + parent link 实现，原终态保留 |
 | 人工决定版本竞争、权限撤销、重复 resume | `agent-runtime/run-commands.pg.test.ts`、`agent-runtime/control.pg.test.ts` |
 | 多 coordinator、特殊 job 重试上限、终态外部观察 | `agent-runtime/publication-outcome.pg.test.ts` |
-| legacy/async 切换、迟到 freeze、原子 dispatch fence | `agent-runtime/execution-rollout.pg.test.ts`、provider replay 测试 |
+| 异步 drain/resume、迟到 freeze、原子 dispatch fence | `agent-runtime/execution-rollout.pg.test.ts`、provider replay 测试 |
 | RLS 与连接复用、共享预算争抢 | Run store/query、model budget PG suites |
 | SSE 补历史、隐藏事件游标、慢消费者与权限撤销 | `http/sse.test.ts`、API/query suites、容量工具 |
 | retention 与 operation revive 并发 | `agent-runtime/maintenance.pg.test.ts` |

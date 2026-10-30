@@ -115,6 +115,8 @@ if (!databaseUrl) {
       GRANT SELECT, INSERT ON pr_agent_harness.run_events,
         pr_agent_harness.audit_logs TO ${roleName};
       GRANT SELECT, INSERT ON pr_agent_harness.publication_command_receipts TO ${roleName};
+      GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.review_incremental_cursors TO ${roleName};
+      GRANT SELECT ON pr_agent_harness.review_feedback_signals TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(
         uuid, uuid, text, text, text, bigint) TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${roleName};

@@ -21,6 +21,8 @@ import {
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
+import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -56,13 +58,14 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}, ${runtimeRoleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.publication_batch_operations,
       pr_agent_harness.run_publication_batches, pr_agent_harness.agent_runs TO ${roleName}`);
+    await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT ON pr_agent_harness.publication_command_receipts TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.repository_operations, pr_agent_harness.publication_command_receipts TO ${runtimeRoleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(uuid, uuid, text, text, text, bigint) TO ${roleName}`);
-    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resolvable_publication_authority(uuid, uuid, bigint) TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
 
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;
@@ -249,6 +252,7 @@ if (!databaseUrl) {
 
   test("active recovery claim fences manual decisions and advances the required version", async () => {
     const fixture = await createOperation("recovery-fence", true);
+    await expireRunLease(fixture.request.executionLease!);
     const before = (await operationStore.get(
       fixture.request.scope.tenantId,
       fixture.operationId,
@@ -300,6 +304,7 @@ if (!databaseUrl) {
 
   test("an authorized receipt replay survives a later active recovery claim", async () => {
     const fixture = await createOperation("receipt-recovery-replay", true);
+    await expireRunLease(fixture.request.executionLease!);
     const operation = (await operationStore.get(
       fixture.request.scope.tenantId,
       fixture.operationId,
@@ -340,6 +345,7 @@ if (!databaseUrl) {
 
   test("expired recovery claim no longer blocks a version-current manual decision", async () => {
     const fixture = await createOperation("recovery-expired", true);
+    await expireRunLease(fixture.request.executionLease!);
     const binding = {
       id: fixture.request.scope.integrationId,
       tenantId: fixture.request.scope.tenantId,
@@ -492,6 +498,7 @@ if (!databaseUrl) {
       `
         UPDATE pr_agent_harness.integration_bindings
         SET publication_state = 'active', publication_generation = 1,
+            review_execution_mode = 'harness_async', execution_mode_generation = 1,
             provider_repository_id = $3, provider_actor_id = $4,
             credential_ref = 'env:GITHUB_TOKEN',
             quiescence_receipt = '{"approved":true}'::jsonb
@@ -513,6 +520,7 @@ if (!databaseUrl) {
       slot: "review-report",
       payload: { body: `control-${suffix}` },
     };
+    if (claim) request.executionLease = await createLease(request, suffix);
     const identity = buildPublicationIdentity(request);
     if (claim) {
       await operationStore.prepareAndClaim(identity);
@@ -521,6 +529,48 @@ if (!databaseUrl) {
       await db.transaction(tenantId, (client) => preparePublicationInTransaction(client, identity));
     }
     return { request, identity, operationId: identity.businessOperationId };
+  }
+
+  async function createLease(request: PublicationRequest, suffix: string): Promise<RunLease> {
+    const version = "a".repeat(64);
+    await controlRunStore.createRun({
+      tenantId: request.scope.tenantId,
+      integrationId: request.scope.integrationId,
+      actorType: "service",
+      actorId: "control-test",
+      createScope: "test:publication-control:v1",
+      createKey: suffix,
+      requestHash: "b".repeat(64),
+      runType: "review",
+      baseSha: "base-sha",
+      headSha: request.scope.revision,
+      workflowVersionHash: version,
+      promptVersionHash: version,
+      modelVersionHash: version,
+      toolVersionHash: version,
+      policyVersionHash: version,
+      runtimeVersionHash: version,
+      input: { suffix },
+      authorityGeneration: request.scope.authorityGeneration!,
+      executionModeGeneration: 1,
+      runtimeConfig: { maxRunMs: 60_000 },
+    });
+    const lease = await new RunExecutionStore(new RuntimeDatabase(adminPool)).claim({
+      tenantId: request.scope.tenantId,
+      integrationId: request.scope.integrationId,
+      authorityGeneration: request.scope.authorityGeneration!,
+      executionModeGeneration: 1,
+    }, `control-worker-${suffix}`, version);
+    assert.ok(lease);
+    return lease;
+  }
+
+  async function expireRunLease(lease: RunLease): Promise<void> {
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs SET lease_expires_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND id=$2`,
+      [lease.tenantId, lease.runId],
+    );
   }
 
   async function makeUnknownAndOld(tenantId: string, operationId: string): Promise<void> {

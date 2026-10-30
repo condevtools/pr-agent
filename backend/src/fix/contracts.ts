@@ -167,6 +167,7 @@ export interface VerificationJobInput {
   sourceBundleRef: string;
   sourceBundleHash: string;
   policyHash: string;
+  verifierCapabilityHash: string;
   verificationInputHash: string;
   trustedCommandHash: string;
   dependencyLockHash: string;

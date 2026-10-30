@@ -1,40 +1,31 @@
-import { createHash } from "node:crypto";
 import { assertRunActive, assertReviewRunRevision, currentRunLease, durableReviewAnalysis, durableReviewCollection } from "../../../agent-runtime/execution/run-context.js";
 import { shouldQueueReview } from "../../intake/run-intake.js";
 import { enqueueGitHubReview } from "../../intake/provider-intake.js";
 import {
-  clearDuplicateRecord,
   ensureError,
-  isDuplicateRequest,
   localizeText,
+  readNumberEnv,
   readOptionalStringEnv,
   resolveUiLocale,
 } from "#core";
-import { publishNotification } from "#integrations/notifications";
 import { analyzePullRequest, buildReportCommentMarkdown } from "#review";
 import type { ReviewTrigger } from "#review";
 import { findPotentialSecrets as findSharedPotentialSecrets } from "../../../repository/content-safety/secret-scan.js";
-import { getPublicErrorMessage } from "../../../commands/presentation/public-error.js";
 import {
   isAutoReviewTrigger,
-  resolveDedupeTtlMs,
   shouldSkipReviewForDraft,
   shouldUseIncrementalReview,
   shouldUseManagedReviewSummary,
 } from "../../policy/triggers.js";
 import { reviewMessage } from "../../rendering/messages.js";
-import { resolvePublicationRuntime } from "../../../agent-runtime/runtime.js";
-import { PendingPublicationError } from "../../../agent-runtime/publication/publication.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
+import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { publishGitHubIssueCommentDurably } from "../../../integrations/github/publication/adapter.js";
 import { type GitHubPublicationRuntime } from "../../../integrations/github/publication/contracts.js";
 import type { GitHubPullSummary } from "../../../integrations/github/api/types.js";
 import type { GitHubReviewRunParams } from "./contracts.js";
 import { collectGitHubPullRequestContext } from "../../../integrations/github/repository/context.js";
 import { getErrorMessage } from "../../../integrations/github/error.js";
-import {
-  publishGitHubNoDiffStatus,
-  upsertGitHubManagedIssueComment,
-} from "../../../integrations/github/publication/comments.js";
 import {
   inferPullRequestLabels,
   maybeAppendGitHubFilesTruncatedWarning,
@@ -45,11 +36,8 @@ import {
   publishSecretWarningComment,
   tryAddPullRequestLabels,
 } from "./publication.js";
-import {
-  getIncrementalHead,
-  loadGitHubFeedbackSignals,
-  rememberIncrementalHead,
-} from "./state.js";
+
+const DEFAULT_INCREMENTAL_STATE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export function shouldSkipGitHubReviewForDraft(
   trigger: ReviewTrigger,
@@ -66,13 +54,11 @@ export async function runGitHubReview(
     pullNumber,
     mode,
     trigger,
-    dedupeSuffix,
     customRules = [],
     includeCiChecks = true,
     enableSecretScan = true,
     secretScanCustomPatterns = [],
     enableAutoLabel = true,
-    throwOnError = false,
     publicationRuntime,
     sourceKey,
     sourceHash,
@@ -87,8 +73,9 @@ export async function runGitHubReview(
   if (resolvedPublicationRuntime?.binding && resolvedPublicationRuntime.binding.platform !== "github") {
     throw new Error("GitHub review resolved a non-GitHub publication binding");
   }
-  let activePublicationRuntime = resolvedPublicationRuntime as GitHubPublicationRuntime | undefined;
-  const resolvedExecutionModeGeneration = activePublicationRuntime?.binding?.executionModeGeneration ?? 0;
+  const binding = resolvedPublicationRuntime.binding;
+  if (!binding) throw new Error("GitHub review requires a trusted publication binding");
+  let activePublicationRuntime = resolvedPublicationRuntime as GitHubPublicationRuntime;
   const durableSourceKey = sourceKey;
   const durableSourceHash = sourceHash;
   if (shouldQueueReview(activePublicationRuntime?.binding)) {
@@ -106,57 +93,35 @@ export async function runGitHubReview(
     );
     if (existing) {
       const lease = currentRunLease();
-      if (lease) await activePublicationRuntime.batchStore.attachExistingBatchToRun(lease, existing.id);
-      else await activePublicationRuntime.batchStore.assertLegacyBatchExecution(
-        existing,
-        resolvedExecutionModeGeneration,
-      );
+      if (!lease) throw new Error("Publication batch execution requires a Run lease");
+      await activePublicationRuntime.batchStore.attachExistingBatchToRun(lease, existing.id);
       await assertRunActive();
       assertGitHubBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(
         existing.scope.tenantId, existing.id, activePublicationRuntime.createAdapter, lease,
-        lease ? undefined : resolvedExecutionModeGeneration,
       ));
       return;
     }
   }
   const locale = resolveUiLocale();
-  const requestKey = [
-    `github:${owner}/${repo}#${pullNumber}:${mode}:${trigger}`,
-    dedupeSuffix,
-  ]
-    .filter(Boolean)
-    .join(":");
-  const dedupeTtlMs = resolveDedupeTtlMs(trigger, mode, "GITHUB");
-
-  if (!activePublicationRuntime && isDuplicateRequest(requestKey, dedupeTtlMs)) {
-    if (trigger === "comment-command") {
-      if (activePublicationRuntime) return;
-      await context.octokit.issues.createComment({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        body: localizeText(
-          {
-            zh: "`AI Review` 最近 5 分钟内已经执行过，本次请求已跳过。",
-            en: "`AI Review` already ran in the last 5 minutes, skipped this request.",
-          },
-          locale,
-        ),
-      });
-    }
-    return;
-  }
 
   context.log.info(
     { owner, repo, pullNumber, mode, trigger },
     "Starting GitHub AI review",
   );
 
-  const reviewPrKey = `${owner}/${repo}#${pullNumber}`;
+  const businessState = (await getAgentRuntimeServices()).businessState;
+  const businessStateScope = {
+    tenantId: binding.tenantId,
+    integrationId: binding.id,
+    platform: "github" as const,
+    origin: binding.origin,
+    repository: binding.repository,
+    target: `pr:${pullNumber}`,
+  };
   const incrementalBaseSha = shouldUseIncrementalReview(trigger)
-    ? getIncrementalHead(reviewPrKey)
+    ? await businessState.loadIncrementalHead(businessStateScope)
     : undefined;
-  const feedbackSignals = loadGitHubFeedbackSignals(owner, repo, pullNumber);
+  const feedbackSignals = await businessState.loadFeedbackSignals(businessStateScope);
   let preloadedPullSummary: GitHubPullSummary | undefined;
 
   if (isAutoReviewTrigger(trigger)) {
@@ -174,7 +139,6 @@ export async function runGitHubReview(
       return;
     }
     if (
-      !activePublicationRuntime &&
       trigger === "pr-edited" &&
       incrementalBaseSha &&
       incrementalBaseSha === prMeta.data.head.sha
@@ -185,17 +149,6 @@ export async function runGitHubReview(
       );
       return;
     }
-  }
-
-  let progressCommentId: number | undefined;
-  if (trigger === "comment-command" && !activePublicationRuntime) {
-    const progress = await context.octokit.issues.createComment({
-      owner,
-      repo,
-      issue_number: pullNumber,
-      body: reviewMessage("reviewRunning", locale),
-    });
-    progressCommentId = progress.data.id;
   }
 
   try {
@@ -215,10 +168,11 @@ export async function runGitHubReview(
       runtime: activePublicationRuntime,
       pullNumber,
       revision: collected.headSha,
-      sourceKey: durableSourceKey ?? "legacy",
-      sourceHash: durableSourceHash ?? stableEventHash({ owner, repo, pullNumber, mode, trigger, dedupeSuffix }),
+      sourceKey: durableSourceKey!,
+      sourceHash: durableSourceHash!,
     });
     if (batch.resumed) return;
+    if (!batch.runtime) throw new Error("Durable GitHub publication batch runtime is required");
     activePublicationRuntime = batch.runtime;
 
     if (collected.files.length === 0) {
@@ -228,31 +182,23 @@ export async function runGitHubReview(
             locale,
           )
         : undefined;
-      if (activePublicationRuntime) {
-        await publishGitHubIssueCommentDurably({
-          runtime: activePublicationRuntime,
-          context,
-          owner,
-          repo,
-          pullNumber,
-          revision: collected.headSha,
-          slot: "review-no-diff",
-          body: noDiffBody ?? reviewMessage("reviewNoDiffSkipped", locale),
-          managedMarkerKey: "review-no-diff",
-        });
-      } else {
-        await publishGitHubNoDiffStatus({
-          context,
-          owner,
-          repo,
-          pullNumber,
-          progressCommentId,
-          markerKey: "review-no-diff",
-          body: noDiffBody,
-        });
-      }
+      await publishGitHubIssueCommentDurably({
+        runtime: activePublicationRuntime,
+        context,
+        owner,
+        repo,
+        pullNumber,
+        revision: collected.headSha,
+        slot: "review-no-diff",
+        body: noDiffBody ?? reviewMessage("reviewNoDiffSkipped", locale),
+        managedMarkerKey: "review-no-diff",
+      });
       await batch.finish();
-      rememberIncrementalHead(reviewPrKey, collected.headSha);
+      await businessState.rememberIncrementalHead({
+        ...businessStateScope,
+        headSha: collected.headSha,
+        ttlMs: readNumberEnv("GITHUB_INCREMENTAL_STATE_TTL_MS", DEFAULT_INCREMENTAL_STATE_TTL_MS),
+      });
       return;
     }
 
@@ -284,37 +230,19 @@ export async function runGitHubReview(
         collected.filesTruncated,
         locale,
       );
-      if (activePublicationRuntime) {
-        await publishGitHubIssueCommentDurably({
-          runtime: activePublicationRuntime,
-          context,
-          owner,
-          repo,
-          pullNumber,
-          revision: collected.headSha,
-          slot: "review-comment-summary",
-          body: summaryBodyWithWarning,
-          managedMarkerKey: shouldUseManagedReviewSummary(trigger)
-            ? "review-comment-summary"
-            : undefined,
-        });
-      } else if (shouldUseManagedReviewSummary(trigger)) {
-        await upsertGitHubManagedIssueComment({
-          context,
-          owner,
-          repo,
-          issueNumber: pullNumber,
-          body: summaryBodyWithWarning,
-          markerKey: "review-comment-summary",
-        });
-      } else {
-        await context.octokit.issues.createComment({
-          owner,
-          repo,
-          issue_number: pullNumber,
-          body: summaryBodyWithWarning,
-        });
-      }
+      await publishGitHubIssueCommentDurably({
+        runtime: activePublicationRuntime,
+        context,
+        owner,
+        repo,
+        pullNumber,
+        revision: collected.headSha,
+        slot: "review-comment-summary",
+        body: summaryBodyWithWarning,
+        managedMarkerKey: shouldUseManagedReviewSummary(trigger)
+          ? "review-comment-summary"
+          : undefined,
+      });
     } else {
       const body = buildReportCommentMarkdown(reviewResult, collected.files, {
         platform: "github",
@@ -330,37 +258,19 @@ export async function runGitHubReview(
         collected.filesTruncated,
         locale,
       );
-      if (activePublicationRuntime) {
-        await publishGitHubIssueCommentDurably({
-          runtime: activePublicationRuntime,
-          context,
-          owner,
-          repo,
-          pullNumber,
-          revision: collected.headSha,
-          slot: "review-report",
-          body: bodyWithWarning,
-          managedMarkerKey: shouldUseManagedReviewSummary(trigger)
-            ? "review-report"
-            : undefined,
-        });
-      } else if (shouldUseManagedReviewSummary(trigger)) {
-        await upsertGitHubManagedIssueComment({
-          context,
-          owner,
-          repo,
-          issueNumber: pullNumber,
-          body: bodyWithWarning,
-          markerKey: "review-report",
-        });
-      } else {
-        await context.octokit.issues.createComment({
-          owner,
-          repo,
-          issue_number: pullNumber,
-          body: bodyWithWarning,
-        });
-      }
+      await publishGitHubIssueCommentDurably({
+        runtime: activePublicationRuntime,
+        context,
+        owner,
+        repo,
+        pullNumber,
+        revision: collected.headSha,
+        slot: "review-report",
+        body: bodyWithWarning,
+        managedMarkerKey: shouldUseManagedReviewSummary(trigger)
+          ? "review-report"
+          : undefined,
+      });
     }
 
     if (enableSecretScan) {
@@ -417,165 +327,17 @@ export async function runGitHubReview(
     }
 
     await batch.finish();
-    rememberIncrementalHead(reviewPrKey, collected.headSha);
-
-    if (progressCommentId) {
-      await context.octokit.issues.updateComment({
-        owner,
-        repo,
-        comment_id: progressCommentId,
-        body: reviewMessage("reviewCompleted", locale),
-      });
-    }
-
-    if (!activePublicationRuntime) try {
-      await publishNotification({
-        pushUrl:
-          readOptionalStringEnv("GITHUB_PUSH_URL") ??
-          readOptionalStringEnv("NOTIFY_WEBHOOK_URL"),
-        author: collected.author,
-        repository: `${owner}/${repo}`,
-        sourceBranch: collected.headBranch,
-        targetBranch: collected.baseBranch,
-        content: localizeText(
-          {
-            zh: `代码评审完毕 https://github.com/${owner}/${repo}/pull/${pullNumber}`,
-            en: `Code review completed https://github.com/${owner}/${repo}/pull/${pullNumber}`,
-          },
-          locale,
-        ),
-      });
-    } catch (notifyError) {
-      context.log.error(
-        {
-          owner,
-          repo,
-          pullNumber,
-          mode,
-          trigger,
-          error: getErrorMessage(notifyError),
-        },
-        "Failed to publish GitHub success notification",
-      );
-    }
+    await businessState.rememberIncrementalHead({
+      ...businessStateScope,
+      headSha: collected.headSha,
+      ttlMs: readNumberEnv("GITHUB_INCREMENTAL_STATE_TTL_MS", DEFAULT_INCREMENTAL_STATE_TTL_MS),
+    });
   } catch (error) {
-    clearDuplicateRecord(requestKey);
-
-    if (error instanceof PendingPublicationError) {
-      throw error;
-    }
-
     const reason = getErrorMessage(error);
-    const publicReason = getPublicErrorMessage(error);
     context.log.error(
       { owner, repo, pullNumber, mode, trigger, error: reason },
       "GitHub AI review failed",
     );
-
-    if (activePublicationRuntime) {
-      throw ensureError(error);
-    }
-
-    try {
-      await context.octokit.issues.createComment({
-        owner,
-        repo,
-        issue_number: pullNumber,
-        body: [
-          reviewMessage("reviewFailureTitle", locale),
-          "",
-          localizeText(
-            {
-              zh: `错误：\`${publicReason}\``,
-              en: `Error: \`${publicReason}\``,
-            },
-            locale,
-          ),
-          "",
-          localizeText(
-            {
-              zh: "请检查 AI_PROVIDER/模型 API Key/GitHub App 权限配置。",
-              en: "Please check AI_PROVIDER/model API key/GitHub App permission settings.",
-            },
-            locale,
-          ),
-        ].join("\n"),
-      });
-    } catch (commentError) {
-      context.log.error(
-        {
-          owner,
-          repo,
-          pullNumber,
-          mode,
-          trigger,
-          error: getErrorMessage(commentError),
-        },
-        "Failed to publish GitHub failure comment",
-      );
-    }
-
-    if (progressCommentId) {
-      try {
-        await context.octokit.issues.updateComment({
-          owner,
-          repo,
-          comment_id: progressCommentId,
-          body: reviewMessage("reviewFailureProgressHint", locale),
-        });
-      } catch (updateError) {
-        context.log.error(
-          {
-            owner,
-            repo,
-            pullNumber,
-            mode,
-            trigger,
-            progressCommentId,
-            error: getErrorMessage(updateError),
-          },
-          "Failed to update GitHub progress comment after failure",
-        );
-      }
-    }
-
-    try {
-      await publishNotification({
-        pushUrl:
-          readOptionalStringEnv("GITHUB_PUSH_URL") ??
-          readOptionalStringEnv("NOTIFY_WEBHOOK_URL"),
-        author: "system",
-        repository: `${owner}/${repo}`,
-        sourceBranch: "-",
-        targetBranch: "-",
-        content: localizeText(
-          {
-            zh: `代码评审失败: ${publicReason}`,
-            en: `Code review failed: ${publicReason}`,
-          },
-          locale,
-        ),
-      });
-    } catch (notifyError) {
-      context.log.error(
-        {
-          owner,
-          repo,
-          pullNumber,
-          mode,
-          trigger,
-          error: getErrorMessage(notifyError),
-        },
-        "Failed to publish GitHub failure notification",
-      );
-    }
-
-    if (throwOnError) {
-      throw ensureError(error);
-    }
+    throw ensureError(error);
   }
-}
-
-function stableEventHash(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

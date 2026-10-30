@@ -26,8 +26,16 @@ export interface PublicationRecoveryClaim {
 
 export interface PublicationRecoveryDependencies {
   listBindings(): Promise<PublicationBinding[]>;
-  listBatches(binding: PublicationBinding, limit: number): Promise<FrozenPublicationBatch[]>;
-  executeBatch(binding: PublicationBinding, batch: FrozenPublicationBatch): Promise<void>;
+  listBatches(
+    binding: PublicationBinding,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<FrozenPublicationBatch[]>;
+  executeBatch(
+    binding: PublicationBinding,
+    batch: FrozenPublicationBatch,
+    signal?: AbortSignal,
+  ): Promise<boolean | void>;
   refreshBatch(binding: PublicationBinding, batch: FrozenPublicationBatch): Promise<FrozenPublicationBatch | undefined>;
   claimOperations(
     binding: PublicationBinding,
@@ -72,6 +80,8 @@ export class PublicationRecoveryLoop {
   private readonly operationLimit: number;
   private timer: NodeJS.Timeout | undefined;
   private activeTick: Promise<PublicationRecoveryTickResult> | undefined;
+  private readonly stopController = new AbortController();
+  private stopped = false;
 
   constructor(
     private readonly dependencies: PublicationRecoveryDependencies,
@@ -87,7 +97,7 @@ export class PublicationRecoveryLoop {
   }
 
   async tick(): Promise<PublicationRecoveryTickResult> {
-    if (this.activeTick) return emptyResult(true);
+    if (this.activeTick || this.stopped) return emptyResult(true);
     const running = this.runTick();
     this.activeTick = running;
     try {
@@ -98,7 +108,7 @@ export class PublicationRecoveryLoop {
   }
 
   start(): void {
-    if (this.timer) return;
+    if (this.timer || this.stopped) return;
     const poll = () => {
       void this.tick().catch((error: unknown) => {
         this.dependencies.onError(error, { phase: "tick" });
@@ -110,6 +120,8 @@ export class PublicationRecoveryLoop {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
+    this.stopController.abort(new Error("Publication recovery stopped"));
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     await this.activeTick;
@@ -118,15 +130,23 @@ export class PublicationRecoveryLoop {
   private async runTick(): Promise<PublicationRecoveryTickResult> {
     const result = emptyResult(false);
     const bindings = await this.dependencies.listBindings();
+    if (this.stopped) return result;
     result.bindings = bindings.length;
     for (const binding of bindings) {
+      if (this.stopped) break;
       const executedBatchIds = new Set<string>();
-      const initial = await this.dependencies.listBatches(binding, this.batchLimit);
+      const initial = await this.dependencies.listBatches(
+        binding,
+        this.batchLimit,
+        this.stopController.signal,
+      );
       for (const batch of initial) {
+        if (this.stopped) break;
         if (batch.status !== "pending") continue;
         if (await this.executeBatch(binding, batch, result)) executedBatchIds.add(batch.id);
       }
 
+      if (this.stopped) break;
       const claims = await this.dependencies.claimOperations(
         binding,
         this.owner,
@@ -149,8 +169,14 @@ export class PublicationRecoveryLoop {
         }
       }
 
-      const afterReconciliation = await this.dependencies.listBatches(binding, this.batchLimit);
+      if (this.stopped) break;
+      const afterReconciliation = await this.dependencies.listBatches(
+        binding,
+        this.batchLimit,
+        this.stopController.signal,
+      );
       for (const batch of afterReconciliation) {
+        if (this.stopped) break;
         if (batch.status !== "waiting_reconciliation") continue;
         let refreshed: FrozenPublicationBatch | undefined;
         try {
@@ -175,8 +201,14 @@ export class PublicationRecoveryLoop {
     batch: FrozenPublicationBatch,
     result: PublicationRecoveryTickResult,
   ): Promise<boolean> {
+    if (this.stopped) return false;
     try {
-      await this.dependencies.executeBatch(binding, batch);
+      const executed = await this.dependencies.executeBatch(
+        binding,
+        batch,
+        this.stopController.signal,
+      );
+      if (executed === false) return false;
       result.batchesExecuted += 1;
       return true;
     } catch (error) {
@@ -511,19 +543,25 @@ export function createPublicationRecoveryLoop(input: {
   batchCoordinator: PublicationBatchCoordinator;
   runtimeForBinding(binding: PublicationBinding): Promise<RecoveryRuntime>;
   onError(error: unknown, context: PublicationRecoveryErrorContext): void;
+  onActivity?(): void;
   loopOptions?: PublicationRecoveryOptions;
   scheduleOptions?: PgPublicationRecoveryScheduleOptions;
 }): PublicationRecoveryLoop {
   const schedule = new PgPublicationRecoverySchedule(input.db, input.scheduleOptions);
   const owner = requiredOwner(input.loopOptions?.owner ?? `recovery-${randomUUID()}`);
-  const preparedClaims = new Map<string, PublicationRecoveryClaim>();
   return new PublicationRecoveryLoop(
     {
-      listBindings: () => input.authority.listRecoverable(),
-      listBatches: async (binding, limit) => {
+      listBindings: async () => {
+        const bindings = await input.authority.listRecoverable();
+        input.onActivity?.();
+        return bindings;
+      },
+      listBatches: async (binding, limit, signal) => {
+        if (signal?.aborted) return [];
         const batches = await input.batchStore.listRecoverable(binding.tenantId, binding.id, limit);
         const recoverable: FrozenPublicationBatch[] = [];
         for (const batch of batches) {
+          if (signal?.aborted) break;
           if (batch.status !== "pending") {
             recoverable.push(batch);
             continue;
@@ -538,27 +576,29 @@ export function createPublicationRecoveryLoop(input: {
             if (refreshed?.status === "waiting_reconciliation") recoverable.push(refreshed);
             continue;
           }
-          const claim = await schedule.claimPrepared(binding, operation.businessOperationId, owner);
-          if (claim) {
-            preparedClaims.set(batchKey(binding, batch), claim);
-            recoverable.push(batch);
-          }
+          recoverable.push(batch);
         }
         return recoverable;
       },
-      executeBatch: async (binding, batch) => {
-        const key = batchKey(binding, batch);
-        const claim = preparedClaims.get(key);
+      executeBatch: async (binding, batch, signal) => {
+        if (signal?.aborted) return false;
+        const operation = await firstRecoverablePreparedOperation(
+          (tenantId, operationId) => input.batchStore.loadOperation(tenantId, operationId),
+          binding,
+          batch,
+        );
+        if (!operation || signal?.aborted) return false;
+        const claim = await schedule.claimPrepared(binding, operation.businessOperationId, owner);
+        if (!claim) return false;
         try {
+          if (signal?.aborted) return false;
           const runtime = await input.runtimeForBinding(binding);
           await input.batchCoordinator.execute(binding.tenantId, batch.id, runtime.createAdapter);
+          return true;
         } finally {
-          preparedClaims.delete(key);
-          if (claim) {
-            const outcome = await schedule.finishPrepared(claim);
-            if (outcome === "manual_review") {
-              await input.batchStore.refreshOutcome(binding.tenantId, batch.id);
-            }
+          const outcome = await schedule.finishPrepared(claim);
+          if (outcome === "manual_review") {
+            await input.batchStore.refreshOutcome(binding.tenantId, batch.id);
           }
         }
       },
@@ -606,10 +646,6 @@ export async function firstRecoverablePreparedOperation(
     return undefined;
   }
   return undefined;
-}
-
-function batchKey(binding: PublicationBinding, batch: FrozenPublicationBatch): string {
-  return `${binding.tenantId}:${batch.id}`;
 }
 
 async function clearRecoveryClaim(

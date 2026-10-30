@@ -1,3 +1,4 @@
+import { RouteAccess } from "../common/route-access.js";
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Query, Req, Res, UseFilters } from "@nestjs/common";
 import type { Request, Response } from "express";
 
@@ -16,20 +17,24 @@ export class RunsController {
 
   @Post()
   @HttpCode(202)
+  @RouteAccess("runs:create")
   async create(@Req() request: Request, @Headers("idempotency-key") key: string | undefined, @Body() body: unknown) {
     const result = await this.service.create(this.context.authenticate(request), key, body);
     return { ...result, links: { self: `/runs/${result.id}`, events: `/runs/${result.id}/events` } };
   }
 
   @Get(":id")
+  @RouteAccess("runs:read")
   snapshot(@Req() request: Request, @Param("id") id: string) { return this.service.snapshot(this.context.authenticate(request), id); }
 
   @Get(":id/events")
+  @RouteAccess("runs:read")
   events(@Req() request: Request, @Param("id") id: string, @Query("after") after?: string, @Query("limit") limit?: string) {
     return this.service.events(this.context.authenticate(request), id, after, limit);
   }
 
   @Get(":id/events/stream")
+  @RouteAccess("runs:read")
   async stream(@Req() request: Request, @Res() response: Response, @Param("id") id: string, @Query("after") after?: string): Promise<void> {
     const lastEventId = request.headers["last-event-id"];
     if (Array.isArray(lastEventId)) throw new RunControlError("INVALID_CURSOR", 400, "Ambiguous event cursor");
@@ -37,22 +42,26 @@ export class RunsController {
   }
 
   @Get(":id/trace")
+  @RouteAccess("runs:trace")
   trace(@Req() request: Request, @Param("id") id: string, @Query("after") after?: string) {
     return this.service.trace(this.context.authenticate(request), id, after);
   }
 
   @Get(":id/artifact")
+  @RouteAccess("runs:read")
   artifact(@Req() request: Request, @Param("id") id: string, @Query("raw") raw?: string) {
     return this.service.artifact(this.context.authenticate(request), id, raw);
   }
 
   @Post(":id/commands/:kind")
   @HttpCode(202)
+  @RouteAccess("runs:command")
   command(@Req() request: Request, @Param("id") id: string, @Param("kind") kind: string, @Body() body: unknown) {
     return this.service.command(this.context.authenticate(request), id, kind, body);
   }
 
   @Post(":id/model-calls/:callId/usage-reconciliations")
+  @RouteAccess("usage:reconcile")
   reconcileModelUsage(@Req() request: Request, @Param("id") id: string,
     @Param("callId") callId: string, @Body() body: unknown) {
     return this.service.reconcileModelUsage(this.context.authenticate(request), id, callId, body);

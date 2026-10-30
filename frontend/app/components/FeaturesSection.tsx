@@ -31,7 +31,7 @@ const COPY = {
         badge: 'Commands',
         subtitle: 'Comment Thread',
         description:
-          'Run /ask, /checks, /generate_tests, /describe, and more directly inside PR or MR discussions.',
+          'Run /ai-review in GitHub or GitLab discussions, plus /improve, /add_doc, and /improve_component on GitHub.',
       },
       {
         title: 'Policy Guardrails',
@@ -83,7 +83,7 @@ const COPY = {
         badge: '命令',
         subtitle: '评论区',
         description:
-          '可直接在 PR/MR 讨论区运行 /ask、/checks、/generate_tests、/describe 等命令。',
+          '可在 GitHub 或 GitLab 讨论区运行 /ai-review，并在 GitHub 使用 /improve、/add_doc 与 /improve_component。',
       },
       {
         title: '策略护栏',

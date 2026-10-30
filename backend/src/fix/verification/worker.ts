@@ -7,6 +7,7 @@ export interface VerifierWorkerOptions {
   verifier: DockerFixVerifier;
   policies: ReadonlyMap<string, VerificationPolicy>;
   owner: string;
+  verifierCapabilityHash: string;
   pollMs?: number;
   heartbeatMs?: number;
   sweepMs?: number;
@@ -26,10 +27,11 @@ export class VerifierWorker {
 
   async tick(): Promise<boolean> {
     await this.sweepIfDue();
-    const lease = await this.options.store.claim(this.options.owner);
+    const lease = await this.options.store.claim(this.options.owner, this.options.verifierCapabilityHash);
     if (!lease) return false;
     const controller = new AbortController();
     this.active = controller;
+    if (this.stopped) controller.abort(new VerifierWorkerStoppingError());
     const heartbeatMs = this.options.heartbeatMs ?? 15_000;
     const heartbeat = setInterval(() => {
       void this.options.store.heartbeat(lease).catch((error) => {
@@ -38,18 +40,24 @@ export class VerifierWorker {
     }, heartbeatMs);
     heartbeat.unref();
     try {
+      if (controller.signal.reason instanceof VerifierWorkerStoppingError) throw controller.signal.reason;
       const policy = this.options.policies.get(lease.proposal.policyId);
       assertFrozenInput(lease, policy);
       const result = await this.options.verifier.verify(lease.proposal, policy!, {
         jobId: lease.id, owner: lease.owner, epoch: lease.epoch, deadlineAt: lease.deadlineAt,
       }, controller.signal);
+      if (controller.signal.reason instanceof VerifierWorkerStoppingError) throw controller.signal.reason;
       await this.options.store.complete(lease, result);
     } catch (error) {
-      if (!(error instanceof VerificationJobLeaseLostError) && !controller.signal.aborted) {
+      const stopping = controller.signal.reason instanceof VerifierWorkerStoppingError;
+      if (stopping) {
+        try { await this.options.store.relinquish(lease); }
+        catch (failure) { if (!(failure instanceof VerificationJobLeaseLostError)) this.options.onError?.(failure); }
+      } else if (!(error instanceof VerificationJobLeaseLostError) && !controller.signal.aborted) {
         try { await this.options.store.fail(lease, safeErrorCode(error)); }
         catch (failure) { if (!(failure instanceof VerificationJobLeaseLostError)) this.options.onError?.(failure); }
       }
-      if (!(error instanceof VerificationJobLeaseLostError)) this.options.onError?.(error);
+      if (!stopping && !(error instanceof VerificationJobLeaseLostError)) this.options.onError?.(error);
     } finally {
       clearInterval(heartbeat);
       if (this.active === controller) this.active = undefined;
@@ -69,7 +77,7 @@ export class VerifierWorker {
 
   stop(): void {
     this.stopped = true;
-    this.active?.abort(new Error("verifier worker stopping"));
+    this.active?.abort(new VerifierWorkerStoppingError());
   }
 
   private async sweepIfDue(): Promise<void> {
@@ -80,6 +88,10 @@ export class VerifierWorker {
     this.lastSweepAt = Date.now();
     if (result.failures.length) throw new Error(`verifier orphan cleanup failed (${result.failures.length})`);
   }
+}
+
+class VerifierWorkerStoppingError extends Error {
+  constructor() { super("verifier worker stopping"); this.name = "VerifierWorkerStoppingError"; }
 }
 
 function assertFrozenInput(lease: VerificationJobLease, policy: VerificationPolicy | undefined): void {

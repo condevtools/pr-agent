@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "through": "020_release_control.sql",
+  "sqlFile": "020_schema.sql",
+  "sqlSha256": "8d95d5e8a88a6f8cb710a18f8e69954b910d47978f33659306b5b7f270ccff47",
+  "migrations": [
+    {
+      "name": "001_harness_core.sql",
+      "checksum": "5943fad590e10483adbc8f958302ba1fb5756930c5e365d38fb2c8c061bf8a11"
+    },
+    {
+      "name": "002_publications.sql",
+      "checksum": "754514167348c7993c6b51c3929282923fc896a075c8a58e3abeb2bca64e2438"
+    },
+    {
+      "name": "003_frozen_operations.sql",
+      "checksum": "b8907ff1b8fef502c64cff46d2c2dea70f288be89f6f9a2e9ccb2ed51f90a0c7"
+    },
+    {
+      "name": "004_repository_authority.sql",
+      "checksum": "0d38092679dcd1828468a595d1f5f479158edc98794257f867b1a275fad15f1c"
+    },
+    {
+      "name": "005_publication_batches.sql",
+      "checksum": "ae5f99c23675a51e4ab94c7446ba271eb3298faaa8249ff431ccfd0a6e1b7035"
+    },
+    {
+      "name": "006_publication_control.sql",
+      "checksum": "9a47e4cac467137ea0c5c8720d7253ef3ed6d51203cfb8cad6ee882dedb3327b"
+    },
+    {
+      "name": "007_recovery_schedule.sql",
+      "checksum": "ea246afe44da08c88157e61b040752e24a860c2a4e04be781b536f931ce2bbc1"
+    },
+    {
+      "name": "008_batch_sealing.sql",
+      "checksum": "cc5db0ca932f841fe76a8848bbf861567ba77a0d79f998573166728523be93a1"
+    },
+    {
+      "name": "009_batch_link_outcomes.sql",
+      "checksum": "706014c7fdaa5ab6d029ae8792c9a7606785432f06b142dea01313957ed60f91"
+    },
+    {
+      "name": "010_run_execution.sql",
+      "checksum": "297a1fade75a4946fce6641913f774b2f7cfad2d727cfabc69c75248e336190e"
+    },
+    {
+      "name": "011_model_budget.sql",
+      "checksum": "d86255532939ac3f4c3a4f9569533a84eca809103d5e4dd6c5b5d97174d46dd9"
+    },
+    {
+      "name": "012_run_control.sql",
+      "checksum": "e27dc73f3232ed7c8d101edb9ce59e9cd5e11ccbdaf1b3a1a3456ac4b165bf38"
+    },
+    {
+      "name": "013_run_cancellation.sql",
+      "checksum": "d4abcc42833febe2a94f37b3e7729d597e1067eadbbf503bf286a9fbc47db53d"
+    },
+    {
+      "name": "014_execution_rollout.sql",
+      "checksum": "083897b84a56b81e547249e3c8633dc6fa5eecfdeac008c1fcab456c6ef4939b"
+    },
+    {
+      "name": "015_harness_retention.sql",
+      "checksum": "65e2c00c040efcedfeff547007b8648338adc87889902c1f5a04f90a72a61783"
+    },
+    {
+      "name": "016_deep_review.sql",
+      "checksum": "c6f39d2e619aeb8c199020dfb0130190ef0669f25a9a405d9de6ce360707fedc"
+    },
+    {
+      "name": "017_fix_run.sql",
+      "checksum": "4a707f0aaa14a61225d96d5ffa1f6799d5e1c0ae5a2fa6606b367d54381f790f"
+    },
+    {
+      "name": "018_feedback_dataset.sql",
+      "checksum": "1dc3337ef30b9768332c2c0b0d600c64666fdfc9f4754abe1f263e3c36736dfb"
+    },
+    {
+      "name": "019_evolution_replay.sql",
+      "checksum": "859cb0f80b9e564df0e5b594d2e8c491d8c05b28f6e13e8d13b87166055668d6"
+    },
+    {
+      "name": "020_release_control.sql",
+      "checksum": "3c886c4fadd3c1f7903601e48740f9e213c7e04fe9f85e77fa91e439825d4d3d"
+    }
+  ]
+}

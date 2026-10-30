@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { PgEvolutionFeedbackStore } from "../../../evolution/feedback/store.js";
 import { requireRunPermission, type RunPrincipal } from "../../../agent-runtime/runs/control-contracts.js";
-import { getAgentRuntimeServices } from "../../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { RunApiContextService } from "../../common/run-api-context.service.js";
 
 @Injectable()

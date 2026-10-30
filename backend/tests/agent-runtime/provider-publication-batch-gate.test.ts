@@ -4,8 +4,6 @@ import test from "node:test";
 import { publishGitHubIssueCommentDurably } from "../../src/integrations/github/publication/adapter.js";
 import { publishGitLabNoteDurably } from "../../src/integrations/gitlab/publication/adapter.js";
 
-const previousMode = process.env.HARNESS_PUBLICATION_MODE;
-
 test("durable GitHub publication refuses an unplanned provider write", async () => {
   process.env.HARNESS_PUBLICATION_MODE = "postgres";
   let publishes = 0;
@@ -52,29 +50,6 @@ test("durable GitLab publication refuses an unplanned provider write", async () 
     globalThis.fetch = originalFetch;
   }
   assert.equal(publishes, 0);
-});
-
-test("isolated legacy fixtures retain the direct publication fallback", async () => {
-  process.env.HARNESS_PUBLICATION_MODE = "legacy";
-  let publishes = 0;
-  const runtime = runtimeFor("github", () => { publishes += 1; });
-  const result = await publishGitHubIssueCommentDurably({
-    runtime: runtime as never,
-    context: {
-      octokit: {
-        pulls: { get: async () => ({ data: { id: 42, head: { sha: "head" } } }) },
-      },
-    } as never,
-    owner: "acme",
-    repo: "widgets",
-    pullNumber: 7,
-    revision: "head",
-    slot: "review-report",
-    body: "review",
-  });
-  assert.equal(result.remoteId, "legacy-fixture");
-  assert.equal(publishes, 1);
-  process.env.HARNESS_PUBLICATION_MODE = previousMode;
 });
 
 function runtimeFor(platform: "github" | "gitlab", onPublish: () => void) {

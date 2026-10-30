@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { isDurablePublicationEnabled } from "../publication/mode.js";
 import type { PublicationOperation, PublicationPlatform } from "../publication/publication.js";
 
 interface PublicationWriteAuthority {
@@ -16,7 +15,6 @@ export async function withPublicationWriteAuthority<T>(
   operation: PublicationOperation,
   callback: () => Promise<T>,
 ): Promise<T> {
-  if (!isDurablePublicationEnabled()) return callback();
   const generation = operation.scope.authorityGeneration;
   if (!Number.isSafeInteger(generation) || generation === undefined || generation <= 0) {
     throw new PublicationWriteBoundaryError(operation.scope.platform);
@@ -38,7 +36,6 @@ export async function withPublicationWriteAuthority<T>(
 }
 
 export function assertPublicationWriteAllowed(platform: PublicationPlatform): void {
-  if (!isDurablePublicationEnabled()) return;
   const authority = authorityStorage.getStore();
   if (
     !authority?.active ||

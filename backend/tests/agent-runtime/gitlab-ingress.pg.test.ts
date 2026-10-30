@@ -39,7 +39,8 @@ if (!databaseUrl) {
       GRANT SELECT ON pr_agent_harness.integration_bindings TO ${role};
       GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.agent_runs,
         pr_agent_harness.job_queue, pr_agent_harness.tenant_budget_accounts,
-        pr_agent_harness.run_budget_envelopes TO ${role};
+        pr_agent_harness.run_budget_envelopes,
+        pr_agent_harness.command_rate_limits TO ${role};
       GRANT SELECT, INSERT ON pr_agent_harness.run_events,
         pr_agent_harness.audit_logs, pr_agent_harness.model_pricing_snapshots TO ${role};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
@@ -173,8 +174,8 @@ if (!databaseUrl) {
       const repeated = await runGitLabWebhook({
         payload: notePayload("/ai-review"), headers: {}, logger, skipSecurityVerification: true,
       });
-      assert.deepEqual(first, { ok: true, message: "note review triggered" });
-      assert.deepEqual(repeated, { ok: true, message: "note review triggered" });
+      assert.deepEqual(first, { ok: true, message: "review command queued" });
+      assert.deepEqual(repeated, { ok: true, message: "review command queued" });
       assert.deepEqual(await durableCounts(), { runs: 1, jobs: 1, modelCalls: 0, batches: 0, operations: 0 });
       const actor = await admin.query<{ created_by_actor_type: string; created_by_actor_id: string }>(
         `SELECT created_by_actor_type,created_by_actor_id

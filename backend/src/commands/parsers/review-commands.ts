@@ -23,7 +23,6 @@ const GENERATE_LABELS_COMMAND_RE =
   /^\/(?:generate[_-]?labels|ai-review\s+generate[_-]?labels)\s*$/i;
 const SIMILAR_CODE_COMMAND_RE =
   /^\/(?:similar[_-]?code|ai-review\s+similar[_-]?code)(?:\s+([\s\S]+))?\s*$/i;
-const AUTO_APPROVE_COMMAND_RE = /^\/(?:auto[_-]?approve|ai-review\s+auto[_-]?approve)\s*$/i;
 
 export function parseReviewCommand(rawBody: string): {
   matched: boolean;
@@ -222,8 +221,4 @@ export function parseSimilarCodeCommand(rawBody: string): {
     return { matched: false, query: "" };
   }
   return { matched: true, query: matched[1]?.trim() ?? "" };
-}
-
-export function parseAutoApproveCommand(rawBody: string): { matched: boolean } {
-  return { matched: AUTO_APPROVE_COMMAND_RE.test(rawBody.trim()) };
 }

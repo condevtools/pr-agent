@@ -1,3 +1,4 @@
+import { RouteAccess } from "../common/route-access.js";
 import { Body, Controller, Headers, HttpCode, Inject, Param, Post, Req, UseFilters } from "@nestjs/common";
 import type { Request } from "express";
 
@@ -15,6 +16,7 @@ export class FixesController {
 
   @Post(":id/fixes")
   @HttpCode(202)
+  @RouteAccess("fixes:create")
   createFix(@Req() request: Request, @Headers("idempotency-key") key: string | undefined,
     @Param("id") id: string, @Body() body: unknown) {
     return this.service.createFix(this.context.authenticate(request), id, key, body);
@@ -22,6 +24,7 @@ export class FixesController {
 
   @Post(":id/fix-approvals")
   @HttpCode(201)
+  @RouteAccess("fixes:create")
   createFixApproval(@Req() request: Request, @Headers("idempotency-key") key: string | undefined,
     @Param("id") id: string, @Body() body: unknown) {
     return this.service.createFixApproval(this.context.authenticate(request), id, key, body);
@@ -29,18 +32,21 @@ export class FixesController {
 
   @Post(":id/fix-relevance")
   @HttpCode(201)
+  @RouteAccess("fixes:approve")
   attestFixRelevance(@Req() request: Request, @Param("id") id: string, @Body() body: unknown) {
     return this.service.attestFixRelevance(this.context.authenticate(request), id, body);
   }
 
   @Post(":id/fix-approvals/:approvalId/approve")
   @HttpCode(202)
+  @RouteAccess("fixes:approve")
   approveFix(@Req() request: Request, @Param("id") id: string, @Param("approvalId") approvalId: string,
     @Body() body: unknown) {
     return this.service.approveFix(this.context.authenticate(request), id, approvalId, body);
   }
 
   @Post(":id/fix-approvals/:approvalId/revoke")
+  @RouteAccess("fixes:revoke")
   revokeFix(@Req() request: Request, @Param("id") id: string, @Param("approvalId") approvalId: string,
     @Body() body: unknown) {
     return this.service.revokeFix(this.context.authenticate(request), id, approvalId, body);

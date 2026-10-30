@@ -11,22 +11,21 @@ import { z } from "zod";
 import {
   runGitHubReview,
 } from "../../../review/platforms/github/workflow.js";
-import { recordGitHubFeedbackSignal } from "../../../review/platforms/github/state.js";
 import type {
   GitHubReviewContext,
   LoggerLike,
 } from "../../../review/platforms/github/contracts.js";
 import type { MinimalGitHubOctokit } from "../api/types.js";
 import {
-  runGitHubIssuePolicyWorkflow,
-  runGitHubPullRequestLifecycleWorkflow,
-} from "../../../review/platforms/github/lifecycle.js";
-import { resolveGitHubReviewBehaviorPolicy } from "../../../issues/policy/github/workflow.js";
+  resolveGitHubPullRequestAutoReviewPolicy,
+  resolveGitHubReviewBehaviorPolicy,
+} from "../../../issues/policy/github/workflow.js";
 import {
   handleGitHubIssueCommentCommand,
 } from "../../../commands/platforms/github/handler.js";
 import { CommandAuthorizationError } from "../../../commands/authorization.js";
-import { resolvePublicationRuntime } from "../../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
+import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
 export { createRestBackedOctokit } from "../api/http-client.js";
 export {
@@ -37,6 +36,7 @@ export {
 import { createRestBackedOctokit, guardGitHubOctokit } from "../api/http-client.js";
 const DEFAULT_GITHUB_API_URL = "https://api.github.com";
 const DEFAULT_GITHUB_WEBHOOK_MAX_BODY_BYTES = 10 * 1024 * 1024;
+const DEFAULT_FEEDBACK_SIGNAL_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 
 const repositoryInfoPayloadSchema = z.object({
   name: z.string().min(1),
@@ -128,6 +128,7 @@ export async function handlePlainGitHubWebhook(params: {
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
   skipSignatureVerification?: boolean;
+  sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
   verifyGitHubWebhookBodySize(params.rawBody);
   const eventName = params.headers["x-github-event"]?.toLowerCase();
@@ -163,7 +164,7 @@ export async function handlePlainGitHubWebhook(params: {
     logger: params.logger,
     runtimeMode: "github-webhook",
     deliveryId: params.headers["x-github-delivery"],
-    sourceHash: createHash("sha256").update(params.rawBody).digest("hex"),
+    sourceHash: params.sourceHash ?? createHash("sha256").update(params.rawBody).digest("hex"),
   });
 }
 
@@ -240,79 +241,45 @@ async function handlePullRequestEvent(
 
   const context = createReviewContext(owner, repo, params.octokit, params.logger);
   const action = payload.action?.toLowerCase();
+  const isMerged = action === "closed" && Boolean(payload.pull_request?.merged);
+  if (action !== "opened" && action !== "edited" && action !== "synchronize" && !isMerged) {
+    return { ok: true, message: "ignored pull_request action" };
+  }
   const durableRuntime = await resolvePublicationRuntime({
     platform: "github",
     origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL,
     repository: `${owner}/${repo}`,
   });
-  if (durableRuntime && (action === "opened" || action === "edited" || action === "synchronize" || (action === "closed" && payload.pull_request?.merged))) {
-    let queuedRunId: string | undefined;
-    const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
+  const baseRef = payload.pull_request.base?.ref ?? payload.repository.default_branch;
+  const reviewBehavior = isMerged
+    ? await resolveGitHubReviewBehaviorPolicy({ context, baseRef })
+    : await resolveGitHubPullRequestAutoReviewPolicy({
       context,
-      baseRef: payload.pull_request.base?.ref ?? payload.repository.default_branch,
+      baseRef,
+      action: action as "opened" | "edited" | "synchronize",
     });
-    await runGitHubReview({
-      context,
-      pullNumber: payload.pull_request.number,
-      mode: "report",
-      trigger: action === "opened" ? "pr-opened" : action === "edited" ? "pr-edited" : action === "synchronize" ? "pr-synchronize" : "merged",
-      publicationRuntime: durableRuntime as never,
-      sourceKey: params.deliveryId ? `github:delivery:${params.deliveryId}` : undefined,
-      sourceHash: params.sourceHash,
-      onQueued: (runId) => { queuedRunId = runId; },
-      customRules: reviewBehavior.customRules,
-      includeCiChecks: reviewBehavior.includeCiChecks,
-      enableSecretScan: reviewBehavior.secretScanEnabled,
-      secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
-      enableAutoLabel: reviewBehavior.autoLabelEnabled,
-      throwOnError: true,
-    });
-    return { ok: true, message: queuedRunId ? "durable pull_request review queued" : "durable pull_request review triggered",
-      ...(queuedRunId ? { runId: queuedRunId } : {}) };
+  if (!isMerged && "enabled" in reviewBehavior && !reviewBehavior.enabled) {
+    return { ok: true, message: "pull_request action ignored by review policy" };
   }
-  if (action === "closed" && payload.pull_request?.merged) {
-    const reviewBehavior = await resolveGitHubReviewBehaviorPolicy({
-      context,
-      baseRef:
-        payload.pull_request.base?.ref ?? payload.repository.default_branch,
-    });
-    await runGitHubReview({
-      context,
-      pullNumber: payload.pull_request.number,
-      mode: "report",
-      trigger: "merged",
-      customRules: reviewBehavior.customRules,
-      includeCiChecks: reviewBehavior.includeCiChecks,
-      enableSecretScan: reviewBehavior.secretScanEnabled,
-      secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
-      enableAutoLabel: reviewBehavior.autoLabelEnabled,
-      throwOnError: params.runtimeMode === "github-webhook",
-    });
-    return { ok: true, message: "pull_request review triggered" };
-  }
-
-  if (action === "opened" || action === "edited" || action === "synchronize") {
-    await runGitHubPullRequestLifecycleWorkflow({
-      context,
-      pullNumber: payload.pull_request.number,
-      title: payload.pull_request.title ?? "",
-      body: payload.pull_request.body ?? "",
-      headSha: payload.pull_request.head?.sha,
-      baseRef: payload.pull_request.base?.ref,
-      defaultBranch: payload.repository.default_branch,
-      detailsUrl: payload.pull_request.html_url,
-      action,
-      trigger:
-        action === "opened"
-          ? "pr-opened"
-          : action === "edited"
-            ? "pr-edited"
-            : "pr-synchronize",
-    });
-    return { ok: true, message: "pull_request policy check triggered" };
-  }
-
-  return { ok: true, message: "ignored pull_request action" };
+  let queuedRunId: string | undefined;
+  await runGitHubReview({
+    context,
+    pullNumber: payload.pull_request.number,
+    mode: isMerged ? "report" : (reviewBehavior as Awaited<ReturnType<typeof resolveGitHubPullRequestAutoReviewPolicy>>).mode,
+    trigger: isMerged ? "merged" : action === "opened" ? "pr-opened" : action === "edited" ? "pr-edited" : "pr-synchronize",
+    publicationRuntime: durableRuntime as never,
+    sourceKey: params.deliveryId ? `github:delivery:${params.deliveryId}` : undefined,
+    sourceHash: params.sourceHash,
+    onQueued: (runId) => { queuedRunId = runId; },
+    customRules: reviewBehavior.customRules,
+    includeCiChecks: reviewBehavior.includeCiChecks,
+    enableSecretScan: reviewBehavior.secretScanEnabled,
+    secretScanCustomPatterns: reviewBehavior.secretScanCustomPatterns,
+    enableAutoLabel: reviewBehavior.autoLabelEnabled,
+    throwOnError: true,
+  });
+  return { ok: true, message: queuedRunId ? "durable pull_request review queued" : "durable pull_request review triggered",
+    ...(queuedRunId ? { runId: queuedRunId } : {}) };
 }
 
 async function handleIssuesEvent(
@@ -333,19 +300,7 @@ async function handleIssuesEvent(
     throw new BadWebhookRequestError("invalid issues payload");
   }
 
-  const context = createReviewContext(owner, repo, params.octokit, params.logger);
-  if (await resolvePublicationRuntime({ platform: "github", origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL, repository: `${owner}/${repo}` })) {
-    throw new Error("durable publication blocks the unadapted GitHub issue-policy writer");
-  }
-  await runGitHubIssuePolicyWorkflow({
-    context,
-    issueNumber: payload.issue.number,
-    title: payload.issue.title ?? "",
-    body: payload.issue.body ?? "",
-    defaultBranch: payload.repository.default_branch,
-    author: payload.issue.user?.login ?? undefined,
-  });
-  return { ok: true, message: "issue policy check triggered" };
+  return { ok: true, message: "ignored issues event" };
 }
 
 async function handlePullRequestReviewThreadEvent(
@@ -366,20 +321,26 @@ async function handlePullRequestReviewThreadEvent(
   if (action !== "resolved" && action !== "unresolved") {
     return { ok: true, message: "ignored pull_request_review_thread action" };
   }
-  if (await resolvePublicationRuntime({ platform: "github", origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL, repository: `${owner}/${repo}` })) {
-    throw new Error("durable publication blocks the unadapted GitHub review-thread writer");
-  }
+  const runtime = await resolvePublicationRuntime({
+    platform: "github",
+    origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL,
+    repository: `${owner}/${repo}`,
+  });
 
   const pullNumber = payload.pull_request?.number;
   const signal =
     action === "resolved"
       ? `PR #${pullNumber ?? "?"} review thread resolved: developer indicates suggestion fixed/high-value`
       : `PR #${pullNumber ?? "?"} review thread unresolved: developer indicates suggestion still not satisfied`;
-  recordGitHubFeedbackSignal({
-    owner,
-    repo,
-    pullNumber,
+  await (await getAgentRuntimeServices()).businessState.recordFeedbackSignal({
+    tenantId: runtime.binding.tenantId,
+    integrationId: runtime.binding.id,
+    platform: "github",
+    origin: runtime.binding.origin,
+    repository: runtime.binding.repository,
+    target: pullNumber ? `pr:${pullNumber}` : "repository",
     signal,
+    ttlMs: readNumberEnv("GITHUB_FEEDBACK_SIGNAL_TTL_MS", DEFAULT_FEEDBACK_SIGNAL_TTL_MS),
   });
   return { ok: true, message: "pull_request_review_thread feedback recorded" };
 }
@@ -460,7 +421,7 @@ function parsePayload<T>(
   );
 }
 
-function verifyWebhookSignature(
+export function verifyWebhookSignature(
   rawBody: string,
   headers: Record<string, string | undefined>,
 ): void {

@@ -11,7 +11,7 @@ import { RunEventStreamHub } from "./event-stream.js";
 import { buildReviewRunCreationInput } from "../../review/intake/run-intake.js";
 import { reviewCreationRequestHash, reviewRunInputSchema } from "../../review/intake/run-input.js";
 import { resolveReviewInput } from "../../review/intake/resolve-input.js";
-import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 import { RunStore } from "../../agent-runtime/postgres/run-store.js";
 import { fingerprint } from "../../agent-runtime/versions.js";
 import { PgFixStore } from "../../fix/persistence/store.js";
@@ -136,7 +136,8 @@ export class RunsService implements BeforeApplicationShutdown {
     requireRunPermission(principal, "runs:read");
     validRunId(runId);
     const queries = await this.queries();
-    this.hub ??= new RunEventStreamHub(queries);
+    this.hub ??= new RunEventStreamHub(queries, undefined,
+      (candidate) => this.context.assertCurrentPrincipal(candidate));
     await this.hub.open(principal, runId, z.string().max(256).optional().parse(after), response);
   }
 

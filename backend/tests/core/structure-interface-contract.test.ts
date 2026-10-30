@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import "reflect-metadata";
 
@@ -84,6 +86,28 @@ test("preserves the GitHub App event subscription contract", () => {
   assert.deepEqual(subscribed.sort(), [...EXPECTED_GITHUB_APP_EVENTS]);
 });
 
+test("provider writes stay behind publication or fix adapters", () => {
+  const sourceRoot = fileURLToPath(new URL("../../src", import.meta.url));
+  const allowed = new Set([
+    "integrations/github/publication/adapter.ts",
+    "integrations/gitlab/publication/adapter.ts",
+    "fix/publication/provider-adapter.ts",
+  ]);
+  const violations: string[] = [];
+  for (const file of listTypeScriptFiles(sourceRoot)) {
+    const relative = file.slice(sourceRoot.length + 1);
+    if (allowed.has(relative) || relative.endsWith("/api/types.ts")) continue;
+    const source = readFileSync(file, "utf8");
+    if (/octokit\.(?:issues|pulls)\.(?:createComment|updateComment|addLabels|createReviewComment|createReview)\s*\(/u.test(source)) {
+      violations.push(relative);
+    }
+    if (/gitLabApiRequest\s*\(\s*\{[\s\S]{0,500}?method:\s*"(?:POST|PUT|PATCH|DELETE)"/u.test(source)) {
+      violations.push(relative);
+    }
+  }
+  assert.deepEqual([...new Set(violations)].sort(), []);
+});
+
 function collectHttpRoutes(rootModule: Function): string[] {
   const modules = new Set<Function>();
   const routes: string[] = [];
@@ -125,4 +149,11 @@ function joinRoute(controllerPath: string, handlerPath: string): string {
     .flatMap((value) => value.split("/"))
     .filter(Boolean);
   return `/${segments.join("/")}`;
+}
+
+function listTypeScriptFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    return entry.isDirectory() ? listTypeScriptFiles(path) : entry.name.endsWith(".ts") ? [path] : [];
+  });
 }

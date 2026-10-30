@@ -6,7 +6,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   discoverTests,
   isPostgresTestFile,
-  LEGACY_PUBLICATION_PG_TESTS,
   publicationModeForPostgresTest,
   selectTests,
 } from "./test-discovery.mjs";
@@ -27,9 +26,6 @@ function docker(args, options = {}) {
 
 try {
   const available = await discoverTests(new URL("../tests/", import.meta.url), isPostgresTestFile);
-  for (const test of LEGACY_PUBLICATION_PG_TESTS) {
-    if (!available.includes(test)) throw new Error(`Legacy PostgreSQL test inventory is stale: ${test}`);
-  }
   const tests = selectTests(available, process.argv.slice(2));
   if (!tests.length) throw new Error("No PostgreSQL tests found");
   docker(["info", "--format", "{{.ServerVersion}}"]);
@@ -56,7 +52,7 @@ try {
     const database = `harness_test_${index}_${randomUUID().replaceAll("-", "")}`;
     docker(["exec", container, "createdb", "-U", "postgres", database]);
     console.log(
-      `Running ${tests[index]} against a fresh Docker-only database (${publicationMode === "legacy" ? "temporary legacy prototype" : "durable postgres"})`,
+      `Running ${tests[index]} against a fresh Docker-only database (durable postgres)`,
     );
     const result = spawnSync(process.execPath, ["--import", "tsx", "--test", `tests/${tests[index]}`], {
       cwd: backend, stdio: "inherit", timeout: 120_000,
@@ -65,6 +61,7 @@ try {
         NODE_ENV: "test",
         HARNESS_PUBLICATION_MODE: publicationMode,
         HARNESS_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}`,
+        HARNESS_TEST_DOCKER_CONTAINER: container,
       },
     });
     if (result.error || result.status !== 0) throw new Error(`${tests[index]} failed: ${result.error?.message || result.status}`);

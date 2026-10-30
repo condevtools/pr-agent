@@ -10,6 +10,7 @@ import {
   normalizeHeaderRecord,
   readRawBody,
 } from "../../common/webhook-utils.js";
+import { VerifiedWebhookHandlingError } from "../replay/store.js";
 
 const gitlabWebhookPayloadSchema = z.object({
   object_kind: z.string().optional(),
@@ -69,16 +70,14 @@ export class GitlabWebhookService {
       verifyGitLabWebhookToken(normalizedHeaders, this.serviceLogger);
     }
 
-    return runGitLabWebhook({
-      payload,
-      headers: normalizedHeaders,
-      logger: this.serviceLogger,
-      rawBody: resolvedRawBody,
-      // Security was already verified above; skip the duplicate check
-      // inside runGitLabWebhook to avoid double-reading env vars and
-      // double-logging warnings.
-      skipSecurityVerification: true,
-    });
+    try {
+      return await runGitLabWebhook({
+        payload, headers: normalizedHeaders, logger: this.serviceLogger, rawBody: resolvedRawBody,
+        skipSecurityVerification: true,
+      });
+    } catch (error) {
+      throw params.trustReplay ? error : new VerifiedWebhookHandlingError(error);
+    }
   }
 }
 

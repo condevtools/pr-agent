@@ -44,33 +44,13 @@
 
 **交互命令**
 - `/ai-review` — 手动触发评审（comment 或 report 模式）
-- `/ask <问题>` — 多轮代码问答
-- `/checks [问题]` — CI 失败诊断分析
-- `/generate_tests [重点]` — 自动生成测试代码
-- `/changelog [--apply]` — 生成或提交 Changelog
-- `/describe [--apply]` — 生成或更新 PR 描述
 - `/improve [重点]` — 仅输出改进建议导向的评审
 - `/add_doc [重点]`（`/add-doc`）— 仅输出文档/注释改进建议
-- `/reflect [目标]` — 生成需求澄清与验收标准问题
-- `/similar_issue [关键词]`（`/similar-issue`）— 检索同仓库相似 Issue
-- `/custom_prompt <提示词>` — 使用自定义 AI 提示词分析 PR 变更
-- `/help_docs <问题>` — 基于项目 `/docs` 目录内容进行文档问答
-- `/analyze` — 列出所有变更代码组件并按风险评级
-- `/compliance [重点]` — 合规与安全审查
 - `/improve_component <组件>` — 针对指定组件的改进评审
-- `/generate_labels` — 基于 diff 内容自动生成并应用 PR 标签
-- `/similar_code [关键词]` — 检测 diff 中重复或相似的代码模式
-- `/auto_approve` — 基于 AI 风险评估的条件自动 Approve（默认关闭）
-- `/scan_repo_discussions` — 从最近已合并 PR 的评审讨论中提取最佳实践
-- `/feedback` — 评审质量反馈，持续优化后续评审
 
 **流程守卫**
-- `.pr-agent.yml` 仓库级策略（提醒 / 强制模式）
-- Issue 与 PR 模板完整性检查
-- GitHub Check 集成，可接 Branch Protection（`enforce` 模式）
+- `.pr-agent.yml` 仓库级评审策略
 - `.github/.gitlab` 模板/流程文件识别（workflow/template/CODEOWNERS/CONTRIBUTING）并给出流程建议
-- Issue 创建/编辑时流程预检、PR 创建/编辑/同步时合并前预检（GitHub）
-- 仓库缺少 `.pr-agent.yml` 时，Issue 自动分诊（可行性/建议/相似 Issue/自动标签）
 
 **当前支持范围**
 - 仅支持 GitHub App
@@ -351,7 +331,7 @@ flowchart LR
 | GitHub App | Probot 13 |
 | AI 客户端 | OpenAI SDK 4（同时用于兼容 Provider） |
 | 校验 | Zod 3 |
-| 状态存储 | 内存 / JSON 文件 / SQLite（Node.js 内置 `node:sqlite`） |
+| 状态存储 | PostgreSQL 17（业务状态）/ 进程内存（可重新获取缓存） |
 | 容器 | Docker（多阶段构建） |
 
 ---
@@ -522,16 +502,7 @@ GEMINI_MODEL=gemini-2.0-flash
 
 ### 状态持久化
 
-| 后端 | 环境变量值 | 适用场景 |
-|---|---|---|
-| 内存 | `memory`（默认） | 无状态容器、开发环境 |
-| JSON 文件 | `file` | 简单单实例 |
-| SQLite | `sqlite`（推荐） | 生产单实例部署 |
-
-```env
-RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
-```
+PostgreSQL 统一保存 Run、限流、评审游标、反馈以及验签后的 Webhook replay。进程内存只用于可重新获取的缓存。
 
 ### 通知推送（可选）
 
@@ -549,7 +520,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `AI_HTTP_TIMEOUT_MS` | `30000`（30 秒） | AI 评审请求 HTTP 超时 |
-| `AI_ASK_HTTP_TIMEOUT_MS` | `60000`（60 秒） | `/ask` 命令 HTTP 超时（多轮问答通常需要更长时间） |
 | `AI_HTTP_RETRIES` | `2` | AI 提供商临时故障时的重试次数 |
 | `AI_HTTP_RETRY_BACKOFF_MS` | `400` | AI 请求重试基础退避时延（毫秒） |
 | `AI_MAX_CONCURRENCY` | `4` | AI 请求最大并发数 |
@@ -577,12 +547,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITHUB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000`（30 天） | 反馈学习信号保留时长 |
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审 SHA 缓存有效期 |
 | `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略/评审配置缓存 |
-| `GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS` | `600000`（10 分钟） | 流程提醒评论去重窗口 |
-| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | 当仓库缺少 `.pr-agent.yml` 时，在 `issues.opened/edited` 自动执行 Issue 分诊 |
-| `GITHUB_ISSUE_AUTO_TRIAGE_AUTO_LABELS` | `true` | Issue 自动分诊后自动追加推断标签 |
-| `GITHUB_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS` | `300000`（5 分钟） | Issue 自动分诊评论去重窗口 |
-| `GITHUB_ISSUE_AUTO_TRIAGE_SIMILAR_LIMIT` | `5` | 自动分诊输出中最多展示的相似 Issue 数量 |
-| `GITHUB_ISSUE_TRIAGE_DISABLE_AI` | `false` | 关闭 AI 调用，仅使用内置兜底分诊文案 |
 | `GITHUB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/github/trigger` 的额外请求体硬上限 |
 | `GITHUB_WEBHOOK_SKIP_SIGNATURE` | `false` | 仅调试可用；`NODE_ENV=production` 时禁止开启 |
 
@@ -594,7 +558,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITLAB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审状态缓存 |
 | `GITLAB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000`（30 天） | 反馈学习信号保留窗口 |
 | `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略缓存 |
-| `GITLAB_CHANGELOG_PATH` | `CHANGELOG.md` | `/changelog --apply` 写回路径 |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/gitlab/trigger` 的额外请求体硬上限 |
 | `GITLAB_WEBHOOK_SECRET` | GitLab 必填 | 缺失或不匹配时拒绝 Webhook；请求头不能提供 API 凭据或覆盖评审策略 |
 | `ALLOW_INSECURE_GITLAB_HTTP` | `false` | 仅本地调试允许 `http://` GitLab 地址 |
@@ -602,7 +565,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 **调参建议：**
 
 - `MERGED_DEDUPE_TTL_MS` — 控制 `merged + report` 事件的去重窗口，防止 Webhook 重投时重复评审。遇到较多 Webhook 重试/Redeliver 时可调大到 `48h~72h`；需要更快允许同一 PR 合并事件再次触发时可调小到 `1h~6h`。该变量只影响合并自动触发；手动评论命令触发（`/ai-review ...`）仍使用短窗口（5 分钟）去重策略。
-- `FEEDBACK_SIGNAL_TTL_MS` — 控制 `/feedback` 与 review thread resolved/unresolved 信号的保留时长。团队评审节奏慢、希望长期记忆偏好可设为 `60~90` 天；规则变化快、希望更快"遗忘"历史偏好可设为 `7~14` 天。
+- `FEEDBACK_SIGNAL_TTL_MS` — 控制 review thread resolved/unresolved 信号的保留时长。团队评审节奏慢、希望长期记忆偏好可设为 `60~90` 天；规则变化快、希望更快"遗忘"历史偏好可设为 `7~14` 天。
 - `COMMAND_RATE_LIMIT_*` — 控制评论命令的防滥用阈值。高活跃仓库可适当上调，命令刷屏场景可下调。
 
 `.env.example` 提供基础变量参考；上方补充的是代码已实现但通常不在最小模板中的高级开关。
@@ -631,11 +594,21 @@ docker run -d \
   --name pr-agent \
   -p 3000:3000 \
   --env-file .env \
-  -v ./data:/data \
   pr-agent:latest
 ```
 
+应用镜像不内置 PostgreSQL，也不会为外部数据库创建角色。单独运行容器时，部署平台必须预先提供 PostgreSQL、受限 schema owner / 应用角色，并完成迁移；如果这些组件尚未由平台托管，请使用下面的 Compose 方案。
+
 ### Docker Compose
+
+将 `.env.example` 复制为 `.env` 并替换全部占位值。Compose 强制要求四个互不相同的随机 PostgreSQL 密码，不提供默认回退值：
+
+```env
+HARNESS_BOOTSTRAP_PASSWORD=...
+HARNESS_MIGRATION_PASSWORD=...
+HARNESS_APP_PASSWORD=...
+HARNESS_VERIFIER_PASSWORD=...
+```
 
 ```bash
 # 启动
@@ -651,9 +624,14 @@ docker compose restart pr-agent
 docker compose down
 ```
 
-`docker-compose.yml` 挂载的卷：
-- `./data:/data` — 持久化状态（SQLite、事件存储）
+`docker-compose.yml` 使用：
+- `harness-postgres` — PostgreSQL 业务状态与迁移账本
+- `verifier-snapshots` — 可选 verifier 快照
 - `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App 私钥
+
+全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用和 verifier 角色；一次性 `database-init` 服务在 `pr-agent` 启动前应用 schema。修改 `.env` 不会轮换已有 volume 中的密码。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
+
+Compose 只把 `.env` 用于插值。应用服务通过显式运行配置白名单接收变量，不会整体加载该文件，因此应用容器中不存在 bootstrap、迁移或 verifier 凭据。
 
 ### Nixpacks（仅前端）
 
@@ -675,7 +653,7 @@ graph TD
     B2 --> C
     B3 --> C
 
-    C --> D[设置状态后端 = sqlite]
+    C --> D[初始化 PostgreSQL schema]
     D --> E[部署容器]
     E --> F[配置 Webhook URL]
     F --> G[验证健康检查端点]
@@ -684,7 +662,7 @@ graph TD
 
 1. **使用 GitHub App 接入模式** — 这是当前 beta 唯一受支持的接入方式
 2. **配置 AI Provider** — 设置 `AI_PROVIDER` 及对应的 API Key / 模型名称
-3. **启用状态持久化** — 生产环境推荐 `RUNTIME_STATE_BACKEND=sqlite`
+3. **初始化 PostgreSQL** — Compose 必须配置四个数据库密码并确认 `database-init` 成功；外部 PostgreSQL 则必须先建立等价的受限角色，再运行迁移 CLI
 4. **部署容器** — Docker、Docker Compose、Render、Railway、Fly.io 或 K8s
 5. **配置 Webhook URL** 为 `https://<域名>/api/github/webhooks`
 6. **验证** — 访问健康检查端点，并在 PR 中测试 `/ai-review` 命令
@@ -708,22 +686,13 @@ OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
 ```
 
-**推荐的单实例补充配置**
+**必需的持久化运行配置**
 
 ```env
-RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
-WEBHOOK_EVENT_STORE_ENABLED=false
-WEBHOOK_REPLAY_ENABLED=false
+HARNESS_DATABASE_URL=postgresql://pr_agent_app:password@postgres:5432/pr_agent
 ```
 
-**排障时临时开启 replay**
-
-```env
-WEBHOOK_EVENT_STORE_ENABLED=true
-WEBHOOK_REPLAY_ENABLED=true
-WEBHOOK_REPLAY_TOKEN=replace-with-strong-random-token
-```
+Webhook replay 会在验签后写入 PostgreSQL。管理接口使用带 `replay:read` 或 `replay:execute` 权限的作用域 API principal。
 
 3. **启动后端应用**
 
@@ -751,10 +720,10 @@ docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
    - 在 PR/MR 评论中测试：`/ai-review`、`/ai-review comment`
    - Webhook 失败响应应包含结构化字段：`error/type/status/path/method/timestamp`
 
-如果开启 replay：
+使用具备对应作用域权限的 API principal：
 - `GET /webhook/events`
 - `POST /github/replay/:eventId`
-- 请求头：`x-pr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
+- 请求头：`Authorization: Bearer <HARNESS_API_PRINCIPAL_TOKEN>`
 
 ### Nginx 反向代理
 
@@ -784,12 +753,11 @@ server {
 1. 创建 GitHub App，配置以下权限：
    - **Pull requests**：Read & write
    - **Issues**：Read & write
-   - **Contents**：Read & write（`/changelog --apply` 需要）
-   - **Checks**：Read & write（`mode=enforce` 时必需）
+   - **Contents**：Read-only
+   - **Checks**：Read-only
    - **Metadata**：Read-only
 2. 订阅事件：
    - `Pull request`（`opened` / `edited` / `synchronize` / `closed`）
-   - `Issues`（`opened` / `edited`）
    - `Issue comment`
    - `Pull request review thread`（`resolved` / `unresolved`，用于反馈学习）
 3. Webhook URL 设为 `https://<域名>/api/github/webhooks`
@@ -825,33 +793,11 @@ WEBHOOK_SECRET=your-webhook-secret
 | `/ai-review report` **(仅 PR)** | 强制 Report 模式（汇总评论） |
 | `/ai-review comment` **(仅 PR)** | 强制 Comment 模式（行内评论） |
 | `/ai-review --mode=report` / `--mode=comment` **(仅 PR)** | 参数方式指定评审模式（与位置参数等价） |
-| `/ask <问题>` | 针对 PR 或 Issue 提问（支持多轮对话） |
-| `@bot-name <问题>` | @提及 Bot 进行提问（设置 `GITHUB_APP_SLUG` 或 `GITHUB_BOT_LOGIN`） |
-| `/checks [问题]` **(仅 PR)** | 分析 CI 检查失败原因 |
-| `/generate_tests [重点]` **(仅 PR)** | 为变更生成测试代码 |
-| `/changelog [重点]` **(仅 PR)** | 生成 Changelog 条目 |
-| `/changelog --apply [重点]` **(仅 PR)** | 生成并提交 Changelog 到仓库 |
-| `/describe` **(仅 PR)** | 生成 PR/MR 描述 |
-| `/describe --apply` **(仅 PR)** | 生成并更新 PR/MR 描述 |
 | `/improve [重点]` **(仅 PR)** | 以改进建议为主进行评审 |
 | `/add_doc [重点]` / `/add-doc [重点]` **(仅 PR)** | 仅输出文档/注释改进建议 |
-| `/reflect [目标]` **(仅 PR)** | 生成需求澄清与验收标准问题 |
-| `/similar_issue [关键词]` / `/similar-issue [关键词]` | 检索同仓库相似 Issue |
-| `/custom_prompt <提示词>` **(仅 PR)** | 使用自定义 AI 提示词分析 PR 变更 |
-| `/help_docs <问题>` | 基于项目 `/docs` 目录内容进行文档问答 |
-| `/analyze` **(仅 PR)** | 列出所有变更代码组件并按风险评级 |
-| `/compliance [重点]` **(仅 PR)** | 合规与安全审查 |
 | `/improve_component <组件>` **(仅 PR)** | 针对指定组件的改进评审 |
-| `/generate_labels` **(仅 PR)** | 基于 diff 内容自动生成并应用 PR 标签 |
-| `/similar_code [关键词]` **(仅 PR)** | 检测 diff 中重复或相似的代码模式 |
-| `/auto_approve` **(仅 PR)** | 基于 AI 风险评估的条件自动 Approve（默认关闭） |
-| `/scan_repo_discussions` **(仅 PR)** | 从最近已合并 PR 的评审讨论中提取最佳实践 |
-| `/feedback resolved\|dismissed\|up\|down [备注]` | 评审质量反馈 |
 
-支持别名写法，例如：`/ai-review ask ...`、`/ai-review checks ...`、`/ai-review generate-tests ...`、`/ai-review add-doc ...`。
-`.pr-agent.yml` 的命令开关覆盖 `/describe`、`/ask`、`/checks`、`/generate_tests`、`/changelog`、`/feedback`、`/improve`、`/add_doc`、`/custom_prompt`、`/help_docs`、`/analyze`、`/compliance`、`/similar_code`、`/auto_approve`、`/scan_repo_discussions`；`/reflect` 依赖 `askCommandEnabled`；`/improve_component` 依赖 `improveCommandEnabled`；`/generate_labels` 依赖 `autoLabelEnabled`。
-
-> **提示：** `/ask`、`/feedback`、`/similar_issue`、`/help_docs` 和 `@提及` 在 Issue 和 PR 评论中均可使用。在 Issue 评论中不提供 diff 或 CI 上下文，但会将 Issue 标题和正文作为 AI 上下文。可设置 `GITHUB_APP_SLUG`（GitHub App 的 slug）或 `GITHUB_BOT_LOGIN`（Bot 账号 login）启用 `@提及` 检测。带或不带 `[bot]` 后缀都支持。
+GitHub 支持上面的四类命令；GitLab 当前仅支持 `/ai-review`。其他评论会被正常确认并忽略，不会调用模型。
 
 ---
 
@@ -860,48 +806,15 @@ WEBHOOK_SECRET=your-webhook-secret
 在仓库根目录添加 `.pr-agent.yml` 来配置仓库级行为：
 
 ```yaml
-mode: remind          # remind = 仅评论提醒，enforce = 写入失败 GitHub Check
-
-issue:
-  enabled: true
-  minBodyLength: 20
-  requiredSections:
-    - Summary
-    - Steps to Reproduce
-    - Expected Behavior
-
-pullRequest:
-  enabled: true
-  minBodyLength: 20
-  requireLinkedIssue: false
-  requiredSections:
-    - Summary
-    - Test Plan
-
 review:
   enabled: true
   mode: comment         # comment | report
   onOpened: true        # PR 打开时评审
   onEdited: false
   onSynchronize: true   # 新提交时评审
-  describeEnabled: true
-  describeAllowApply: false
-  checksCommandEnabled: true
   includeCiChecks: true
-  askCommandEnabled: true
-  generateTestsCommandEnabled: true
-  changelogCommandEnabled: true
-  changelogAllowApply: false
-  feedbackCommandEnabled: true
   improveCommandEnabled: true
   addDocCommandEnabled: true
-  customPromptCommandEnabled: true
-  helpDocsCommandEnabled: true
-  analyzeCommandEnabled: true
-  complianceCommandEnabled: true
-  similarCodeCommandEnabled: true
-  autoApproveCommandEnabled: false   # 默认关闭，安全考虑
-  scanRepoDiscussionsCommandEnabled: true
   secretScanEnabled: true
   autoLabelEnabled: true
   secretScanCustomPatterns:  # 可选：仓库自定义密钥正则
@@ -911,17 +824,7 @@ review:
     - 不允许新增 any 类型
 ```
 
-GitLab 当前只读取 `.pr-agent.yml` 中的 `review:` 段。顶层 `mode`、`issue`、`pullRequest` 的流程校验是 GitHub 流程能力。
-
-**模式说明：**
-- `remind` — 评论提醒缺失项，不阻止合并
-- `enforce` — 创建失败的 GitHub Check（`PR Agent Policy`），可在 Branch Protection 中设为必需
-
-**模板回退行为：**
-- 未配置 `requiredSections` 时，会自动从仓库模板提取段落标题进行检查：
-  - Issue：`.github/ISSUE_TEMPLATE/*` 或 `.github/ISSUE_TEMPLATE.md`
-  - PR：`.github/pull_request_template.md` 或 `.github/PULL_REQUEST_TEMPLATE.md`
-- 若仓库无上述模板，回退到内置默认段落（Issue：`Summary / Steps to Reproduce / Expected Behavior`；PR：`Summary / Test Plan / Related Issue`）。
+GitHub 和 GitLab 都读取 `.pr-agent.yml` 中的 `review:` 段。PostgreSQL 命令路径不包含 Issue/PR 模板强制校验。
 
 **review 字段说明：**
 
@@ -929,24 +832,9 @@ GitLab 当前只读取 `.pr-agent.yml` 中的 `review:` 段。顶层 `mode`、`i
 |---|---|
 | `enabled` / `mode` | 启用 AI 评审，设置默认模式（comment / report） |
 | `onOpened` / `onEdited` / `onSynchronize` | 控制哪些 PR 事件自动触发评审 |
-| `describeEnabled` | 是否启用 `/describe` 命令 |
-| `describeAllowApply` | 是否允许 `/describe --apply` 直接改写 PR 描述 |
-| `checksCommandEnabled` | 是否启用 `/checks` 命令 |
 | `includeCiChecks` | 是否把 CI 检查结果带入 AI 上下文 |
-| `askCommandEnabled` | 是否启用 `/ask` 命令 |
-| `generateTestsCommandEnabled` | 是否启用 `/generate_tests` 命令 |
-| `changelogCommandEnabled` | 是否启用 `/changelog` 命令 |
-| `changelogAllowApply` | 是否允许 `/changelog --apply` 直接写回仓库 Changelog |
-| `feedbackCommandEnabled` | 是否启用 `/feedback` 命令 |
 | `improveCommandEnabled` | 是否启用 `/improve` 命令 |
 | `addDocCommandEnabled` | 是否启用 `/add_doc`（`/add-doc`）命令 |
-| `customPromptCommandEnabled` | 是否启用 `/custom_prompt` 命令 |
-| `helpDocsCommandEnabled` | 是否启用 `/help_docs` 命令 |
-| `analyzeCommandEnabled` | 是否启用 `/analyze` 命令 |
-| `complianceCommandEnabled` | 是否启用 `/compliance` 命令 |
-| `similarCodeCommandEnabled` | 是否启用 `/similar_code` 命令 |
-| `autoApproveCommandEnabled` | 是否启用 `/auto_approve` 命令（默认**关闭**，安全考虑） |
-| `scanRepoDiscussionsCommandEnabled` | 是否启用 `/scan_repo_discussions` 命令 |
 | `secretScanEnabled` | 是否扫描 diff 中疑似密钥泄露并发布安全提示 |
 | `secretScanCustomPatterns` | 仓库自定义密钥正则补充规则 |
 | `autoLabelEnabled` | 是否根据变更内容自动追加 PR 标签 |
@@ -1000,17 +888,9 @@ Webhook 错误返回结构化 JSON。已知 Webhook 错误（如 `BadWebhookRequ
 
 请求体超过 `WEBHOOK_BODY_LIMIT`（默认 `1mb`）时返回 `413 Payload Too Large`。
 
-### Webhook 回放（调试用）
+### Webhook 回放
 
-排障时临时启用：
-
-```env
-WEBHOOK_EVENT_STORE_ENABLED=true
-WEBHOOK_REPLAY_ENABLED=true
-WEBHOOK_REPLAY_TOKEN=your-secret-token
-```
-
-端点（需携带 `x-pr-agent-replay-token` 请求头）：
+验签后的成功与失败 envelope 会写入 PostgreSQL。端点要求 tenant 与 integration 作用域的 API principal：
 - `GET /webhook/events` — 列出已存储的事件
 - `POST /github/replay/:eventId` — 回放 GitHub 事件
 - `POST /gitlab/replay/:eventId` — 回放 GitLab 事件

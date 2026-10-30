@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const RUN_PERMISSIONS = ["runs:create", "runs:read", "runs:trace", "runs:cancel",
-  "runs:resume", "runs:retry", "runs:recover", "runs:rerun", "usage:reconcile", "fixes:create", "fixes:approve", "fixes:revoke",
+  "runs:resume", "runs:retry", "runs:recover", "runs:rerun", "usage:reconcile", "metrics:read", "replay:read", "replay:execute", "fixes:create", "fixes:approve", "fixes:revoke",
   "feedback:create", "annotations:create", "annotations:arbitrate",
   "evaluations:create", "evaluations:read", "evaluations:holdout", "evolution:propose",
   "evolution:release:qualify", "evolution:release:request", "evolution:release:approve",

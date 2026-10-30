@@ -19,7 +19,7 @@ import type { RunPrincipal } from "../../agent-runtime/runs/control-contracts.js
 import { runConflict, runNotFound } from "../../agent-runtime/runs/control-contracts.js";
 import { reviewRunInputSchema, type ReviewRunInput } from "../../review/intake/run-input.js";
 import { assertSafePath } from "../../repository/content-safety/repository-content.js";
-import { publicationRuntimeForBinding } from "../../agent-runtime/runtime.js";
+import { publicationRuntimeForBinding } from "../../agent-runtime/runtime/publication.js";
 import { fingerprint, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 
 const findingSchema: z.ZodType<FindingCandidate> = z.object({

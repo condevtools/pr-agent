@@ -166,13 +166,13 @@ test("direct command-handler contexts cannot publish a disabled-command reply", 
   assert.equal(replies, 0);
 });
 
-test("online authority latch rejects a mid-run legacy flip", () => {
+test("write boundary remains enforced regardless of obsolete mode environment values", () => {
   process.env.HARNESS_PUBLICATION_MODE = "postgres";
   requireOnlinePublicationAuthority();
-  process.env.HARNESS_PUBLICATION_MODE = "legacy";
+  process.env.HARNESS_PUBLICATION_MODE = "disabled";
   assert.throws(
     () => assertPublicationWriteAllowed("github"),
-    /rollback to a bare legacy publisher is prohibited/,
+    PublicationWriteBoundaryError,
   );
   process.env.HARNESS_PUBLICATION_MODE = previousMode ?? "postgres";
 });

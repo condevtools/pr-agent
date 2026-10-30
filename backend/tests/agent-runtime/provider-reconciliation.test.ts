@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createServer } from "node:http";
 
 import {
-  PendingPublicationError,
   PublicationDefiniteFailureError,
   PublicationLookupIndeterminateError,
   PublicationPreflightError,
@@ -344,7 +342,23 @@ test("durable secret warning survives a retry before batch freeze and deduplicat
   });
   await publishSecretWarningComment({ ...warning, publicationRuntime: retry.runtime });
   await publishSecretWarningComment({ ...warning, publicationRuntime: retry.runtime });
-  await retry.finish();
+  await withRunExecutionContext({
+    lease: {
+      tenantId: scope.tenantId,
+      integrationId: scope.integrationId,
+      runId: "secret-warning-run",
+      jobId: "secret-warning-job",
+      owner: "worker",
+      epoch: 1,
+      jobAttempt: 1,
+      authorityGeneration: 1,
+      executionModeGeneration: 1,
+      baseSha: "base",
+      headSha: warning.headSha,
+    } as never,
+    assertActive: async () => undefined,
+    step: async (_key, _kind, _inputHash, action) => action(),
+  }, () => retry.finish());
 
   assert.equal(frozenInputs.length, 1);
   assert.equal(frozenInputs[0]?.operations.length, 1);
@@ -354,89 +368,6 @@ test("durable secret warning survives a retry before batch freeze and deduplicat
     payload: { body: "different" },
   }), /slot.*different|conflict/i);
 });
-
-test("two-operation review replay reconciles response loss without model rerun or first redispatch", async () => {
-  const savedProvider = process.env.AI_PROVIDER;
-  const savedKey = process.env.OPENAI_API_KEY;
-  const savedBase = process.env.OPENAI_BASE_URL;
-  let modelCalls = 0;
-  let coordinatorCalls = 0;
-  let firstDispatches = 0;
-  let secondDispatches = 0;
-  let frozen: any;
-  process.env.AI_PROVIDER = "openai-compatible";
-  process.env.OPENAI_API_KEY = "pipeline-test-key";
-  const server = createServer((_request, response) => {
-    modelCalls += 1;
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({
-      id: "chatcmpl-pipeline", object: "chat.completion", created: 1, model: "pipeline-test",
-      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: JSON.stringify({ summary: "reviewed", reviews: [] }) } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    }));
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("pipeline model server did not bind");
-  process.env.OPENAI_BASE_URL = `http://127.0.0.1:${address.port}/v1`;
-  const scope = issueOperation().scope;
-  const runtime = {
-    service: {} as never,
-    scope: { tenantId: scope.tenantId, integrationId: scope.integrationId, platform: "github" as const, origin: binding.origin, repository: binding.repository, authorityGeneration: 1 },
-    binding,
-    batchStore: {
-      findBySource: async () => frozen,
-      assertLegacyBatchExecution: async () => undefined,
-      freeze: async (input: any) => {
-        assert.equal(input.operations.length, 2);
-        frozen = { id: "pipeline-batch", scope: input.scope, sourceKey: input.sourceKey, sourceHash: input.sourceHash, status: "pending", operations: input.operations };
-        return frozen;
-      },
-    },
-    batchCoordinator: {
-      execute: async () => {
-        coordinatorCalls += 1;
-        if (coordinatorCalls === 1) {
-          firstDispatches += 1;
-          secondDispatches += 1;
-          return { ...frozen, status: "waiting_reconciliation" };
-        }
-        return { ...frozen, status: "succeeded" };
-      },
-    },
-    createAdapter: async () => ({} as never),
-  };
-  const pull = { id: 424200, number: 4242, title: "feat: pipeline", body: "body", user: { login: "alice" }, draft: false, base: { ref: "main", sha: "base" }, head: { ref: "feature", sha: "head-pipeline" }, additions: 1, deletions: 1, changed_files: 1, html_url: "https://github.com/acme/widgets/pull/4242" };
-  const context = {
-    repo: () => ({ owner: "acme", repo: "widgets" }),
-    log: { info: () => undefined, error: () => undefined },
-    octokit: {
-      repos: { getContent: async () => ({ data: [] }) },
-      pulls: { get: async () => ({ data: pull }), listFiles: async () => ({ data: [] }), createReviewComment: async () => ({ data: { id: 1 } }), update: async () => ({}) },
-      issues: { createComment: async () => ({ data: { id: 1 } }), updateComment: async () => ({}), addLabels: async () => ({}) },
-      paginate: async () => [{ filename: "src/pipeline.ts", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new" }],
-      getLastListFilesTruncated: () => false,
-    },
-  };
-  const request = { context: context as never, pullNumber: 4242, mode: "report" as const, trigger: "comment-command" as const, publicationRuntime: runtime as never, sourceKey: "github:delivery:pipeline", sourceHash: "e".repeat(64), includeCiChecks: false, enableSecretScan: false, enableAutoLabel: true, throwOnError: true };
-  try {
-    await assert.rejects(runGitHubReview(request), PendingPublicationError);
-    await runGitHubReview(request);
-    assert.equal(modelCalls, 1);
-    assert.equal(firstDispatches, 1);
-    assert.equal(secondDispatches, 1);
-  } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    restoreEnv("AI_PROVIDER", savedProvider);
-    restoreEnv("OPENAI_API_KEY", savedKey);
-    restoreEnv("OPENAI_BASE_URL", savedBase);
-  }
-});
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-}
 
 function issueOperation(overrides: Record<string, unknown> = {}): PublicationOperation {
   const payload = {

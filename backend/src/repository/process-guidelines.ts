@@ -1,4 +1,4 @@
-import { loadRuntimeStateValue, nowMs, saveRuntimeStateValue } from "#core";
+import { loadRefetchableCacheValue, nowMs, saveRefetchableCacheValue } from "#core";
 
 export interface ProcessGuideline {
   path: string;
@@ -19,7 +19,7 @@ export async function loadProcessGuidelinesWithCache(params: {
   listDirectory: (path: string) => Promise<Array<{ path: string; type: string }>>;
 }): Promise<ProcessGuideline[]> {
   const now = nowMs();
-  const cached = loadRuntimeStateValue<ProcessGuideline[]>(
+  const cached = loadRefetchableCacheValue<ProcessGuideline[]>(
     params.scope,
     params.cacheKey,
     now,
@@ -67,7 +67,7 @@ export async function loadProcessGuidelinesWithCache(params: {
   }
 
   const result = guidelines.slice(0, params.maxGuidelines);
-  saveRuntimeStateValue({
+  saveRefetchableCacheValue({
     scope: params.scope,
     key: params.cacheKey,
     value: result,

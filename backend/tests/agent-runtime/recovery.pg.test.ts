@@ -17,6 +17,8 @@ import {
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
+import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import {
   firstRecoverablePreparedOperation,
   PgPublicationRecoverySchedule,
@@ -62,6 +64,7 @@ if (!databaseUrl) {
        pr_agent_harness.run_publication_batches,
        pr_agent_harness.agent_runs TO ${roleName}`,
     );
+    await adminPool.query(`GRANT UPDATE ON pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(
       `GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations,
        pr_agent_harness.publication_slots TO ${roleName}`,
@@ -289,15 +292,22 @@ if (!databaseUrl) {
 
   async function createUnknown(suffix: string) {
     const fixture = await createBinding(suffix);
-    const identity = buildPublicationIdentity(fixture.request);
+    const lease = await createLease(fixture, suffix);
+    const request = { ...fixture.request, executionLease: lease };
+    const identity = buildPublicationIdentity(request);
     await assert.rejects(
-      serviceA.publish(fixture.request, {
+      serviceA.publish(request, {
         dispatch: async () => { throw new Error("response lost after write"); },
         find: async () => null,
       }),
       PendingPublicationError,
     );
-    return { ...fixture, operationId: identity.businessOperationId };
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs SET lease_expires_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND id=$2`,
+      [lease.tenantId, lease.runId],
+    );
+    return { ...fixture, request, operationId: identity.businessOperationId };
   }
 
   async function createPrepared(suffix: string) {
@@ -327,6 +337,7 @@ if (!databaseUrl) {
       `UPDATE pr_agent_harness.integration_bindings
        SET provider_repository_id=$3,provider_actor_id=$4,credential_ref='env:GITHUB_TOKEN',
            publication_state='active',publication_generation=1,
+           review_execution_mode='harness_async',execution_mode_generation=1,
            quiescence_receipt='{"verified":true}'::jsonb
        WHERE tenant_id=$1 AND id=$2`,
       [tenantId, integrationId, String(providerRepositoryId), String(providerActorId)],
@@ -361,6 +372,43 @@ if (!databaseUrl) {
         payload: { body: `recovery-${suffix}` },
       },
     };
+  }
+
+  async function createLease(
+    fixture: { binding: PublicationBinding; request: PublicationRequest },
+    suffix: string,
+  ): Promise<RunLease> {
+    const version = "a".repeat(64);
+    await runStore.createRun({
+      tenantId: fixture.binding.tenantId,
+      integrationId: fixture.binding.id,
+      actorType: "service",
+      actorId: "recovery-test",
+      createScope: "test:recovery-unknown:v1",
+      createKey: suffix,
+      requestHash: "b".repeat(64),
+      runType: "review",
+      baseSha: "base-sha",
+      headSha: fixture.request.scope.revision,
+      workflowVersionHash: version,
+      promptVersionHash: version,
+      modelVersionHash: version,
+      toolVersionHash: version,
+      policyVersionHash: version,
+      runtimeVersionHash: version,
+      input: { suffix },
+      authorityGeneration: fixture.binding.generation,
+      executionModeGeneration: 1,
+      runtimeConfig: { maxRunMs: 60_000 },
+    });
+    const lease = await new RunExecutionStore(new RuntimeDatabase(adminPool)).claim({
+      tenantId: fixture.binding.tenantId,
+      integrationId: fixture.binding.id,
+      authorityGeneration: fixture.binding.generation,
+      executionModeGeneration: 1,
+    }, `recovery-run-${suffix}`, version);
+    assert.ok(lease);
+    return lease;
   }
 
   async function makeDue(tenantId: string, operationId: string): Promise<void> {

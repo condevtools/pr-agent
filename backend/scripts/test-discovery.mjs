@@ -23,25 +23,6 @@ const NODE_TEST_OPTIONS_WITH_VALUE = new Set([
   "--test-timeout",
 ]);
 
-// Temporary compatibility inventory. Every entry exercises a direct writer or
-// synchronous workflow that Phase 5 removes; new tests must not be added here.
-export const LEGACY_PUBLICATION_TESTS = Object.freeze([
-  "agent-runtime/publication.test.ts",
-  "fix/fix-publication.test.ts",
-  "integrations/github/github-issue-auto-triage.test.ts",
-  "integrations/github/github-similar-issue-command.test.ts",
-  "integrations/gitlab/gitlab-hardening-fixes.test.ts",
-  "integrations/gitlab/gitlab-similar-issue-command.test.ts",
-  "integrations/gitlab/gitlab-x-ai-mode.test.ts",
-  "regression/platform-publication.test.ts",
-  "regression/policy-lifecycle-e2e.test.ts",
-  "review/short-term-review-usability.test.ts",
-]);
-
-// Kept as an explicit inventory until Phase 5 removes the compatibility split.
-// PostgreSQL publication fixtures now all exercise durable authority.
-export const LEGACY_PUBLICATION_PG_TESTS = Object.freeze([]);
-
 export async function discoverTests(root, predicate = isTestFile) {
   const absoluteRoot = resolve(root instanceof URL ? fileURLToPath(root) : root);
   const discovered = [];
@@ -105,25 +86,9 @@ export function parseTestRunnerRequest(arguments_, available) {
   };
 }
 
-export function partitionTestsByPublicationMode(tests) {
-  const legacySet = new Set(LEGACY_PUBLICATION_TESTS);
-  return {
-    durable: tests.filter((test) => !legacySet.has(test)),
-    legacy: tests.filter((test) => legacySet.has(test)),
-  };
-}
-
 export function publicationModeForPostgresTest(test) {
-  return LEGACY_PUBLICATION_PG_TESTS.includes(test) ? "legacy" : "postgres";
-}
-
-export function validateSuiteSelection(suite, hasExplicitSelection, partitioned) {
-  if (hasExplicitSelection && suite === "legacy" && partitioned.durable.length) {
-    throw new Error(`Durable tests cannot run in the legacy suite: ${partitioned.durable.join(", ")}`);
-  }
-  if (hasExplicitSelection && suite === "durable" && partitioned.legacy.length) {
-    throw new Error(`Legacy-only tests cannot run in the durable suite: ${partitioned.legacy.join(", ")}`);
-  }
+  void test;
+  return "postgres";
 }
 
 function isTestSelection(argument) {

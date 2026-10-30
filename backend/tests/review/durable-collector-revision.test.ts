@@ -57,6 +57,11 @@ test("durable GitLab collection rejects changed diff refs before reading guideli
           batchStore: { findBySource: async () => undefined },
           batchCoordinator: {}, createAdapter: async () => { throw new Error("must not publish"); },
         } as never,
+        businessState: {
+          loadFeedbackSignals: async () => [],
+          loadIncrementalHead: async () => undefined,
+          rememberIncrementalHead: async () => undefined,
+        },
         throwOnError: true,
       })),
       ReviewRunRevisionChangedError,

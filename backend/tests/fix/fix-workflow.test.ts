@@ -4,8 +4,9 @@ import test from "node:test";
 import type { StructuredModelRequest } from "../../src/model/contracts.js";
 import type { FixArtifact, FixProposal, FixSource, FixWorkflowPolicy, VerificationResult } from "../../src/fix/contracts.js";
 import { executeFixProposal } from "../../src/fix/proposal/workflow.js";
+import { executeFixProposalRun } from "../../src/fix/proposal/run.js";
 import { FixPatchValidationError, validateFixPatchPair } from "../../src/fix/proposal/patch-validator.js";
-import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
+import { RunExecutionContractError, type RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
@@ -46,6 +47,13 @@ test("patch validator accepts only allow-listed code and independent new tests",
   assert.throws(() => validateFixPatchPair(codePatch, testPatch, source, policy,
     [{ path: "src/value.ts", content: "export const value = 999;" }]),
   (error: unknown) => error instanceof FixPatchValidationError && error.code === "patch_context_mismatch");
+});
+
+test("FixRun rejects execution outside its frozen durable context permanently", async () => {
+  await assert.rejects(
+    executeFixProposalRun(leaseFixture(), { tenantId: source.tenantId, id: source.integrationId } as never),
+    RunExecutionContractError,
+  );
 });
 
 test("fix workflow persists validated proposal and remains suggestion-only without qualification", async () => {

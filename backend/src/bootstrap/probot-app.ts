@@ -1,10 +1,9 @@
 import type { ApplicationFunction } from "probot";
-import { requireOnlinePublicationAuthority } from "../agent-runtime/runtime.js";
-import { createHash } from "node:crypto";
-import { assertRuntimeStateBackendReady } from "#core";
+import { requireOnlinePublicationAuthority } from "../agent-runtime/publication/mode.js";
 import {
   handleGitHubWebhookEvent,
 } from "#integrations/github";
+import { runVerifiedGitHubIntake } from "../http/webhooks/github/verified-github-intake.js";
 
 const ISSUE_POLICY_EVENTS = ["issues.opened", "issues.edited"] as const;
 const PULL_REQUEST_EVENTS = [
@@ -20,7 +19,6 @@ const PULL_REQUEST_REVIEW_THREAD_EVENTS = [
 
 export const app: ApplicationFunction = (probot): void => {
   requireOnlinePublicationAuthority();
-  assertRuntimeStateBackendReady();
   probot.log.info("AI reviewer app loaded (GitHub + GitLab compatible)");
 
   const dispatchEvent = async (params: {
@@ -32,14 +30,19 @@ export const app: ApplicationFunction = (probot): void => {
       id?: string;
     };
   }): Promise<void> => {
-    await handleGitHubWebhookEvent({
+    await runVerifiedGitHubIntake({
       eventName: params.eventName,
-      payload: params.context.payload,
-      octokit: params.context.octokit as never,
-      logger: params.context.log as never,
-      runtimeMode: "github-app",
       deliveryId: params.context.id,
-      sourceHash: createHash("sha256").update(JSON.stringify(params.context.payload)).digest("hex"),
+      payload: params.context.payload,
+      execute: ({ sourceHash }) => handleGitHubWebhookEvent({
+        eventName: params.eventName,
+        payload: params.context.payload,
+        octokit: params.context.octokit as never,
+        logger: params.context.log as never,
+        runtimeMode: "github-app",
+        deliveryId: params.context.id,
+        sourceHash,
+      }),
     });
   };
 

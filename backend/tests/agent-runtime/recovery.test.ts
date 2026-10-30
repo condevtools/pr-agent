@@ -139,6 +139,63 @@ test("start polls immediately and stop waits for the active tick", async () => {
   assert.equal(stopped, true);
 });
 
+test("stop fences new recovery claims and executions and cannot restart polling", async () => {
+  let releaseScan!: () => void;
+  let scanStarted!: () => void;
+  const scanBarrier = new Promise<void>((resolve) => { releaseScan = resolve; });
+  const scanEntered = new Promise<void>((resolve) => { scanStarted = resolve; });
+  let bindingReads = 0;
+  let claims = 0;
+  let executions = 0;
+  const loop = new PublicationRecoveryLoop(fakeDependencies({
+    listBindings: async () => { bindingReads += 1; return [binding]; },
+    listBatches: async () => {
+      scanStarted();
+      await scanBarrier;
+      return [pendingBatch];
+    },
+    executeBatch: async () => { executions += 1; },
+    claimOperations: async () => { claims += 1; return []; },
+  }), { intervalMs: 60_000 });
+
+  loop.start();
+  await scanEntered;
+  const stopping = loop.stop();
+  releaseScan();
+  await stopping;
+
+  assert.equal(executions, 0);
+  assert.equal(claims, 0);
+  loop.start();
+  await Promise.resolve();
+  assert.equal(bindingReads, 1);
+  assert.equal((await loop.tick()).skipped, true);
+});
+
+test("stop waits for an acquired recovery claim to reconcile and finish", async () => {
+  let releaseClaim!: () => void;
+  let claimStarted!: () => void;
+  const claimBarrier = new Promise<void>((resolve) => { releaseClaim = resolve; });
+  const claimEntered = new Promise<void>((resolve) => { claimStarted = resolve; });
+  const calls: string[] = [];
+  const loop = new PublicationRecoveryLoop(fakeDependencies({
+    claimOperations: async () => {
+      claimStarted();
+      await claimBarrier;
+      return [claim];
+    },
+    reconcileOperation: async () => { calls.push("reconcile"); },
+    finishOperation: async () => { calls.push("finish"); return "resolved"; },
+  }));
+
+  const ticking = loop.tick();
+  await claimEntered;
+  const stopping = loop.stop();
+  releaseClaim();
+  await Promise.all([ticking, stopping]);
+  assert.deepEqual(calls, ["reconcile", "finish"]);
+});
+
 function fakeDependencies(
   overrides: Partial<PublicationRecoveryDependencies> = {},
 ): PublicationRecoveryDependencies {

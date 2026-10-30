@@ -38,7 +38,7 @@ const COPY = {
     cta: 'View Scenarios',
     mainTitle: 'The PR thread becomes the control surface.',
     mainBody:
-      'Run /ai-review, /ask, /checks, /generate_tests, /describe, /changelog, /improve, and more directly inside code review discussions.',
+      'Run the supported review commands directly in code review discussions: /ai-review everywhere, plus /improve, /add_doc, and /improve_component on GitHub.',
     mainPrimary: 'Command Scenarios',
     mainSecondary: 'Read FAQ',
     cards: [
@@ -71,7 +71,7 @@ const COPY = {
     cta: '查看场景',
     mainTitle: 'PR 评论区本身就是操作面板。',
     mainBody:
-      '可以直接在评审讨论中运行 /ai-review、/ask、/checks、/generate_tests、/describe、/changelog、/improve 等命令。',
+      '可直接在评审讨论中运行受支持的命令：GitHub 与 GitLab 均支持 /ai-review，GitHub 另支持 /improve、/add_doc 和 /improve_component。',
     mainPrimary: '命令场景',
     mainSecondary: '阅读 FAQ',
     cards: [

@@ -25,6 +25,7 @@ const request = {
     repository: "acme/widgets",
     target: "pull:42",
     revision: "abc123",
+    authorityGeneration: 1,
   },
   slot: "review-report",
   payload: { body: "review", metadata: { severity: "high" } },

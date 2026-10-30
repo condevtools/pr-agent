@@ -7,6 +7,7 @@ import type { RunStatus } from "../postgres/run-store.js";
 import {
   RunCheckpointCompatibilityError,
   RunLeaseLostError,
+  RunStepAttemptLimitError,
   RunStepConflictError,
   type ClaimableBinding,
   type JsonObject,
@@ -83,6 +84,12 @@ interface CheckpointRow {
   created_at: Date;
 }
 
+export interface RuntimeCompatibilityBacklog {
+  queuedRuns: number;
+  oldestQueuedAt?: string;
+  runtimeVersionHashes: string[];
+}
+
 export class RunExecutionStore {
   private readonly leaseTtlMs: number;
   private readonly initialRetryMs: number;
@@ -134,10 +141,7 @@ export class RunExecutionStore {
           binding.executionModeGeneration, runtimeVersionHash],
       );
       const selected = candidate.rows[0];
-      if (!selected) {
-        await deadLetterIncompatibleRun(client, binding, runtimeVersionHash);
-        return undefined;
-      }
+      if (!selected) return undefined;
 
       const run = await client.query<Omit<ClaimRow, "job_id" | "job_attempt" | "job_kind" | "job_payload_json">>(
         `UPDATE pr_agent_harness.agent_runs
@@ -174,6 +178,36 @@ export class RunExecutionStore {
         job_kind: selected.job_kind,
         job_payload_json: selected.job_payload_json,
       }, binding.tenantId, owner);
+    });
+  }
+
+  /** Read-only operational evidence for Runs waiting on another Worker capability. */
+  async compatibilityBacklog(
+    binding: ClaimableBinding,
+    runtimeVersionHash: string,
+  ): Promise<RuntimeCompatibilityBacklog> {
+    requiredHash(runtimeVersionHash, "runtime version hash");
+    return this.db.transaction(binding.tenantId, async (client) => {
+      const result = await client.query<{
+        queued_runs: number; oldest_queued_at: Date | null; runtime_hashes: string[] | null;
+      }>(
+        `SELECT count(DISTINCT r.id)::int AS queued_runs,
+                min(j.available_at) AS oldest_queued_at,
+                array_agg(DISTINCT r.runtime_version_hash) AS runtime_hashes
+         FROM pr_agent_harness.agent_runs r
+         JOIN pr_agent_harness.job_queue j ON j.tenant_id=r.tenant_id AND j.run_id=r.id
+         WHERE r.tenant_id=$1 AND r.integration_id=$2
+           AND r.authority_generation=$3 AND r.execution_mode_generation=$4
+           AND r.runtime_version_hash<>$5
+           AND r.status IN ('queued','retry_wait') AND j.status IN ('ready','retry_wait')
+           AND r.cancel_requested_at IS NULL AND r.deadline_at>now() AND j.available_at<=now()`,
+        [binding.tenantId, binding.integrationId, binding.authorityGeneration,
+          binding.executionModeGeneration, runtimeVersionHash],
+      );
+      const row = result.rows[0]!;
+      return { queuedRuns: row.queued_runs,
+        oldestQueuedAt: row.oldest_queued_at?.toISOString(),
+        runtimeVersionHashes: row.runtime_hashes ?? [] };
     });
   }
 
@@ -346,6 +380,41 @@ export class RunExecutionStore {
     });
   }
 
+  /** Return a settled abort-aware attempt without consuming failure budget. */
+  async relinquishSettledLease(lease: RunLease, reason = "worker_shutdown"): Promise<void> {
+    requiredText(reason, "lease release reason");
+    await this.withLease(lease, async (client) => {
+      await abandonActiveStepAttempts(client, lease.tenantId, lease.runId, reason);
+      const targetStatus = lease.jobKind === "publication_outcome"
+        ? "waiting_for_reconciliation"
+        : lease.jobKind === "manual_resume" ? "waiting_for_user" : "queued";
+      const run = await client.query<{ version: string }>(
+        `UPDATE pr_agent_harness.agent_runs
+         SET status=$5,lease_owner=NULL,lease_expires_at=NULL,error_code=NULL,
+             execution_attempt_count=GREATEST(0,execution_attempt_count-1),
+             version=version+1,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND lease_owner=$3 AND lease_epoch=$4
+           AND status='running'
+         RETURNING version`,
+        [lease.tenantId, lease.runId, lease.owner, lease.epoch, targetStatus],
+      );
+      if (!run.rows[0]) throw new RunLeaseLostError(lease.runId);
+      const job = await client.query(
+        `UPDATE pr_agent_harness.job_queue
+         SET status='ready',available_at=now(),
+             attempt_count=GREATEST(0,attempt_count-1),claimed_run_epoch=NULL,
+             expected_run_version=$5,last_error_code=NULL,completed_at=NULL,updated_at=now()
+         WHERE tenant_id=$1 AND id=$2 AND run_id=$3 AND claimed_run_epoch=$4
+           AND status='running'`,
+        [lease.tenantId, lease.jobId, lease.runId, lease.epoch, Number(run.rows[0].version)],
+      );
+      if (job.rowCount !== 1) throw new RunLeaseLostError(lease.runId);
+      await appendRunEvent(client, lease.tenantId, lease.runId, "run.requeued", lease.owner, {
+        reasonCode: reason, priorEpoch: lease.epoch, attemptConsumed: false,
+      });
+    });
+  }
+
   async load(tenantId: string, runId: string): Promise<RunExecutionSnapshot | undefined> {
     return this.db.transaction(tenantId, async (client) => {
       const result = await client.query<{
@@ -409,8 +478,16 @@ export class RunExecutionStore {
         if (active) return mapStep(step, active.id, active.attempt_number, false);
       }
       if (step) {
-        if (step.attempt_count >= maxStepAttempts) {
-          throw new Error(`run step attempt limit exhausted: ${input.stepKey}`);
+        const failedAttempts = await client.query<{ count: number }>(
+          `SELECT count(*)::int AS count
+           FROM pr_agent_harness.step_attempts
+           WHERE tenant_id=$1 AND run_id=$2 AND step_id=$3
+             AND status IN ('failed','abandoned')
+             AND COALESCE(error_code,'') NOT IN ('worker_shutdown','heartbeat_lease_uncertain')`,
+          [lease.tenantId, lease.runId, step.id],
+        );
+        if (failedAttempts.rows[0]!.count >= maxStepAttempts) {
+          throw new RunStepAttemptLimitError(input.stepKey);
         }
         await client.query(
           `UPDATE pr_agent_harness.step_attempts
@@ -1225,49 +1302,6 @@ function mapCheckpoint(row: CheckpointRow): RunCheckpoint {
     runtimeVersionHash: row.runtime_version_hash, stateHash: row.state_hash,
     state: row.state_json, createdAt: row.created_at.toISOString(),
   };
-}
-
-async function deadLetterIncompatibleRun(
-  client: PoolClient,
-  binding: ClaimableBinding,
-  runtimeVersionHash: string,
-): Promise<void> {
-  const incompatible = await client.query<{
-    id: string; job_id: string; lease_epoch: string; attempt_count: number;
-  }>(
-    `SELECT r.id,j.id AS job_id,r.lease_epoch,j.attempt_count
-     FROM pr_agent_harness.agent_runs r
-     JOIN pr_agent_harness.job_queue j ON j.tenant_id=r.tenant_id AND j.run_id=r.id
-     WHERE r.tenant_id=$1 AND r.integration_id=$2
-       AND r.authority_generation=$3 AND r.execution_mode_generation=$4
-       AND r.runtime_version_hash<>$5
-       AND j.job_kind IN ('start','retry','recover')
-       AND r.status IN ('queued','retry_wait') AND j.status IN ('ready','retry_wait')
-       AND j.available_at<=now()
-     ORDER BY j.priority DESC,j.available_at,j.id
-     FOR UPDATE OF r,j SKIP LOCKED LIMIT 1`,
-    [binding.tenantId, binding.integrationId, binding.authorityGeneration,
-      binding.executionModeGeneration, runtimeVersionHash],
-  );
-  const row = incompatible.rows[0];
-  if (!row) return;
-  const reason = "runtime_version_incompatible";
-  await client.query(
-    `UPDATE pr_agent_harness.agent_runs
-     SET status='failed',error_code=$3,finished_at=now(),version=version+1,updated_at=now()
-     WHERE tenant_id=$1 AND id=$2`,
-    [binding.tenantId, row.id, reason],
-  );
-  await client.query(
-    `UPDATE pr_agent_harness.job_queue
-     SET status='dead_letter',last_error_code=$3,completed_at=now(),updated_at=now()
-     WHERE tenant_id=$1 AND id=$2`,
-    [binding.tenantId, row.job_id, reason],
-  );
-  await insertDeadLetter(client, binding.tenantId, row, reason);
-  await appendRunEvent(client, binding.tenantId, row.id, "run.failed", "run-claimer", {
-    reasonCode: reason,
-  });
 }
 
 async function settleSweptRun(

@@ -49,3 +49,24 @@ function record() {
     tenantId, integrationId, permissions: ["runs:read", "runs:trace"] as const,
   };
 }
+
+test("expiry, not-before, disable and rotation are enforced without exposing key metadata", () => {
+  for (const constraints of [{ expiresAt: new Date(Date.now()-1000).toISOString() },
+    { notBefore: new Date(Date.now()+60_000).toISOString() }, { disabled: true }]) {
+    const auth = new RunApiAuthenticator(JSON.stringify([{ ...record(), keyId: "old", ...constraints }]));
+    assert.throws(() => auth.authenticate(`Bearer ${token}`), (error: unknown) =>
+      error instanceof RunControlError && error.status === 401);
+  }
+  const auth = new RunApiAuthenticator(JSON.stringify([{ ...record(), keyId: "original" }]));
+  const issued = auth.authenticate(`Bearer ${token}`);
+  auth.assertCurrent(issued);
+  const replacement = "replacement-token";
+  auth.reload(JSON.stringify([{ ...record(), keyId: "rotated",
+    tokenSha256: createHash("sha256").update(replacement).digest("hex") }]));
+  assert.throws(() => auth.authenticate(`Bearer ${token}`));
+  assert.throws(() => auth.assertCurrent(issued), /no longer valid/);
+  assert.equal(auth.authenticate(`Bearer ${replacement}`).subjectId, "api-user");
+  assert.throws(() => auth.reload("invalid-json"));
+  assert.throws(() => auth.authenticate(`Bearer ${replacement}`), (error: unknown) =>
+    error instanceof RunControlError && error.code === "RUN_API_DISABLED");
+});

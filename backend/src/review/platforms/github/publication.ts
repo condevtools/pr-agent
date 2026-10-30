@@ -1,7 +1,7 @@
 import { assertRunActive, currentRunLease } from "../../../agent-runtime/execution/run-context.js";
 import { canonicalJson } from "../../../agent-runtime/versions.js";
 import { PendingPublicationError, PublicationDefiniteFailureError } from "../../../agent-runtime/publication/publication.js";
-import { isDuplicateRequest, localizeText, resolveUiLocale, type UiLocale } from "#core";
+import { localizeText, resolveUiLocale, type UiLocale } from "#core";
 import {
   buildIssueCommentMarkdown,
   findFileForReview,
@@ -9,7 +9,6 @@ import {
 } from "#review";
 import type { PullRequestReviewResult } from "#review";
 import type { DiffFileContext } from "../../../repository/contracts.js";
-import { DEFAULT_DEDUPE_TTL_MS } from "../../policy/triggers.js";
 import { inferReviewLabels } from "../../presentation/auto-labels.js";
 import { buildSecretWarningComment } from "../../rendering/secret-warning.js";
 import type { SecretFinding } from "../../../repository/content-safety/secret-scan.js";
@@ -19,7 +18,6 @@ import type {
   GitHubCollectedContext,
   GitHubReviewContext,
 } from "./contracts.js";
-import { getErrorMessage } from "../../../integrations/github/error.js";
 
 const GITHUB_PULL_FILES_TRUNCATED_WARNING = {
   zh: "⚠️ 文件列表达到 API 的读取上限，当前评审结果可能未覆盖全部变更。",
@@ -27,29 +25,25 @@ const GITHUB_PULL_FILES_TRUNCATED_WARNING = {
 } as const;
 
 export async function prepareGitHubPublicationBatch(params: {
-  runtime?: GitHubPublicationRuntime;
+  runtime: GitHubPublicationRuntime;
   pullNumber: number;
   revision: string;
   sourceKey: string;
   sourceHash: string;
-}): Promise<{ runtime?: GitHubPublicationRuntime; resumed: boolean; finish(): Promise<void> }> {
+}): Promise<{ runtime: GitHubPublicationRuntime; resumed: boolean; finish(): Promise<void> }> {
   const { runtime } = params;
-  if (!runtime?.batchStore || !runtime.batchCoordinator || !runtime.createAdapter) {
-    return { runtime, resumed: false, finish: async () => undefined };
+  if (!runtime.batchStore || !runtime.batchCoordinator || !runtime.createAdapter) {
+    throw new Error("Durable GitHub publication batch services are required");
   }
   const scope = { ...runtime.scope, target: String(params.pullNumber), revision: params.revision };
   const existing = await runtime.batchStore.findBySource(scope, params.sourceKey, params.sourceHash);
   if (existing) {
     const lease = currentRunLease();
-    if (lease) await runtime.batchStore.attachExistingBatchToRun(lease, existing.id);
-    else await runtime.batchStore.assertLegacyBatchExecution(
-      existing,
-      runtime.binding?.executionModeGeneration ?? 0,
-    );
+    if (!lease) throw new Error("Publication batch execution requires a Run lease");
+    await runtime.batchStore.attachExistingBatchToRun(lease, existing.id);
     await assertRunActive();
     assertGitHubBatchSucceeded(await runtime.batchCoordinator.execute(
       scope.tenantId, existing.id, runtime.createAdapter, lease,
-      lease ? undefined : runtime.binding?.executionModeGeneration ?? 0,
     ));
     return { runtime, resumed: true, finish: async () => undefined };
   }
@@ -73,13 +67,12 @@ export async function prepareGitHubPublicationBatch(params: {
     finish: async () => {
       if (operations.size === 0) throw new Error("durable GitHub review produced no frozen publication operations");
       const lease = currentRunLease();
-      const executionModeGeneration = runtime.binding?.executionModeGeneration ?? 0;
+      if (!lease) throw new Error("Publication batch execution requires a Run lease");
       const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations: [...operations.values()],
-        runLease: lease, executionModeGeneration });
+        runLease: lease });
       await assertRunActive();
       assertGitHubBatchSucceeded(await runtime.batchCoordinator!.execute(
         scope.tenantId, frozen.id, runtime.createAdapter!, lease,
-        lease ? undefined : executionModeGeneration,
       ));
     },
   };
@@ -125,7 +118,7 @@ export async function publishGitHubLineComments(
   collected: GitHubCollectedContext,
   reviewResult: PullRequestReviewResult,
   locale: UiLocale,
-  publicationRuntime?: GitHubPublicationRuntime,
+  publicationRuntime: GitHubPublicationRuntime,
 ): Promise<{ posted: number; skipped: number }> {
   const { owner, repo } = collected;
   let posted = 0;
@@ -144,40 +137,22 @@ export async function publishGitHubLineComments(
       continue;
     }
 
-    try {
-      const body = buildIssueCommentMarkdown(review, { platform: "github", locale });
-      const side = review.type === "new" ? "RIGHT" : "LEFT";
-      if (publicationRuntime) {
-        await publishGitHubInlineCommentDurably({
-          runtime: publicationRuntime,
-          context,
-          owner,
-          repo,
-          pullNumber: collected.input.number,
-          revision: collected.headSha,
-          slot: `review-inline:${file.newPath}:${line}:${side}`,
-          body,
-          path: file.newPath,
-          line,
-          side,
-        });
-      } else {
-        await context.octokit.pulls.createReviewComment({
-          owner,
-          repo,
-          pull_number: collected.input.number,
-          body,
-          commit_id: collected.headSha,
-          path: file.newPath,
-          line,
-          side,
-        });
-      }
-      posted += 1;
-    } catch (error) {
-      if (publicationRuntime) throw error;
-      skipped += 1;
-    }
+    const body = buildIssueCommentMarkdown(review, { platform: "github", locale });
+    const side = review.type === "new" ? "RIGHT" : "LEFT";
+    await publishGitHubInlineCommentDurably({
+      runtime: publicationRuntime,
+      context,
+      owner,
+      repo,
+      pullNumber: collected.input.number,
+      revision: collected.headSha,
+      slot: `review-inline:${file.newPath}:${line}:${side}`,
+      body,
+      path: file.newPath,
+      line,
+      side,
+    });
+    posted += 1;
   }
 
   return { posted, skipped };
@@ -190,18 +165,8 @@ export async function publishSecretWarningComment(params: {
   pullNumber: number;
   headSha: string;
   findings: SecretFinding[];
-  publicationRuntime?: GitHubPublicationRuntime;
+  publicationRuntime: GitHubPublicationRuntime;
 }): Promise<void> {
-  const dedupeKey = [
-    "github-secret-scan",
-    `${params.owner}/${params.repo}`,
-    `${params.pullNumber}`,
-    params.headSha,
-  ].join(":");
-  if (!params.publicationRuntime?.planOperation
-      && isDuplicateRequest(dedupeKey, DEFAULT_DEDUPE_TTL_MS)) {
-    return;
-  }
   const locale = resolveUiLocale();
 
   const body = buildSecretWarningComment({
@@ -209,23 +174,14 @@ export async function publishSecretWarningComment(params: {
     findings: params.findings,
     locale,
   });
-  if (params.publicationRuntime) {
-    await publishGitHubIssueCommentDurably({
-      runtime: params.publicationRuntime,
-      context: params.context,
-      owner: params.owner,
-      repo: params.repo,
-      pullNumber: params.pullNumber,
-      revision: params.headSha,
-      slot: `secret-warning:${params.headSha}`,
-      body,
-    });
-    return;
-  }
-  await params.context.octokit.issues.createComment({
+  await publishGitHubIssueCommentDurably({
+    runtime: params.publicationRuntime,
+    context: params.context,
     owner: params.owner,
     repo: params.repo,
-    issue_number: params.pullNumber,
+    pullNumber: params.pullNumber,
+    revision: params.headSha,
+    slot: `secret-warning:${params.headSha}`,
     body,
   });
 }
@@ -255,42 +211,19 @@ export async function tryAddPullRequestLabels(params: {
   pullNumber: number;
   labels: string[];
   revision: string;
-  publicationRuntime?: GitHubPublicationRuntime;
+  publicationRuntime: GitHubPublicationRuntime;
 }): Promise<void> {
-  if (!params.context.octokit.issues.addLabels || params.labels.length === 0) {
+  if (params.labels.length === 0) {
     return;
   }
-
-  if (params.publicationRuntime) {
-    await publishGitHubLabelsDurably({
-      runtime: params.publicationRuntime,
-      context: params.context,
-      owner: params.owner,
-      repo: params.repo,
-      pullNumber: params.pullNumber,
-      revision: params.revision,
-      slot: "review-labels",
-      labels: params.labels,
-    });
-    return;
-  }
-  try {
-    await params.context.octokit.issues.addLabels({
-      owner: params.owner,
-      repo: params.repo,
-      issue_number: params.pullNumber,
-      labels: params.labels,
-    });
-  } catch (error) {
-    params.context.log.error(
-      {
-        owner: params.owner,
-        repo: params.repo,
-        pullNumber: params.pullNumber,
-        labels: params.labels,
-        error: getErrorMessage(error),
-      },
-      "Failed to add auto labels",
-    );
-  }
+  await publishGitHubLabelsDurably({
+    runtime: params.publicationRuntime,
+    context: params.context,
+    owner: params.owner,
+    repo: params.repo,
+    pullNumber: params.pullNumber,
+    revision: params.revision,
+    slot: "review-labels",
+    labels: params.labels,
+  });
 }

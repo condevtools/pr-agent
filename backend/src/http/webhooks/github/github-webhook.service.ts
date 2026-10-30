@@ -2,7 +2,8 @@ import { Injectable, Logger } from "@nestjs/common";
 
 import { BadWebhookRequestError, parseBooleanEnv, readOptionalStringEnv } from "#core";
 import { type LoggerLike } from "../../../review/platforms/github/contracts.js";
-import { handlePlainGitHubWebhook } from "#integrations/github";
+import { handlePlainGitHubWebhook, verifyWebhookSignature } from "#integrations/github";
+import { runVerifiedGitHubIntake } from "./verified-github-intake.js";
 import {
   formatLogMessage,
   normalizeHeaderRecord,
@@ -27,6 +28,7 @@ export class GithubWebhookService {
     rawBody?: Buffer | string;
     headers: Record<string, string | string[] | undefined>;
     trustReplay?: boolean;
+    sourceHash?: string;
   }): Promise<{ ok: boolean; message: string }> {
     const normalizedHeaders = normalizeHeaderRecord(params.headers);
     const rawBody =
@@ -39,12 +41,24 @@ export class GithubWebhookService {
       );
     }
 
-    return handlePlainGitHubWebhook({
+    if (params.trustReplay) {
+      return await handlePlainGitHubWebhook({
+        payload: params.payload, rawBody, headers: normalizedHeaders, logger: this.serviceLogger,
+        skipSignatureVerification: true, sourceHash: params.sourceHash,
+      });
+    }
+    verifyWebhookSignature(rawBody, normalizedHeaders);
+    const eventName = normalizedHeaders["x-github-event"] ?? "unknown";
+    return runVerifiedGitHubIntake({
+      eventName,
+      deliveryId: normalizedHeaders["x-github-delivery"],
+      headers: normalizedHeaders,
       payload: params.payload,
       rawBody,
-      headers: normalizedHeaders,
-      logger: this.serviceLogger,
-      skipSignatureVerification: params.trustReplay === true,
+      execute: ({ sourceHash }) => handlePlainGitHubWebhook({
+        payload: params.payload, rawBody, headers: normalizedHeaders, logger: this.serviceLogger,
+        skipSignatureVerification: true, sourceHash,
+      }),
     });
   }
 }

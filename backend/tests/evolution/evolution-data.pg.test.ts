@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
@@ -17,6 +16,7 @@ import { RuntimeMaintenanceStore } from "../../src/agent-runtime/maintenance.js"
 import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { RunControlError } from "../../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
+import { prepareHarnessRuntimeRoles, reapplyVersionedRuntimeGrants } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -56,18 +56,8 @@ if (!databaseUrl) {
     tenantId, integrationId: integration, permissions: ["feedback:create", "annotations:create", "annotations:arbitrate"] });
 
   before(async () => {
+    await prepareHarnessRuntimeRoles(adminPool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(adminPool);
-    const role = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
-    const ddl = await adminPool.query<{ sql: string }>(role.rowCount
-      ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql"
-      : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql",
-    [appPassword]);
-    await adminPool.query(ddl.rows[0]!.sql);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (configured.status !== 0) throw new Error(`runtime grant CLI failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     appPool = new Pool({ connectionString: appUrl.toString(), max: 8 });
     const appDb = new RuntimeDatabase(appPool);
@@ -209,7 +199,7 @@ if (!databaseUrl) {
     assert.deepEqual(role.rows[0], { rolsuper: false, rolbypassrls: false });
   });
 
-  test("CLI migration removes legacy broad evolution grants and denies system-owned insert columns", async () => {
+  test("versioned runtime grants remove legacy broad evolution grants and deny system-owned insert columns", async () => {
     await adminPool.query(`GRANT INSERT,UPDATE,DELETE ON
       pr_agent_harness.feedback_observations,pr_agent_harness.review_annotations,
       pr_agent_harness.review_annotation_arbitrations,pr_agent_harness.trusted_review_label_sets,
@@ -217,11 +207,7 @@ if (!databaseUrl) {
       pr_agent_harness.eval_fixtures,pr_agent_harness.eval_fixture_files TO pr_agent_app`);
     assert.equal((await appPool.query<{ allowed: boolean }>(
       "SELECT has_table_privilege(current_user,'pr_agent_harness.eval_datasets','INSERT') allowed")).rows[0]!.allowed, true);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (configured.status !== 0) throw new Error(`runtime grant repair failed: ${configured.stderr}`);
+    await reapplyVersionedRuntimeGrants(adminPool);
 
     const privileges = await appPool.query<Record<string, boolean>>(
       `SELECT

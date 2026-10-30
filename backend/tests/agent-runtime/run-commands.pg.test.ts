@@ -304,26 +304,6 @@ if (!databaseUrl) {
     assert.equal(await receiptCount(blockedRetry.run.id, "blocked-retry"), 0);
     assert.deepEqual(await jobRow(blockedRetry.run.id), blockedJob);
 
-    const wrongModeRecover = await createFixture("authority-mode-recover");
-    await adminPool.query(
-      `UPDATE pr_agent_harness.job_queue
-       SET status='completed',completed_at=clock_timestamp() WHERE run_id=$1`,
-      [wrongModeRecover.run.id],
-    );
-    await adminPool.query(
-      "UPDATE pr_agent_harness.integration_bindings SET review_execution_mode='legacy_sync' WHERE id=$1",
-      [wrongModeRecover.scope.integrationId],
-    );
-    await assert.rejects(
-      commandStore.apply(wrongModeRecover.principal, wrongModeRecover.run.id, {
-        kind: "recover", expectedVersion: await runVersion(wrongModeRecover.run.id),
-        commandKey: "wrong-mode-recover",
-      }),
-      /execution authority/,
-    );
-    assert.equal(await receiptCount(wrongModeRecover.run.id, "wrong-mode-recover"), 0);
-    assert.equal(await readyJobCount(wrongModeRecover.run.id), 0);
-
     const generationResume = await createWaitingFixture("authority-generation-resume");
     await adminPool.query(
       `UPDATE pr_agent_harness.integration_bindings

@@ -33,12 +33,12 @@ const COPY = {
       {
         question: 'What runtime state backend is recommended for production?',
         answer:
-          'For single-instance production deployment, the repository recommends sqlite as the durable runtime state backend. That keeps dedupe, review state, and related runtime signals more stable than memory only.',
+          'PostgreSQL is the durable authority for runs, rate limits, review state, feedback, and verified webhook replay. Process memory is used only for refetchable caches.',
       },
       {
         question: 'How do I debug webhook or runtime problems?',
         answer:
-          'Start with /health, /health?deep=true, /github/health, /gitlab/health, and /metrics. If replay is enabled, you can also inspect stored events and replay them through the provided endpoints.',
+          'Start with /health, /health?deep=true, /github/health, /gitlab/health, and /metrics. Scoped administrators can inspect verified events and replay them through the provided endpoints.',
       },
     ],
   },
@@ -71,7 +71,7 @@ const COPY = {
       {
         question: '生产环境推荐什么运行时状态后端？',
         answer:
-          '对于单实例生产环境，仓库推荐使用 sqlite 作为持久化运行时状态后端。这样比单纯依赖内存更适合保存去重、评审状态等运行时信息。',
+          'PostgreSQL 是 Run、限流、评审状态、反馈和验签 Webhook replay 的持久化权威来源。进程内存只保存可重新获取的缓存。',
       },
       {
         question: '如何排查 webhook 或运行时问题？',

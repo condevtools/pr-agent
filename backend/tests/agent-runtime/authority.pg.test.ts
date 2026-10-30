@@ -11,6 +11,8 @@ import {
   PublicationBindingNotFoundError,
 } from "../../src/agent-runtime/authority/publication-authority.js";
 import { PublicationBatchStore } from "../../src/agent-runtime/publication/batches.js";
+import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import { closeAgentRuntime } from "../../src/agent-runtime/runtime.js";
 import { handleGitHubWebhookEvent } from "../../src/integrations/github/webhooks/handler.js";
 
@@ -37,8 +39,7 @@ if (!url) {
     await admin.query(`GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA pr_agent_harness TO ${role}`);
     await admin.query(`REVOKE INSERT, UPDATE, DELETE ON pr_agent_harness.integration_bindings FROM ${role}`);
     await admin.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(uuid,uuid,text,text,text,bigint) TO ${role}`);
-    await admin.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
-      pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
+    await admin.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${role}`);
     const appUrl = new URL(url); appUrl.username = role; appUrl.password = password;
     app = new Pool({ connectionString: appUrl.toString(), max: 4 });
@@ -84,8 +85,8 @@ if (!url) {
     return authority.transition({ tenantId: input.tenantId, integrationId: input.id, expectedVersion: 1,
       action: "activate", actor: "test-admin", quiescenceEvidence: "isolated fixture; no prior publishers" });
   }
-  function plan(input: Awaited<ReturnType<typeof enroll>>, sourceKey = randomUUID()) {
-    return { scope: { tenantId: input.tenantId, integrationId: input.id, platform: "github" as const,
+  function plan(input: Awaited<ReturnType<typeof enroll>>, runLease: RunLease, sourceKey = randomUUID()) {
+    return { runLease, scope: { tenantId: input.tenantId, integrationId: input.id, platform: "github" as const,
       origin: "https://api.github.com", repository: input.repository, target: "1", revision: "head-a", authorityGeneration: 1 },
       sourceKey, sourceHash: createHash("sha256").update(sourceKey).digest("hex"),
       operations: [{ slot: "report", payload: { kind: "github-issue-comment", body: "frozen" } }] };
@@ -123,6 +124,8 @@ if (!url) {
     const active = await authority.transition({ tenantId: input.tenantId, integrationId: input.id, expectedVersion: 1,
       action: "activate", actor: "admin", quiescenceEvidence: "old publishers stopped" });
     assert.equal(active.generation, 1);
+    assert.equal(active.reviewExecutionMode, "harness_async");
+    assert.equal(active.executionModeGeneration, 1);
     await assert.rejects(authority.configure({ tenantId: input.tenantId, integrationId: input.id, expectedVersion: active.version,
       providerRepositoryId: 100, providerActorId: 200, credentialRef: "env:GITHUB_TOKEN" }), /unactivated/);
   });
@@ -204,12 +207,6 @@ if (!url) {
   test("authorized GitHub command records the signed user actor and deduplicates delivery intake", async () => {
     const input = await enroll();
     await activate(input);
-    await admin.query(
-      `UPDATE pr_agent_harness.integration_bindings
-       SET review_execution_mode='harness_async',execution_mode_generation=1
-       WHERE tenant_id=$1 AND id=$2`,
-      [input.tenantId, input.id],
-    );
     let permissionReads = 0;
     const octokit = {
       repos: {
@@ -241,7 +238,7 @@ if (!url) {
         runtimeMode: "github-webhook",
         deliveryId: "github-delivery-actor-1",
       });
-      assert.deepEqual(result, { ok: true, message: "issue_comment review triggered" });
+      assert.deepEqual(result, { ok: true, message: "review command queued" });
     }
     const stored = await admin.query<{
       created_by_actor_type: string; created_by_actor_id: string; jobs: string;
@@ -263,10 +260,11 @@ if (!url) {
 
   test("draining blocks new batches and unresolved operations block authority flips", async () => {
     const input = await enroll(); const active = await activate(input);
-    const batch = await batches.freeze(plan(input));
+    const runLease = await createLease(input, "draining");
+    const batch = await batches.freeze(plan(input, runLease));
     const draining = await authority.transition({ tenantId: input.tenantId, integrationId: input.id, expectedVersion: active.version,
       action: "drain", actor: "admin" });
-    await assert.rejects(batches.freeze(plan(input)), /binding|authority/i);
+    await assert.rejects(batches.freeze(plan(input, runLease)), /binding|authority/i);
     assert.equal((await batches.load(input.tenantId, batch.id))?.id, batch.id);
     await assert.rejects(authority.transition({ tenantId: input.tenantId, integrationId: input.id, expectedVersion: draining.version,
       action: "activate", actor: "admin", quiescenceEvidence: "not enough while unresolved" }), /Unresolved/);
@@ -276,19 +274,54 @@ if (!url) {
 
   test("concurrent freeze and drain serialize without granting registry mutation", async () => {
     const input = await enroll(); const active = await activate(input);
+    const runLease = await createLease(input, "concurrent");
     const [frozen, drained] = await Promise.allSettled([
-      batches.freeze(plan(input)),
+      batches.freeze(plan(input, runLease)),
       authority.transition({ tenantId: input.tenantId, integrationId: input.id, expectedVersion: active.version, action: "drain", actor: "admin" }),
     ]);
     assert.equal(drained.status, "fulfilled");
     if (frozen.status === "fulfilled") assert.equal((await batches.load(input.tenantId, frozen.value.id))?.operations.length, 1);
-    await assert.rejects(batches.freeze(plan(input)), /binding|authority/i);
+    await assert.rejects(batches.freeze(plan(input, runLease)), /binding|authority/i);
     await assert.rejects(app.query("UPDATE pr_agent_harness.integration_bindings SET publication_state='active'"), (error: any) => error.code === "42501");
   });
 
   function setModelEnv(name: string, value: string): void {
     previousModelEnv.set(name, process.env[name]);
     process.env[name] = value;
+  }
+
+  async function createLease(input: Awaited<ReturnType<typeof enroll>>, suffix: string): Promise<RunLease> {
+    const version = createHash("sha256").update(`authority:${suffix}`).digest("hex");
+    await registry.createRun({
+      tenantId: input.tenantId,
+      integrationId: input.id,
+      actorType: "service",
+      actorId: "authority-test",
+      createScope: "test:authority-publication:v1",
+      createKey: suffix,
+      requestHash: createHash("sha256").update(`request:${suffix}`).digest("hex"),
+      runType: "review",
+      baseSha: "base-a",
+      headSha: "head-a",
+      workflowVersionHash: version,
+      promptVersionHash: version,
+      modelVersionHash: version,
+      toolVersionHash: version,
+      policyVersionHash: version,
+      runtimeVersionHash: version,
+      input: { suffix },
+      authorityGeneration: 1,
+      executionModeGeneration: 1,
+      runtimeConfig: { maxRunMs: 60_000 },
+    });
+    const lease = await new RunExecutionStore(db).claim({
+      tenantId: input.tenantId,
+      integrationId: input.id,
+      authorityGeneration: 1,
+      executionModeGeneration: 1,
+    }, `authority-worker-${suffix}`, version);
+    assert.ok(lease);
+    return lease;
   }
 }
 

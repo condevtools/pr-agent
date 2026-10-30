@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   currentModelOutputLimit,
   executeModelRequest,
+  ModelExecutionContextRequiredError,
   withModelExecutionContext,
 } from "../../src/model/execution-context.js";
 import {
@@ -83,6 +84,26 @@ test("durable model context owns the physical request and frozen output cap", as
   assert.equal(result, "ok");
   assert.deepEqual(intents, ["a".repeat(64)]);
   assert.equal(currentModelOutputLimit(200), 200);
+});
+
+test("model requests fail closed before transport without a Run execution context", async () => {
+  let transportCalls = 0;
+  await assert.rejects(
+    executeModelRequest({
+      provider: "openai",
+      model: "model-a",
+      requestKind: "context-required",
+      requestHash: "b".repeat(64),
+      inputTokenUpperBound: 20,
+      maxOutputTokens: 64,
+    }, async () => {
+      transportCalls += 1;
+      return { value: "unexpected", rawResponse: {} };
+    }),
+    (error: unknown) => error instanceof ModelExecutionContextRequiredError
+      && error.requestKind === "context-required",
+  );
+  assert.equal(transportCalls, 0);
 });
 
 test("trusted pricing is required outside the explicit isolated test policy", () => {

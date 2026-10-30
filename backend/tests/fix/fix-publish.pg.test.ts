@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import test, { after, before } from "node:test";
 
@@ -16,6 +15,7 @@ import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import type { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
 import { RunWorker } from "../../src/agent-runtime/execution/run-worker.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
+import { prepareHarnessRuntimeRoles } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -51,18 +51,8 @@ if (!databaseUrl) {
   let lease: RunLease;
 
   before(async () => {
+    await prepareHarnessRuntimeRoles(pool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(pool);
-    const appRole = await pool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
-    const roleDdl = await pool.query<{ sql: string }>(appRole.rowCount
-      ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql"
-      : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) AS sql",
-    [appPassword]);
-    await pool.query(roleDdl.rows[0]!.sql);
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (configured.status !== 0) throw new Error(`runtime grant CLI failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     appPool = new Pool({ connectionString: appUrl.toString(), max: 4 });
     appDb = new RuntimeDatabase(appPool);

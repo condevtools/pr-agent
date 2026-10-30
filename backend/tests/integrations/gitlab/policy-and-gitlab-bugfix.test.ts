@@ -176,11 +176,11 @@ test("gitlab note payload builder accepts string iid and noteable_iid fallback",
   assert.equal(fromNoteableIid.object_attributes.iid, 34);
 });
 
-test("github review behavior policy exposes describe flags from repo config", async () => {
+test("github review behavior policy exposes supported command flags from repo config", async () => {
   const yaml = [
     "review:",
-    "  describeEnabled: false",
-    "  describeAllowApply: true",
+    "  improveCommandEnabled: false",
+    "  addDocCommandEnabled: true",
   ].join("\n");
   const encoded = Buffer.from(yaml, "utf8").toString("base64");
 
@@ -206,6 +206,6 @@ test("github review behavior policy exposes describe flags from repo config", as
     } as never,
   });
 
-  assert.equal((policy as { describeEnabled?: boolean }).describeEnabled, false);
-  assert.equal((policy as { describeAllowApply?: boolean }).describeAllowApply, true);
+  assert.equal(policy.improveCommandEnabled, false);
+  assert.equal(policy.addDocCommandEnabled, true);
 });

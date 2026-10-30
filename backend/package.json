@@ -25,7 +25,6 @@
     "start": "node dist/main.js",
     "test": "node scripts/run-tests.mjs --suite all",
     "test:durable": "node scripts/run-tests.mjs --suite durable",
-    "test:legacy": "node scripts/run-tests.mjs --suite legacy",
     "test:coverage": "node scripts/run-tests.mjs --coverage",
     "test:harness:pg": "node scripts/test-harness-postgres.mjs",
     "test:harness:backup": "node scripts/harness-backup-drill.mjs",

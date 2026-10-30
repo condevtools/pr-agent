@@ -1,4 +1,4 @@
-import { nowMs, readNumberEnv, resolveRuntimeStateBackend, systemClock, type Clock } from "#core";
+import { nowMs, readNumberEnv, resolveRefetchableCacheBackend, systemClock, type Clock } from "#core";
 import { getModelConcurrencyStats } from "#model";
 
 interface MetricDefinition {
@@ -46,6 +46,10 @@ const metricDefinitions: Record<string, MetricDefinition> = {
   },
   pr_agent_http_errors_total: {
     help: "Total number of HTTP errors handled by global filter.",
+    type: "counter",
+  },
+  pr_agent_route_access_denials_total: {
+    help: "Total number of capability guard access denials.",
     type: "counter",
   },
   pr_agent_process_uptime_seconds: {
@@ -151,7 +155,7 @@ export class MetricStore {
       if (name === "pr_agent_runtime_state_backend_info") {
         lines.push(
           formatMetricLine(name, 1, {
-            backend: resolveRuntimeStateBackend(),
+            backend: resolveRefetchableCacheBackend(),
           }),
         );
         continue;

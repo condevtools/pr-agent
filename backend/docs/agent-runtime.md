@@ -1,6 +1,6 @@
 # Agent Runtime：PostgreSQL 持久执行与发布
 
-PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖发布持久化、Run worker、checkpoint、模型预算，以及 Run API、命令回执、SSE 和发布结局恢复。仓库默认仍是同步分析；异步运行沿用现有 GitHub/GitLab 收集器、分析器和发布器。API 鉴权、路由和人工恢复契约见 [run-api.md](run-api.md)。
+PostgreSQL 由根目录现有 `docker-compose.yml` 管理，无需在宿主机安装数据库。当前实现覆盖发布持久化、Run worker、checkpoint、模型预算，以及 Run API、命令回执、SSE 和发布结局恢复。生产评审统一使用持久异步执行；API 鉴权、路由和人工恢复契约见 [run-api.md](run-api.md)。
 
 ## 启动与账户
 
@@ -9,10 +9,14 @@ docker compose up -d --build
 ```
 
 - `postgres`：PostgreSQL 17，持久卷 `harness-postgres`，仅 Compose 内网可访问，无宿主机数据库端口。
-- `harness-migrate`：迁移账户 `pr_agent_migrator`，事务执行带校验和的迁移，授予运行账户最小权限。
+- `database-init`：一次性迁移容器，以 `pr_agent_migrator` 事务执行带校验和的迁移；该角色必须由首次数据库 bootstrap 创建为 schema owner，且必须是 `NOSUPERUSER NOBYPASSRLS`。
 - `pr-agent`：等待数据库健康和迁移成功，以 `pr_agent_app` 连接；启动时拒绝超级用户或绕过 RLS 的账户。
 
-保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥文件要求。部署前在 `.env` 设置不同的 `HARNESS_APP_PASSWORD`、`HARNESS_MIGRATION_PASSWORD`；Compose 默认值仅供本地开发。初始化 SQL 只在首次创建数据卷时执行，修改环境变量不会轮换已有数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
+保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥文件要求。部署前必须在 `.env` 设置四个互不相同的随机密码：`HARNESS_BOOTSTRAP_PASSWORD`、`HARNESS_MIGRATION_PASSWORD`、`HARNESS_APP_PASSWORD`、`HARNESS_VERIFIER_PASSWORD`；Compose 不提供默认值。`.env` 只用于 Compose 插值，`pr-agent` 不会整体加载该文件，而是通过 `docker-compose.yml` 的显式白名单接收运行配置，因此拿不到 bootstrap、migrator 或 verifier 密码。初始化 SQL 只在首次创建空数据卷时执行，创建受限的 migrator、app、verifier 角色；修改环境变量不会轮换已有数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
+
+全新部署复制 `.env.example`、替换四个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 必须成功退出，`pr-agent` 才会启动。可用 `docker compose ps` 和 `docker compose logs database-init` 核对结果。不要把 bootstrap 密码配置给应用或 verifier。
+
+如果现有 volume 来自旧版 `POSTGRES_USER=pr_agent_migrator`（该角色仍为超级用户），不能直接启动新 `database-init`，也不能删除 volume。先备份并停止所有 writer，再按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 显式执行 `docker/postgres/upgrade-runtime-roles.sql`；脚本在迁移 021 之前安装 FORCE RLS owner policy，随后才降权 migrator。所有权或目标数据库不符合预期时脚本会中止，要求人工复核。
 
 在线入口强制使用 PostgreSQL 发布权威，Compose 固定 `HARNESS_PUBLICATION_MODE=postgres`。`legacy` 仅用于隔离测试；不能靠修改 `NODE_ENV` 或运行中切换环境变量绕过在线入口已锁定的发布边界。数据库配置只读取 `HARNESS_DATABASE_URL` 或 `HARNESS_PG_*`，不继承其他服务的 `DATABASE_URL`。
 
@@ -21,12 +25,12 @@ docker compose up -d --build
 新绑定默认为 `blocked`。绑定由管理员维护，Webhook 不能提供或改变 tenant、发布身份和凭证引用。以下 UUID、仓库和数值 ID 是示例，需要替换为已核实的目标：
 
 ```sh
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js bind \
+docker compose run --rm database-init node dist/agent-runtime/cli.js bind \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222 \
   --platform github --origin https://api.github.com --repository owner/repo
 
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js configure \
+docker compose run --rm database-init node dist/agent-runtime/cli.js configure \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222 \
   --repository-id 123 --actor-id 456 --credential-ref env:GITHUB_TOKEN --version 0
@@ -39,7 +43,7 @@ GitHub 用户 token 在发布前用 `/user` 验证实际身份；App 凭证从�
 切换前先实际停止旧版本发布实例，等待在途请求结束，并确认旧实例不会被自动重启。PostgreSQL 的 generation 无法约束不读取数据库的旧二进制程序；填写凭据或切换标记不能替代这一步。核实停止证据后激活：
 
 ```sh
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js authority \
+docker compose run --rm database-init node dist/agent-runtime/cli.js authority \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222 \
   --action activate --version 1 --evidence 'deployment/change record confirming previous publishers stopped and drained'
@@ -66,7 +70,7 @@ GitHub/GitLab review 先生成完整输出，再在一个事务内冻结有序 b
 ## 人工处理不确定结果
 
 ```sh
-docker compose run --rm harness-migrate node dist/agent-runtime/cli.js inspect \
+docker compose run --rm database-init node dist/agent-runtime/cli.js inspect \
   --tenant 11111111-1111-4111-8111-111111111111 \
   --id 22222222-2222-4222-8222-222222222222
 ```
@@ -90,7 +94,7 @@ docker compose run --rm harness-migrate node dist/agent-runtime/cli.js inspect \
 ```
 
 ```sh
-docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" harness-migrate \
+docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" database-init \
   node dist/agent-runtime/cli.js control --input-file /run/control.json
 ```
 
@@ -107,7 +111,7 @@ docker compose run --rm -v "$PWD/control.json:/run/control.json:ro" harness-migr
 
 ## 异步 Run 与模型预算
 
-`integration_bindings.review_execution_mode` 默认为 `legacy_sync`。异步切换使用独立的 execution drain/switch 协议；不要直接修改表来绕过排空和 generation 检查。操作步骤、保留策略、备份演练及故障证据见 [operations.md](operations.md)。
+`integration_bindings.review_execution_mode` 固定为 `harness_async`。需要暂停新评审时使用 execution drain，恢复时使用 execution resume；不要直接修改表来绕过排空和 generation 检查。操作步骤、保留策略、备份演练及故障证据见 [operations.md](operations.md)。
 
 异步入口在确认签名、服务端仓库绑定和不可变 base/head SHA 后，同一事务保存 Run、初始 Event、Job、审计和预算 envelope，再返回 Run ID。输入只保存评审所需字段，凭证由 Worker 从服务端绑定重新解析。重复来源复用 Run，跨实例并发领取由 PostgreSQL Run lease 和单调 epoch 仲裁；Job 不另持有第二套租约。
 
@@ -138,7 +142,7 @@ docker compose config --quiet
 
 PG 测试命令自行创建隔离 Docker 容器、随机本地端口和密码，按 suite 创建独立 `harness_test_*` 数据库，结束时只删除该次测试资源。它不读取 `.env` 或复用开发数据库。普通测试中的 PG skip 不代表数据库测试通过，必须单独运行 Docker PG 测试。
 
-`docker compose run --rm harness-migrate` 可以重复验证/应用迁移。已应用 SQL 有校验和保护；未来变更必须新增迁移，不能修改历史文件。升级前备份并验证恢复，回滚服务也必须保留同一发布账和权限协议，不能回到裸写旧版本。
+`docker compose run --rm database-init node dist/agent-runtime/cli.js migrate` 可以重复验证/应用迁移。已应用 SQL 有校验和保护；未来变更必须新增迁移，不能修改历史文件。升级前备份并验证恢复，回滚服务也必须保留同一发布账和权限协议，不能回到裸写旧版本。
 
 P0c 后续补齐 Run 控制 API、SSE 和发布结果回流；P0d 验证排空切换。P1 加入证据驱动的多 Agent 评审；FixRun 保持独立权限域和验证/审批流程；EvolutionRun 作为离线评测与候选改进控制面。当前不引入 Redis/Kafka：PG 已承担持久事实和恢复协调，暂没有证明需要额外队列的容量数据。不能据本阶段宣称 Harness 49 项全部达标或自动修复、自我演化已上线。
 

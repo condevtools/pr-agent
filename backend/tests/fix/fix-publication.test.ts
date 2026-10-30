@@ -3,6 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 
 import type { PublicationBinding } from "../../src/agent-runtime/authority/publication-authority.js";
+import { withPublicationWriteAuthority } from "../../src/agent-runtime/authority/write-boundary.js";
 import { PublicationPreflightError, type PublicationOperation } from "../../src/agent-runtime/publication/publication.js";
 import type { FixProposal, VerificationResult } from "../../src/fix/contracts.js";
 import { createFixPublicationAdapter } from "../../src/fix/publication/provider-adapter.js";
@@ -148,7 +149,8 @@ test("GitHub fix commit uses one GraphQL mutation with expected head and base64 
     },
   });
   await adapter.preflight?.(operation.marker, operation.payload!);
-  const result = await adapter.dispatch(operation.marker, operation.payload!, operation);
+  const result = await withPublicationWriteAuthority(operation, () =>
+    adapter.dispatch(operation.marker, operation.payload!, operation));
   assert.equal(result.id, "c".repeat(40)); assert.equal(writes.length, 1); assert.equal(writes[0]!.url, "https://api.github.test/graphql");
   const variables = writes[0]!.body.variables as { input: { expectedHeadOid: string; branch: { refName: string }; fileChanges: { additions: unknown[] } } };
   assert.equal(variables.input.expectedHeadOid, headSha); assert.equal(variables.input.branch.refName, plan.branchName);
@@ -209,7 +211,10 @@ test("GitHub successful HTTP with wrong branch SHA remains indeterminate after e
       return Response.json({head:{sha:headSha,ref:"feature/math",repo:{id:9001,full_name:proposal.repository}},base:{repo:{id:9001}}});
     }});
   await adapter.preflight?.(operation.marker, operation.payload!);
-  await assert.rejects(adapter.dispatch(operation.marker,operation.payload!,operation),/lookup|indeterminate/);
+  await assert.rejects(
+    withPublicationWriteAuthority(operation, () => adapter.dispatch(operation.marker,operation.payload!,operation)),
+    /lookup|indeterminate/,
+  );
   assert.equal(writes,1);
 });
 

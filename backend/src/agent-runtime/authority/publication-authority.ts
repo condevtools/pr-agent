@@ -15,7 +15,7 @@ export interface PublicationBinding {
   generation: number;
   version: number;
   state: "blocked" | "active" | "draining";
-  reviewExecutionMode?: "legacy_sync" | "harness_async";
+  reviewExecutionMode: "harness_async";
   executionModeGeneration?: number;
   reviewExecutionState?: "active" | "draining";
 }
@@ -24,7 +24,7 @@ interface BindingRow {
   id: string; tenant_id: string; platform: IntegrationPlatform; origin: string; repository: string;
   provider_repository_id: string | null; provider_actor_id: string | null; credential_ref: string | null;
   publication_generation: string; authority_version: string; publication_state: PublicationBinding["state"];
-  review_execution_mode?: "legacy_sync" | "harness_async";
+  review_execution_mode?: string;
   execution_mode_generation?: string;
   review_execution_state?: "active" | "draining";
 }
@@ -160,7 +160,7 @@ export class PublicationAuthorityStore {
       const receipt = {
         actor: input.actor,
         evidence: input.evidence,
-        fromMode: row.review_execution_mode ?? "legacy_sync",
+        fromMode: requireAsyncExecutionMode(row.review_execution_mode),
         generation: Number(row.execution_mode_generation ?? 0),
       };
       const updated = await client.query<BindingRow>(
@@ -172,73 +172,6 @@ export class PublicationAuthorityStore {
       );
       await appendExecutionAudit(client, input, "execution.drain", {
         mode: receipt.fromMode, generation: receipt.generation,
-        priorVersion: input.expectedVersion,
-      });
-      return mapBinding(updated.rows[0]!);
-    });
-  }
-
-  async switchExecution(input: {
-    tenantId: string; integrationId: string; expectedVersion: number;
-    mode: "legacy_sync" | "harness_async";
-    actor: string; actorType?: "user" | "service"; evidence: string;
-  }): Promise<PublicationBinding> {
-    requiredAdministrativeEvidence(input.actor, input.evidence);
-    return this.db.transaction(input.tenantId, async (client) => {
-      const selected = await client.query<BindingRow>(
-        `SELECT * FROM pr_agent_harness.integration_bindings
-         WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE`,
-        [input.tenantId, input.integrationId],
-      );
-      const row = selected.rows[0];
-      if (!row || Number(row.authority_version) !== input.expectedVersion) {
-        throw new Error("Review execution authority version conflict");
-      }
-      if ((row.review_execution_state ?? "active") !== "draining") {
-        throw new Error("Drain review execution before switching mode");
-      }
-      if (row.publication_state !== "active") {
-        throw new Error("Publication authority must be active before switching review execution");
-      }
-      if ((row.review_execution_mode ?? "legacy_sync") === input.mode) {
-        throw new Error("Review execution mode is already selected");
-      }
-      const nonterminalRuns = await client.query(
-        `SELECT 1 FROM pr_agent_harness.agent_runs
-         WHERE tenant_id=$1 AND integration_id=$2
-           AND status IN ('queued','running','retry_wait','waiting_for_user','waiting_for_reconciliation')
-         LIMIT 1`,
-        [input.tenantId, input.integrationId],
-      );
-      if (nonterminalRuns.rowCount) {
-        throw new Error("Nonterminal Runs prevent review execution mode switch");
-      }
-      const unresolved = await client.query(
-        `SELECT 1 FROM pr_agent_harness.repository_operations
-         WHERE tenant_id=$1 AND integration_id=$2
-           AND status IN ('prepared','in_flight','unknown','manual_review')
-         LIMIT 1`,
-        [input.tenantId, input.integrationId],
-      );
-      if (unresolved.rowCount) {
-        throw new Error("Unresolved publication operations prevent review execution mode switch");
-      }
-      const priorMode = row.review_execution_mode ?? "legacy_sync";
-      const nextGeneration = Number(row.execution_mode_generation ?? 0) + 1;
-      const receipt = {
-        actor: input.actor, evidence: input.evidence, fromMode: priorMode,
-        toMode: input.mode, generation: nextGeneration,
-      };
-      const updated = await client.query<BindingRow>(
-        `UPDATE pr_agent_harness.integration_bindings
-         SET review_execution_mode=$3,execution_mode_generation=execution_mode_generation+1,
-             review_execution_state='active',execution_switch_receipt=$4::jsonb,
-             authority_version=authority_version+1,updated_at=clock_timestamp()
-         WHERE tenant_id=$1 AND id=$2 RETURNING *`,
-        [input.tenantId, input.integrationId, input.mode, JSON.stringify(receipt)],
-      );
-      await appendExecutionAudit(client, input, "execution.switch", {
-        fromMode: priorMode, toMode: input.mode, generation: nextGeneration,
         priorVersion: input.expectedVersion,
       });
       return mapBinding(updated.rows[0]!);
@@ -263,7 +196,7 @@ export class PublicationAuthorityStore {
       if ((row.review_execution_state ?? "active") !== "draining") {
         throw new Error("Only draining review execution can resume admission");
       }
-      const mode = row.review_execution_mode ?? "legacy_sync";
+      const mode = requireAsyncExecutionMode(row.review_execution_mode);
       const generation = Number(row.execution_mode_generation ?? 0);
       const receipt = { actor: input.actor, evidence: input.evidence, mode, generation };
       const updated = await client.query<BindingRow>(
@@ -327,10 +260,17 @@ function mapBinding(row: BindingRow): PublicationBinding {
     id: row.id, tenantId: row.tenant_id, platform: row.platform, origin: row.origin, repository: row.repository,
     providerRepositoryId, providerActorId, credentialRef: row.credential_ref ?? "",
     generation: Number(row.publication_generation), version: Number(row.authority_version), state: row.publication_state,
-    reviewExecutionMode: row.review_execution_mode ?? "legacy_sync",
+    reviewExecutionMode: requireAsyncExecutionMode(row.review_execution_mode),
     executionModeGeneration: Number(row.execution_mode_generation ?? 0),
     reviewExecutionState: row.review_execution_state ?? "active",
   };
+}
+
+function requireAsyncExecutionMode(value: string | undefined): "harness_async" {
+  if (value !== "harness_async") {
+    throw new Error("PostgreSQL asynchronous review execution authority is required");
+  }
+  return value;
 }
 
 function requiredAdministrativeEvidence(actor: string, evidence: string): void {

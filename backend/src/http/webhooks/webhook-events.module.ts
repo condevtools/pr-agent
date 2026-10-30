@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 
 import { WebhookEventsController } from "./events.controller.js";
+import { HttpCommonModule } from "../common/http-common.module.js";
 
-@Module({ controllers: [WebhookEventsController] })
+@Module({ imports: [HttpCommonModule], controllers: [WebhookEventsController] })
 export class WebhookEventsModule {}

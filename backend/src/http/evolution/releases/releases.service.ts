@@ -5,7 +5,7 @@ import { decideReleaseSchema, qualifyCandidateSchema, requestReleaseSchema,
   revokeReleaseSchema, rollbackReleaseSchema } from "../../../evolution/releases/contracts.js";
 import { getModelExecutionPolicy } from "../../../agent-runtime/budget/model-budget-store.js";
 import { RunControlError } from "../../../agent-runtime/runs/control-contracts.js";
-import { getAgentRuntimeServices } from "../../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { runtimeVersionManifest } from "../../../agent-runtime/versions.js";
 import { resolveModelConfiguration } from "../../../model/configuration.js";
 import { RunApiContextService } from "../../common/run-api-context.service.js";

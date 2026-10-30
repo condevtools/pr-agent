@@ -38,6 +38,8 @@ export interface CreateRunInput {
   toolVersionHash: string;
   policyVersionHash: string;
   runtimeVersionHash: string;
+  /** Server-produced full build/source digest for audit only; never used for execution compatibility. */
+  sourceAuditHash?: string;
   input: Record<string, unknown>;
   authorityGeneration?: number;
   runtimeConfig?: Record<string, unknown>;
@@ -403,6 +405,9 @@ function validateCreateRunInput(input: CreateRunInput): void {
   if (hashes.some((value) => !SHA256_PATTERN.test(value))) {
     throw new Error("run request and component hashes must be lowercase SHA-256 values");
   }
+  if (input.sourceAuditHash !== undefined && !SHA256_PATTERN.test(input.sourceAuditHash)) {
+    throw new Error("source audit hash must be a lowercase SHA-256 value");
+  }
   const required = [
     input.actorId,
     input.createScope,
@@ -440,6 +445,9 @@ function normalizeRunExecutionConfig(input: CreateRunInput): {
   maxRunMs: number | null;
   maxJobAttempts: number;
 } {
+  const suppliedAudit = input.runtimeConfig?.audit;
+  const audit = suppliedAudit && typeof suppliedAudit === "object" && !Array.isArray(suppliedAudit)
+    ? suppliedAudit as Record<string, unknown> : {};
   const runtimeConfig = {
     pollMs: 1_000,
     leaseTtlMs: 60_000,
@@ -447,7 +455,13 @@ function normalizeRunExecutionConfig(input: CreateRunInput): {
     sweeperMs: 5_000,
     maxRunMs: 15 * 60_000,
     maxJobAttempts: 3,
+    maxCheckpointBytes: 4 * 1024 * 1024,
     ...input.runtimeConfig,
+    audit: {
+      ...audit,
+      sourceHash: input.sourceAuditHash ?? null,
+      sourceHashAvailability: input.sourceAuditHash ? "available" : "unavailable",
+    },
   };
   const limits = { maxStepAttempts: 3, ...input.limits };
   const maxRunMs = input.deadlineAt === undefined
@@ -464,6 +478,10 @@ function normalizeRunExecutionConfig(input: CreateRunInput): {
   }
   const maxJobAttempts = runtimeAttempts ?? limitAttempts ?? 3;
   runtimeConfig.maxJobAttempts = maxJobAttempts;
+  runtimeConfig.maxCheckpointBytes = positiveConfigInteger(
+    runtimeConfig.maxCheckpointBytes,
+    "runtimeConfig.maxCheckpointBytes",
+  );
   limits.maxStepAttempts = positiveConfigInteger(limits.maxStepAttempts, "limits.maxStepAttempts");
   return { runtimeConfig, limits, maxRunMs, maxJobAttempts };
 }

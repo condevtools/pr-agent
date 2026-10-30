@@ -10,7 +10,7 @@ import { DeepReviewStore } from "./persistence/store.js";
 import { deepBudgetSchema } from "./budget.js";
 import type { RunLease } from "../../agent-runtime/runs/contracts.js";
 import { currentRunExecutionContext, DeepReviewAnalysisFailedError, type RunExecutionContext } from "../../agent-runtime/execution/run-context.js";
-import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 
 export function frozenDeepWorkflowPolicy(lease: Pick<RunLease, "runtimeConfig">): DeepWorkflowPolicy {
   const budgets = deepBudgetSchema.parse(lease.runtimeConfig.deepBudget);

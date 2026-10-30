@@ -87,14 +87,19 @@ export async function executeModelRequest<T>(
   transport: () => Promise<ModelTransportResult<T>>,
 ): Promise<T> {
   const context = currentModelExecutionContext();
-  if (context) {
+  if (!context) throw new ModelExecutionContextRequiredError(intent.requestKind);
+  context.signal?.throwIfAborted();
+  return context.execute(intent, async () => {
     context.signal?.throwIfAborted();
-    return context.execute(intent, async () => {
-      context.signal?.throwIfAborted();
-      return transport();
-    });
+    return transport();
+  });
+}
+
+export class ModelExecutionContextRequiredError extends Error {
+  constructor(readonly requestKind: string) {
+    super(`model request requires a Run execution context: ${requestKind}`);
+    this.name = "ModelExecutionContextRequiredError";
   }
-  return (await transport()).value;
 }
 
 export function modelRequestHash(value: unknown): string {

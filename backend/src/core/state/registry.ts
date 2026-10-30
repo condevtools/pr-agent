@@ -1,233 +1,30 @@
-import { resolve } from "node:path";
-import { readNumberEnv, readOptionalStringEnv } from "../config/env.js";
 import { nowMs } from "../time/clock.js";
-import { FileRuntimeStateStore } from "./file-store.js";
-import { InMemoryRuntimeStateStore } from "./memory-store.js";
-import { SqliteRuntimeStateStore } from "./sqlite-store.js";
+import { InMemoryRefetchableCacheStore } from "./memory-store.js";
 
-type RuntimeStateBackend = "memory" | "file" | "fs" | "sqlite";
+// Process-local refetchable cache only. Business state lives in PostgreSQL.
+const store = new InMemoryRefetchableCacheStore(1_000);
 
-const DEFAULT_RUNTIME_STATE_FILE = ".pr-agent-runtime-state.json";
-const DEFAULT_RUNTIME_STATE_SQLITE_FILE = ".pr-agent-runtime-state.sqlite3";
-const DEFAULT_RUNTIME_STATE_PRUNE_INTERVAL_MS = 1_000;
-const DEFAULT_RUNTIME_STATE_SQLITE_BUSY_TIMEOUT_MS = 5_000;
-const DEFAULT_RUNTIME_STATE_FILE_LOCK_TIMEOUT_MS = 5_000;
-const DEFAULT_RUNTIME_STATE_FILE_STALE_LOCK_TIMEOUT_MS = 30_000;
-const RUNTIME_STATE_FILE_LOCK_RETRY_MS = 25;
-
-interface RuntimeStateRegistry {
-  backend?: RuntimeStateBackend;
-  memoryStore?: InMemoryRuntimeStateStore;
-  fileStore?: FileRuntimeStateStore;
-  fileStorePath?: string;
-  sqliteStore?: SqliteRuntimeStateStore;
-  sqliteStorePath?: string;
+export function resolveRefetchableCacheBackend(): "memory_cache" { return "memory_cache"; }
+export function loadRefetchableCacheValue<T>(scope: string, key: string, now = nowMs()): T | undefined {
+  const value = normalize(scope, key);
+  return value ? store.loadValue<T>(value.scope, value.key, now) : undefined;
 }
-
-const registry: RuntimeStateRegistry = {};
-
-export function resolveRuntimeStateBackend(
-  rawValue: string | undefined = readOptionalStringEnv("RUNTIME_STATE_BACKEND"),
-): RuntimeStateBackend {
-  const backend = (rawValue ?? "memory").trim().toLowerCase();
-  if (backend === "file" || backend === "fs") {
-    return backend;
-  }
-  if (backend === "sqlite" || backend === "sqlite3") {
-    return "sqlite";
-  }
-  return "memory";
-}
-
-function getRuntimeStateBackend(): RuntimeStateBackend {
-  if (!registry.backend) {
-    registry.backend = resolveRuntimeStateBackend();
-  }
-  return registry.backend;
-}
-
-export function loadRuntimeStateValue<T>(
-  scope: string,
-  key: string,
-  now = nowMs(),
-): T | undefined {
-  const scopeName = normalizeScope(scope);
-  const stateKey = normalizeKey(key);
-  if (!scopeName || !stateKey) {
-    return undefined;
-  }
-
-  return getRuntimeStateStore().loadValue<T>(scopeName, stateKey, now);
-}
-
-export function saveRuntimeStateValue<T>(params: {
-  scope: string;
-  key: string;
-  value: T;
-  expiresAt: number;
-  maxEntries?: number;
+export function saveRefetchableCacheValue<T>(params: {
+  scope: string; key: string; value: T; expiresAt: number; maxEntries?: number;
 }): void {
-  const scopeName = normalizeScope(params.scope);
-  const stateKey = normalizeKey(params.key);
-  if (!scopeName || !stateKey) {
-    return;
-  }
-
-  getRuntimeStateStore().saveValue({
-    scope: scopeName,
-    key: stateKey,
-    value: params.value,
-    expiresAt: params.expiresAt,
-    maxEntries: params.maxEntries,
-  });
+  const normalized = normalize(params.scope, params.key);
+  if (normalized) store.saveValue({ ...normalized, value: params.value,
+    expiresAt: params.expiresAt, maxEntries: params.maxEntries });
 }
-
-export function deleteRuntimeStateValue(scope: string, key: string): void {
-  const scopeName = normalizeScope(scope);
-  const stateKey = normalizeKey(key);
-  if (!scopeName || !stateKey) {
-    return;
-  }
-
-  getRuntimeStateStore().deleteValue(scopeName, stateKey);
+export function deleteRefetchableCacheValue(scope: string, key: string): void {
+  const value = normalize(scope, key); if (value) store.deleteValue(value.scope, value.key);
 }
-
-export function clearRuntimeStateScope(scope: string): void {
-  const scopeName = normalizeScope(scope);
-  if (!scopeName) {
-    return;
-  }
-
-  getRuntimeStateStore().clearScope(scopeName);
+export function clearRefetchableCacheScope(scope: string): void { store.clearScope(scope.trim().slice(0,80)); }
+export function clearRefetchableCache(): void { store.clearAll(); }
+export function getRefetchableCacheScopeEntryCount(scope: string): number {
+  return store.getScopeEntryCount(scope.trim().slice(0,80));
 }
-
-export function assertRuntimeStateBackendReady(): void {
-  getRuntimeStateStore();
-}
-
-export async function prepareRuntimeStateBackend(): Promise<void> {
-  const backend = getRuntimeStateBackend();
-  if (isFileBackend(backend)) {
-    await getFileStore().waitUntilReady();
-    return;
-  }
-  getRuntimeStateStore();
-}
-
-export function clearRuntimeStateStore(): void {
-  const backend = getRuntimeStateBackend();
-  if (backend === "sqlite") {
-    getSqliteStore().clearAllAndDispose();
-    registry.sqliteStore = undefined;
-    registry.sqliteStorePath = undefined;
-  } else if (backend === "file" || backend === "fs") {
-    getFileStore().clearAllAndDispose();
-    registry.fileStore = undefined;
-    registry.fileStorePath = undefined;
-  } else {
-    getMemoryStore().clearAll();
-  }
-
-  registry.backend = undefined;
-}
-
-export async function flushRuntimeStatePersistence(): Promise<void> {
-  if (isFileBackend(getRuntimeStateBackend())) {
-    await getFileStore().waitUntilReady();
-    await getFileStore().flushWritesForTests();
-  }
-}
-
-export function getRuntimeStateScopeEntryCount(scope: string): number {
-  const scopeName = normalizeScope(scope);
-  if (!scopeName) {
-    return 0;
-  }
-  return getRuntimeStateStore().getScopeEntryCount(scopeName);
-}
-
-function getRuntimeStateStore():
-  | InMemoryRuntimeStateStore
-  | FileRuntimeStateStore
-  | SqliteRuntimeStateStore {
-  const backend = getRuntimeStateBackend();
-  if (backend === "sqlite") {
-    return getSqliteStore();
-  }
-  if (isFileBackend(backend)) {
-    return getFileStore();
-  }
-  return getMemoryStore();
-}
-
-function getMemoryStore(): InMemoryRuntimeStateStore {
-  if (!registry.memoryStore) {
-    registry.memoryStore = new InMemoryRuntimeStateStore(DEFAULT_RUNTIME_STATE_PRUNE_INTERVAL_MS);
-  }
-  return registry.memoryStore;
-}
-
-function getFileStore(): FileRuntimeStateStore {
-  const nextPath = resolveRuntimeStateFile();
-  if (!registry.fileStore || registry.fileStorePath !== nextPath) {
-    registry.fileStore = new FileRuntimeStateStore({
-      filePath: nextPath,
-      pruneIntervalMs: DEFAULT_RUNTIME_STATE_PRUNE_INTERVAL_MS,
-      lockTimeoutMs: readNumberEnv(
-        "RUNTIME_STATE_FILE_LOCK_TIMEOUT_MS",
-        DEFAULT_RUNTIME_STATE_FILE_LOCK_TIMEOUT_MS,
-      ),
-      lockRetryMs: RUNTIME_STATE_FILE_LOCK_RETRY_MS,
-      staleLockTimeoutMs: readNumberEnv(
-        "RUNTIME_STATE_FILE_STALE_LOCK_TIMEOUT_MS",
-        DEFAULT_RUNTIME_STATE_FILE_STALE_LOCK_TIMEOUT_MS,
-      ),
-    });
-    registry.fileStorePath = nextPath;
-  }
-  return registry.fileStore;
-}
-
-function getSqliteStore(): SqliteRuntimeStateStore {
-  const nextPath = resolveRuntimeStateSqliteFile();
-  if (!registry.sqliteStore || registry.sqliteStorePath !== nextPath) {
-    registry.sqliteStore = new SqliteRuntimeStateStore({
-      filePath: nextPath,
-      busyTimeoutMs: readNumberEnv(
-        "RUNTIME_STATE_SQLITE_BUSY_TIMEOUT_MS",
-        DEFAULT_RUNTIME_STATE_SQLITE_BUSY_TIMEOUT_MS,
-      ),
-      pruneIntervalMs: DEFAULT_RUNTIME_STATE_PRUNE_INTERVAL_MS,
-    });
-    registry.sqliteStorePath = nextPath;
-  }
-  return registry.sqliteStore;
-}
-
-function isFileBackend(backend: RuntimeStateBackend): boolean {
-  return backend === "file" || backend === "fs";
-}
-
-function resolveRuntimeStateFile(): string {
-  const raw = readOptionalStringEnv("RUNTIME_STATE_FILE");
-  if (!raw) {
-    return resolve(process.cwd(), DEFAULT_RUNTIME_STATE_FILE);
-  }
-  return resolve(raw);
-}
-
-function resolveRuntimeStateSqliteFile(): string {
-  const raw = readOptionalStringEnv("RUNTIME_STATE_SQLITE_FILE");
-  if (!raw) {
-    return resolve(process.cwd(), DEFAULT_RUNTIME_STATE_SQLITE_FILE);
-  }
-  return resolve(raw);
-}
-
-function normalizeScope(scope: string): string {
-  return scope.trim().slice(0, 80);
-}
-
-function normalizeKey(key: string): string {
-  return key.trim().slice(0, 240);
+function normalize(scope: string, key: string): { scope: string; key: string } | undefined {
+  const value = { scope: scope.trim().slice(0,80), key: key.trim().slice(0,240) };
+  return value.scope && value.key ? value : undefined;
 }

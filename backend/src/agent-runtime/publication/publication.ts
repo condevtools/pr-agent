@@ -47,8 +47,6 @@ export interface PublicationRequest {
   slot: string;
   payload: Record<string, unknown>;
   executionLease?: RunLease;
-  /** Legacy batch generation fence; excluded from the durable operation identity. */
-  legacyExecutionModeGeneration?: number;
 }
 
 export interface PublicationOperation {
@@ -111,7 +109,6 @@ export interface PreparedOperationInput {
   scope: PublicationScope;
   slot: string;
   executionLease?: RunLease;
-  legacyExecutionModeGeneration?: number;
   reconciliationGraceMs?: number;
 }
 
@@ -472,6 +469,9 @@ export class PgPublicationStore implements PublicationStore {
     return this.db.transaction(input.scope.tenantId, async (client) => {
       const initial = await selectOperation(client, input.scope.tenantId, input.businessOperationId);
       const initialLinks = await linkedRunIds(client, input.scope.tenantId, input.businessOperationId);
+      if ((initial === undefined || initial.status === "prepared") && !input.executionLease) {
+        throw new Error("New publication dispatch requires an active Run lease");
+      }
       let runLeaseLocked = false;
       if ((initial === undefined || initial.status === "prepared") && input.executionLease) {
         validateExecutionLease(input, input.executionLease);
@@ -481,19 +481,6 @@ export class PgPublicationStore implements PublicationStore {
       if (initial?.status === "prepared" && initialLinks.length > 0) {
         assertLeaseMatchesLinkedRun(input, initialLinks);
       }
-      if ((initial === undefined || initial.status === "prepared")
-          && !input.executionLease
-          && input.legacyExecutionModeGeneration !== undefined) {
-        const authority = await client.query<{ allowed: boolean }>(
-          `SELECT pr_agent_harness.lock_resumable_legacy_review_execution_authority(
-             $1::uuid,$2::uuid,$3::bigint,$4::bigint
-           ) AS allowed`,
-          [input.scope.tenantId, input.scope.integrationId,
-            input.scope.authorityGeneration ?? -1, input.legacyExecutionModeGeneration],
-        );
-        if (!authority.rows[0]?.allowed) throw new InactiveIntegrationBindingError();
-      }
-
       const operationBeforeClaim = await preparePublicationInTransaction(client, input);
       if (operationBeforeClaim.status === "succeeded") {
         return { action: "reuse", operation: operationBeforeClaim };
@@ -959,7 +946,6 @@ export function buildPublicationIdentity(request: PublicationRequest): PreparedO
     scope,
     slot,
     executionLease: request.executionLease,
-    legacyExecutionModeGeneration: request.legacyExecutionModeGeneration,
   };
 }
 

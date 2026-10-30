@@ -4,8 +4,8 @@ import type { PublicationBinding } from "../../agent-runtime/authority/publicati
 import { executeDeepReviewWithContext } from "../../review/deep/run.js";
 import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";
 import { DeepReviewAnalysisFailedError } from "../../agent-runtime/execution/run-context.js";
-import type { RunLease } from "../../agent-runtime/runs/contracts.js";
-import { getAgentRuntimeServices } from "../../agent-runtime/runtime.js";
+import { RunExecutionContractError, type RunLease } from "../../agent-runtime/runs/contracts.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 import type { DiffFileContext } from "../../repository/contracts.js";
 import type { PullRequestReviewInput } from "../../review/contracts.js";
 import { ReplayFixtureAdapter } from "./fixture-adapter.js";
@@ -17,7 +17,7 @@ export async function executeReplayRun(lease: RunLease, binding: PublicationBind
   const input = replayRunInputSchema.parse(lease.input);
   const context = currentRunExecutionContext();
   if (!context || context.lease.runId !== lease.runId || binding.tenantId !== lease.tenantId
-      || binding.id !== lease.integrationId) throw new Error("Replay Run context or binding mismatch");
+      || binding.id !== lease.integrationId) throw new RunExecutionContractError("Replay Run context or binding mismatch");
   const fixture = await new PgEvolutionEvaluationStore((await getAgentRuntimeServices()).db).loadReplayFixture(lease, input);
   const artifact = await executeDeepReviewWithContext(parseCollectedFixture(fixture.collected), new ReplayFixtureAdapter(fixture), context);
   if (artifact.analysisStatus === "failed") throw new DeepReviewAnalysisFailedError();
@@ -48,18 +48,18 @@ export class EvaluationCoordinator {
   }
 }
 
-function parseCollectedFixture(value: Record<string, unknown>): {
+export function parseCollectedFixture(value: Record<string, unknown>): {
   input: PullRequestReviewInput; files: DiffFileContext[]; coverage?: { status: "complete" | "partial"; reasonCodes: string[] };
 } {
   if (!value.input || typeof value.input !== "object" || !Array.isArray(value.files)) {
-    throw new Error("Replay fixture does not contain a production deep-review collection");
+    throw new RunExecutionContractError("Replay fixture does not contain a production deep-review collection");
   }
   const files = value.files.map((raw) => {
-    if (!raw || typeof raw !== "object") throw new Error("Replay fixture contains an invalid diff file");
+    if (!raw || typeof raw !== "object") throw new RunExecutionContractError("Replay fixture contains an invalid diff file");
     const file = raw as Record<string, unknown>;
     if (typeof file.newPath !== "string" || typeof file.oldPath !== "string" || typeof file.status !== "string"
         || typeof file.patch !== "string" || typeof file.additions !== "number" || typeof file.deletions !== "number"
-        || typeof file.extendedDiff !== "string") throw new Error("Replay diff file is incomplete");
+        || typeof file.extendedDiff !== "string") throw new RunExecutionContractError("Replay diff file is incomplete");
     return { newPath: file.newPath, oldPath: file.oldPath, status: file.status, patch: file.patch,
       additions: file.additions, deletions: file.deletions, extendedDiff: file.extendedDiff,
       oldLinesWithNumber: new Map(assertLineEntries(file.oldLinesWithNumber)),
@@ -74,7 +74,7 @@ function parseCollectedFixture(value: Record<string, unknown>): {
 function assertLineEntries(value: unknown): Array<[number, string]> {
   if (!Array.isArray(value) || value.some((entry) => !Array.isArray(entry) || entry.length !== 2
       || !Number.isSafeInteger(entry[0]) || typeof entry[1] !== "string")) {
-    throw new Error("Replay diff line map is invalid");
+    throw new RunExecutionContractError("Replay diff line map is invalid");
   }
   return value as Array<[number, string]>;
 }

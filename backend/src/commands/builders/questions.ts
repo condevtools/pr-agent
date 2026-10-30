@@ -149,16 +149,6 @@ export function buildSimilarCodeQuestion(
   return `请分析当前 ${target} diff，识别变更文件中所有重复、相似的代码模式。对每个匹配报告：(1) 文件路径和行范围，(2) 检测到的模式，(3) 是否可以去重或提取为共享工具方法。按相似度排序。`;
 }
 
-export function buildAutoApproveQuestion(
-  target: ReviewTargetLabel,
-  locale: UiLocale = resolveUiLocale(),
-): string {
-  if (locale === "en") {
-    return `Evaluate the overall risk of this ${target}. Consider: (1) scope of changes (number of files, lines changed), (2) complexity of logic changes, (3) potential for regressions, (4) security implications, (5) whether adequate tests are included. Output a JSON object with exactly two keys: "risk" (one of "none", "low", "medium", "high") and "reason" (a brief explanation). Output only the JSON, nothing else.`;
-  }
-  return `请评估当前 ${target} 的整体风险。考虑：(1) 变更范围（文件数、行数），(2) 逻辑变更复杂度，(3) 回归风险，(4) 安全影响，(5) 是否包含充分测试。输出一个 JSON 对象，仅含两个键："risk"（取值 "none"、"low"、"medium"、"high"）和 "reason"（简要说明）。仅输出 JSON，不要其他内容。`;
-}
-
 export function buildScanRepoDiscussionsQuestion(
   target: ReviewTargetLabel,
   discussionsSummary: string,

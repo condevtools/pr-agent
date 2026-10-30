@@ -5,7 +5,8 @@ import { DockerFixVerifier } from "./docker-verifier.js";
 import { loadFixPolicyRegistry } from "../proposal/policy.js";
 import { PgFixVerifierJobStore } from "./jobs.js";
 import { VerifierWorker } from "./worker.js";
-import { agentRuntimePoolConfig } from "../../agent-runtime/runtime.js";
+import { agentRuntimePoolConfig } from "../../agent-runtime/runtime/config.js";
+import { verifierCapabilityHash } from "../../agent-runtime/versions.js";
 
 const pool = new Pool(agentRuntimePoolConfig());
 pool.on("error", (error) => process.stderr.write(`verifier database connection error: ${error.name}\n`));
@@ -21,6 +22,7 @@ const worker = new VerifierWorker({
   verifier: new DockerFixVerifier({ snapshotRoot: process.env.FIX_VERIFIER_SNAPSHOT_ROOT ?? "/var/lib/pr-agent-verifier/snapshots" }),
   policies,
   owner: `${hostname()}:${process.pid}`,
+  verifierCapabilityHash: await verifierCapabilityHash(),
   onError: (error) => process.stderr.write(`verifier worker error: ${error instanceof Error ? error.name : "unknown"}\n`),
 });
 

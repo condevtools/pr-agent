@@ -13,11 +13,12 @@ import { FixStoreError } from "../errors.js";
 import { RuntimeDatabase } from "../../agent-runtime/postgres/database.js";
 import { assertRunLease } from "../../agent-runtime/execution/store.js";
 import type { RunLease } from "../../agent-runtime/runs/contracts.js";
-import { fingerprint } from "../../agent-runtime/versions.js";
+import { fingerprint, verifierCapabilityHash } from "../../agent-runtime/versions.js";
 import { verificationResultSchema } from "../proposal/input.js";
 import type { RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { requireRunPermission, runNotFound } from "../../agent-runtime/runs/control-contracts.js";
 import { redactRepositoryText } from "../../repository/content-safety/repository-content.js";
+import { verificationResultIdentityHash } from "../verification/jobs.js";
 
 
 export class PgFixStore implements FixStorePort {
@@ -68,6 +69,7 @@ export class PgFixStore implements FixStorePort {
 
   async registerProposal(lease: RunLease, stepKey: string, proposal: FixProposal): Promise<void> {
     assertProposalLease(lease, proposal);
+    const verifierHash = this.enqueueJob ? await verifierCapabilityHash() : undefined;
     await this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "share" });
       const step = await successfulStep(client, lease, stepKey, "verification");
@@ -97,7 +99,8 @@ export class PgFixStore implements FixStorePort {
           sourceBundleHash: proposal.sourceBundleHash, policyHash: proposal.policyHash,
           trustedCommandHash: proposal.trustedCommandHash, dependencyLockPath: proposal.dependencyLockPath,
           dependencyLockHash: proposal.dependencyLockHash,
-          sandboxPolicyHash: proposal.sandboxPolicyHash }),
+          sandboxPolicyHash: proposal.sandboxPolicyHash, verifierCapabilityHash: verifierHash }),
+        verifierCapabilityHash: verifierHash!,
         trustedCommandHash: proposal.trustedCommandHash, dependencyLockPath: proposal.dependencyLockPath,
         dependencyLockHash: proposal.dependencyLockHash,
         sandboxPolicyHash: proposal.sandboxPolicyHash,
@@ -132,10 +135,12 @@ export class PgFixStore implements FixStorePort {
       if (fingerprint(step.output) !== fingerprint(verification)) throw new FixStoreError("verification_step_output_mismatch");
       const selected = await client.query<{
         job_id: string; result_json: unknown; result_hash: string; job_proposal_hash: string; job_policy_hash: string;
-        proposal_hash: string; policy_hash: string; image_digest: string;
+        proposal_hash: string; policy_hash: string; image_digest: string; verification_input_hash: string;
+        verifier_capability_hash: string | null; result_identity_hash: string | null;
       }>(
         `SELECT j.id AS job_id,j.result_json,j.result_hash,j.proposal_hash AS job_proposal_hash,
-                j.policy_hash AS job_policy_hash,p.proposal_hash,p.policy_hash,p.image_digest
+                j.policy_hash AS job_policy_hash,j.verification_input_hash,j.verifier_capability_hash,
+                j.result_identity_hash,p.proposal_hash,p.policy_hash,p.image_digest
          FROM pr_agent_harness.verification_jobs j
          JOIN pr_agent_harness.fix_proposals p
            ON p.tenant_id=j.tenant_id AND p.run_id=j.run_id AND p.id=j.proposal_id
@@ -149,7 +154,9 @@ export class PgFixStore implements FixStorePort {
       if (fingerprint(result) !== fingerprint(verification)) throw new FixStoreError("verification_job_output_mismatch");
       if (fingerprint(result) !== row.result_hash || result.proposalHash !== row.proposal_hash
           || result.proposalHash !== row.job_proposal_hash || result.policyHash !== row.policy_hash
-          || result.policyHash !== row.job_policy_hash || result.imageDigest !== row.image_digest) {
+          || result.policyHash !== row.job_policy_hash || result.imageDigest !== row.image_digest
+          || !row.verifier_capability_hash || row.result_identity_hash !== verificationResultIdentityHash(
+            row.result_hash, row.verification_input_hash, row.verifier_capability_hash)) {
         throw new FixStoreError("verification_result_scope_mismatch");
       }
       const proven = result.outcome === "verified" && result.relevance === "verified"

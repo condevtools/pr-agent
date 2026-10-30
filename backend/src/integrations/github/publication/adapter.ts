@@ -15,8 +15,6 @@ import type { MinimalGitHubOctokit } from "../api/types.js";
 import { githubPublicationReconciliationGraceMs } from "../../../core/http/retry-options.js";
 import { canonicalJson } from "../../../agent-runtime/versions.js";
 
-import { isDurablePublicationEnabled } from "../../../agent-runtime/publication/mode.js";
-
 const PAGE_SIZE = 100;
 const PAGE_CAP = 20;
 
@@ -55,7 +53,7 @@ export async function publishGitHubIssueCommentDurably(params: {
     managedTargetId: managedTarget?.id ?? null,
     managedTargetBodySha256: managedTarget?.bodySha256 ?? null,
   };
-  return publishOrPlan(params.runtime, buildRequest(params, payload), makeAdapter(params.context.octokit, params.runtime.binding, undefined, payload, params.runtime.verifyCredentialIdentity));
+  return publishOrPlan(params.runtime, buildRequest(params, payload));
 }
 
 export async function publishGitHubInlineCommentDurably(params: {
@@ -69,7 +67,7 @@ export async function publishGitHubInlineCommentDurably(params: {
     body: params.body, path: params.path, line: params.line, side: params.side,
     revision: params.revision,
   };
-  return publishOrPlan(params.runtime, buildRequest(params, payload), makeAdapter(params.context.octokit, params.runtime.binding, undefined, payload, params.runtime.verifyCredentialIdentity));
+  return publishOrPlan(params.runtime, buildRequest(params, payload));
 }
 
 export async function publishGitHubLabelsDurably(params: {
@@ -82,15 +80,12 @@ export async function publishGitHubLabelsDurably(params: {
     labels: [...new Set(params.labels)].sort(),
     revision: params.revision,
   };
-  return publishOrPlan(params.runtime, buildRequest(params, payload), makeAdapter(params.context.octokit, params.runtime.binding, undefined, payload, params.runtime.verifyCredentialIdentity));
+  return publishOrPlan(params.runtime, buildRequest(params, payload));
 }
 
-function publishOrPlan(runtime: GitHubPublicationRuntime, publication: ReturnType<typeof buildRequest>, adapter: PublicationAdapter): Promise<PublicationResult> {
+function publishOrPlan(runtime: GitHubPublicationRuntime, publication: ReturnType<typeof buildRequest>): Promise<PublicationResult> {
   if (!runtime.planOperation) {
-    if (isDurablePublicationEnabled()) {
-      throw new Error("durable publication must be planned as a frozen batch operation");
-    }
-    return runtime.service.publish(publication, adapter);
+    throw new Error("durable publication must be planned as a frozen batch operation");
   }
   runtime.planOperation({ slot: publication.slot, payload: publication.payload });
   return Promise.resolve({ businessOperationId: "planned", marker: "", remoteId: "planned", reused: false, reconciled: false });

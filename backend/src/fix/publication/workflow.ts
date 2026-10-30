@@ -4,7 +4,8 @@ import type { PublicationBinding } from "../../agent-runtime/authority/publicati
 import { PendingPublicationError, PublicationDefiniteFailureError } from "../../agent-runtime/publication/publication.js";
 import type { RunLease } from "../../agent-runtime/runs/contracts.js";
 import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";
-import { getAgentRuntimeServices, publicationRuntimeForBinding } from "../../agent-runtime/runtime.js";
+import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
+import { publicationRuntimeForBinding } from "../../agent-runtime/runtime/publication.js";
 import { fingerprint } from "../../agent-runtime/versions.js";
 import { consumeFixApprovalInTransaction } from "../approval/store.js";
 import { FixStoreError } from "../errors.js";

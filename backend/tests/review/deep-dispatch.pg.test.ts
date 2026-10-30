@@ -7,7 +7,6 @@ import { Pool } from "pg";
 
 import { PublicationAuthorityStore, type PublicationBinding } from "../../src/agent-runtime/authority/publication-authority.js";
 import { ModelBudgetStore } from "../../src/agent-runtime/budget/model-budget-store.js";
-import { PublicationBatchStore } from "../../src/agent-runtime/publication/batches.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
@@ -237,14 +236,9 @@ if (!databaseUrl) {
       credentialRef, expectedVersion: 0 });
     let value = await authority.transition({ tenantId, integrationId: id, expectedVersion: 1, action: "activate",
       actor: "dispatch-test", actorType: "service", quiescenceEvidence: "isolated local provider" });
-    await new PublicationBatchStore(appDb).freeze({ executionModeGeneration: 0,
-      scope: { tenantId, integrationId: id, platform, origin, repository, target: "old-target", revision: "old-head",
-        authorityGeneration: value.generation }, sourceKey: `old:${id}`, sourceHash: hash(`old:${id}`),
-      operations: [{ slot: "old-slot", payload: { body: "old frozen publication" } }] });
-    await adminPool.query(`UPDATE pr_agent_harness.integration_bindings
-      SET review_execution_mode='harness_async',review_execution_state='active',execution_mode_generation=1
-      WHERE tenant_id=$1 AND id=$2`, [tenantId, id]);
-    value = { ...value, reviewExecutionMode: "harness_async", reviewExecutionState: "active", executionModeGeneration: 1 };
+    assert.equal(value.reviewExecutionMode, "harness_async");
+    assert.equal(value.reviewExecutionState, "active");
+    assert.equal(value.executionModeGeneration, 1);
     return value;
   }
 
@@ -317,8 +311,6 @@ async function grantRuntime(pool: Pool, role: string): Promise<void> {
       pr_agent_harness.skip_failed_batch_successors(uuid,uuid),
       pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),
-      pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
-      pr_agent_harness.lock_resumable_legacy_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_resolvable_publication_authority(uuid,uuid,bigint),
       pr_agent_harness.skip_cancelled_run_publications(uuid,uuid) TO ${role};
     GRANT SELECT,INSERT,UPDATE ON pr_agent_harness.agent_steps,pr_agent_harness.step_attempts,

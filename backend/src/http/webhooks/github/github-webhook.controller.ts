@@ -1,3 +1,4 @@
+import { RouteAccess } from "../../common/route-access.js";
 import {
   Controller,
   Get,
@@ -8,7 +9,7 @@ import {
   Req,
 } from "@nestjs/common";
 
-import { BadWebhookRequestError, readOptionalStringEnv } from "#core";
+import { readOptionalStringEnv } from "#core";
 import { GithubWebhookService } from "./github-webhook.service.js";
 import {
   buildHealthStatus,
@@ -17,19 +18,21 @@ import {
 } from "../../system/health.js";
 import { incrementMetricCounter } from "../../system/metrics-runtime.js";
 import {
-  assertWebhookReplayAuthorized,
   getStoredWebhookEventById,
-  scheduleWebhookEventRecord,
+  replayNotFound,
   resolveStoredWebhookReplayPayload,
 } from "../replay/store.js";
-import { readHeaderValue, readRawBody } from "../../common/webhook-utils.js";
 import type { RawBodyRequest } from "../../common/types/raw-body-request.js";
+import { RunApiContextService } from "../../common/run-api-context.service.js";
+import { requireRunPermission } from "../../../agent-runtime/runs/control-contracts.js";
 
 @Controller("github")
 export class GithubWebhookController {
-  constructor(private readonly githubWebhookService: GithubWebhookService) {}
+  constructor(private readonly githubWebhookService: GithubWebhookService,
+    private readonly context: RunApiContextService) {}
 
   @Get("health")
+  @RouteAccess("public")
   health(@Query("deep") deep?: string): Promise<HealthStatus> {
     const webhookConfigured = Boolean(
       readOptionalStringEnv("GITHUB_WEBHOOK_SECRET") ??
@@ -46,72 +49,46 @@ export class GithubWebhookController {
   }
 
   @Post("trigger")
+  @RouteAccess("signed-webhook")
   async trigger(
     @Req() request: RawBodyRequest,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
-    const eventName = (readHeaderValue(headers, "x-github-event") ?? "unknown").toLowerCase();
-    const metricEvent = normalizeGitHubMetricEventName(eventName);
-    incrementMetricCounter("pr_agent_webhook_requests_total", {
-      platform: "github",
-      event: metricEvent,
-    });
-
-    try {
-      const result = await this.githubWebhookService.handleTrigger({
-        payload: request.body,
-        rawBody: request.rawBody,
-        headers,
-      });
-      incrementMetricCounter("pr_agent_webhook_results_total", {
-        platform: "github",
-        result: "ok",
-      });
-      scheduleWebhookEventRecord({
-        platform: "github",
-        eventName,
-        headers,
-        payload: request.body,
-        rawBody: readRawBody(request.rawBody),
-      });
-      return result;
-    } catch (error) {
-      incrementMetricCounter("pr_agent_webhook_results_total", {
-        platform: "github",
-        result: "error",
-      });
-      throw error;
-    }
+    return this.githubWebhookService.handleTrigger({ payload: request.body, rawBody: request.rawBody, headers });
   }
 
   @Post("replay/:eventId")
+  @RouteAccess("replay:execute")
   async replay(
     @Param("eventId") eventId: string,
+    @Req() request: RawBodyRequest,
     @Headers() headers: Record<string, string | string[] | undefined>,
   ): Promise<{ ok: boolean; message: string }> {
-    assertWebhookReplayAuthorized(headers);
+    const principal = this.context.authenticate(request);
+    requireRunPermission(principal, "replay:execute");
     const event = await getStoredWebhookEventById({
-      id: eventId,
+      principal, id: eventId,
       platform: "github",
     });
     if (!event) {
-      throw new BadWebhookRequestError(`webhook replay event not found: ${eventId}`);
+      throw replayNotFound(eventId);
     }
 
     const payload = resolveStoredWebhookReplayPayload(event);
     if (typeof payload === "undefined") {
-      throw new BadWebhookRequestError(`replay payload is empty for event: ${eventId}`);
+      throw replayNotFound(eventId);
     }
 
     try {
       const result = await this.githubWebhookService.handleTrigger({
         payload,
-        rawBody: event.rawBody,
+        rawBody: JSON.stringify(payload),
         headers: {
           ...event.headers,
           "x-github-event": event.eventName,
         },
         trustReplay: true,
+        sourceHash: event.payloadHash,
       });
       incrementMetricCounter("pr_agent_webhook_replay_total", {
         platform: "github",
@@ -126,18 +103,4 @@ export class GithubWebhookController {
       throw error;
     }
   }
-}
-
-const GITHUB_METRIC_EVENT_NAMES = new Set([
-  "issue_comment",
-  "issues",
-  "pull_request",
-  "pull_request_review_thread",
-]);
-
-function normalizeGitHubMetricEventName(eventName: string): string {
-  if (GITHUB_METRIC_EVENT_NAMES.has(eventName)) {
-    return eventName;
-  }
-  return "other";
 }

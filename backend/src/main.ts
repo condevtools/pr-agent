@@ -4,15 +4,27 @@ import "reflect-metadata";
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { json, urlencoded } from "express";
-import { prepareRuntimeStateBackend, readOptionalStringEnv } from "#core";
-import { AppModule } from "./app.module.js";
+import { readOptionalStringEnv } from "#core";
 import type { RawBodyRequest } from "./http/common/types/raw-body-request.js";
-import { requireOnlinePublicationAuthority, startPublicationRecovery, startRunWorker } from "./agent-runtime/runtime.js";
+import { requireOnlinePublicationAuthority } from "./agent-runtime/publication/mode.js";
+import { resolveAgentProcessRole, roleStartsWeb } from "./agent-runtime/runtime/config.js";
+import { runtimeComposition } from "./agent-runtime/runtime/composition.js";
+import { beginModelShutdown, drainModelRequests } from "#model";
+import { beginHttpShutdown } from "#core";
 
 async function bootstrap(): Promise<void> {
   requireOnlinePublicationAuthority();
-  await prepareRuntimeStateBackend();
+  const role = resolveAgentProcessRole();
+  const runtime = runtimeComposition();
+  await runtime.start(role);
 
+  if (!roleStartsWeb(role)) {
+    Logger.log(`PR Agent ${role} process started`, "Bootstrap");
+    await waitForRuntimeShutdown(role, runtime.close.bind(runtime));
+    return;
+  }
+
+  const { AppModule } = await import("./app.module.js");
   const app = await NestFactory.create(AppModule, {
     bodyParser: false,
     rawBody: true,
@@ -34,11 +46,34 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   const port = resolvePort(readOptionalStringEnv("PORT"));
-  await startPublicationRecovery();
-  await startRunWorker();
   await app.listen(port);
 
-  Logger.log(`PR Agent listening on port ${port}`, "Bootstrap");
+  Logger.log(`PR Agent ${role} listening on port ${port}`, "Bootstrap");
+}
+
+async function waitForRuntimeShutdown(
+  role: ReturnType<typeof resolveAgentProcessRole>,
+  closeRuntime: () => Promise<void>,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let stopping = false;
+    const shutdown = async (signal: string) => {
+      if (stopping) return;
+      stopping = true;
+      try {
+        beginHttpShutdown();
+        await closeRuntime();
+        beginModelShutdown();
+        await drainModelRequests();
+        Logger.log(`PR Agent ${role} stopped (${signal})`, "Bootstrap");
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    };
+    process.once("SIGINT", () => { void shutdown("SIGINT"); });
+    process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+  });
 }
 
 function resolvePort(rawPort: string | undefined): number {
@@ -67,11 +102,12 @@ function resolveWebhookBodyLimit(rawLimit: string | undefined): string {
   return value;
 }
 
-bootstrap().catch((error) => {
+bootstrap().catch(async (error) => {
+  await runtimeComposition().close().catch(() => undefined);
   Logger.error(
     `Failed to bootstrap application: ${error instanceof Error ? error.message : String(error)}`,
     "",
     "Bootstrap",
   );
-  process.exit(1);
+  process.exitCode = 1;
 });

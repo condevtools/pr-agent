@@ -39,7 +39,7 @@ const COPY = {
         description:
           'Best for teams that want durable runtime state, policy controls, and operational visibility as defaults.',
         stats: [
-          { value: 'sqlite', label: 'state' },
+          { value: 'postgres', label: 'state' },
           { value: 'metrics', label: 'observability' },
         ],
         features: [
@@ -88,7 +88,7 @@ const COPY = {
         description:
           '适合需要把持久化状态、策略控制与运维可见性作为默认工程基线的团队。',
         stats: [
-          { value: 'sqlite', label: '状态后端' },
+          { value: 'postgres', label: '状态后端' },
           { value: 'metrics', label: '可观测性' },
         ],
         features: [

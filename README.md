@@ -44,33 +44,13 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 
 **Interactive Commands**
 - `/ai-review` — trigger manual review (comment or report mode)
-- `/ask <question>` — multi-turn Q&A about the code
-- `/checks [question]` — diagnose CI failures
-- `/generate_tests [focus]` — generate test code
-- `/changelog [--apply]` — generate or commit changelog
-- `/describe [--apply]` — generate or update PR description
 - `/improve [focus]` — force improvement-focused review output
 - `/add_doc [focus]` (`/add-doc`) — documentation-only review suggestions
-- `/reflect [goal]` — ask AI to generate requirement/acceptance clarifying questions
-- `/similar_issue [query]` (`/similar-issue`) — find related issues in the same repository
-- `/custom_prompt <prompt>` — run a custom AI prompt against PR changes
-- `/help_docs <question>` — ask questions about project documentation (`/docs` directory)
-- `/analyze` — list all changed components with risk assessment
-- `/compliance [focus]` — compliance and security review
 - `/improve_component <component>` — improvement review scoped to a specific component
-- `/generate_labels` — auto-generate and apply PR labels from diff content
-- `/similar_code [query]` — detect duplicate or similar code patterns in diff
-- `/auto_approve` — conditional auto-approve based on AI risk assessment (default off)
-- `/scan_repo_discussions` — extract best practices from recent merged PR discussions
-- `/feedback` — provide learning signals to improve future reviews
 
 **Process Guardrails**
-- `.pr-agent.yml` per-repo policy (remind or enforce mode)
-- Issue & PR template completeness checks
-- GitHub Check integration for branch protection (`enforce` mode)
+- `.pr-agent.yml` per-repo review policy
 - Process guideline detection (`.github/.gitlab` workflows, templates, CODEOWNERS, CONTRIBUTING) with compliance suggestions
-- Issue creation/edit pre-check and PR pre-merge validation (GitHub)
-- Default issue auto-triage (feasibility + suggestions + similar issues + labels) when `.pr-agent.yml` is absent
 
 **Current Support**
 - GitHub App only
@@ -351,7 +331,7 @@ flowchart LR
 | GitHub App | Probot 13 |
 | AI Client | OpenAI SDK 4 (also used for compatible providers) |
 | Validation | Zod 3 |
-| State Store | In-memory / JSON file / SQLite (Node.js built-in `node:sqlite`) |
+| State Store | PostgreSQL 17 (business state) / process memory (refetchable cache) |
 | Container | Docker (multi-stage build) |
 
 ---
@@ -522,16 +502,7 @@ GEMINI_MODEL=gemini-2.0-flash
 
 ### State Persistence
 
-| Backend | Env Value | Use Case |
-|---|---|---|
-| Memory | `memory` (default) | Stateless containers, dev |
-| JSON File | `file` | Simple single-instance |
-| SQLite | `sqlite` (recommended) | Production single-instance |
-
-```env
-RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
-```
+PostgreSQL is the authority for runs, rate limits, review cursors, feedback and verified webhook replay. Process memory is used only for refetchable caches.
 
 ### Notifications (Optional)
 
@@ -549,7 +520,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | Variable | Default | Description |
 |---|---|---|
 | `AI_HTTP_TIMEOUT_MS` | `30000` (30s) | HTTP timeout for AI review requests |
-| `AI_ASK_HTTP_TIMEOUT_MS` | `60000` (60s) | HTTP timeout for `/ask` command (longer for multi-turn Q&A) |
 | `AI_HTTP_RETRIES` | `2` | Number of retries on transient AI provider failures |
 | `AI_HTTP_RETRY_BACKOFF_MS` | `400` | Retry backoff base delay for AI provider requests (ms) |
 | `AI_MAX_CONCURRENCY` | `4` | Max concurrent AI requests |
@@ -577,12 +547,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITHUB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000` (30d) | Feedback signal retention window |
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache lifetime |
 | `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` cache for policy/review behavior |
-| `GITHUB_POLICY_COMMENT_DEDUPE_TTL_MS` | `600000` (10min) | Dedup window for policy reminder comments |
-| `GITHUB_ISSUE_AUTO_TRIAGE_ENABLED` | `true` | Enable default issue auto-triage on `issues.opened/edited` when no `.pr-agent.yml` exists |
-| `GITHUB_ISSUE_AUTO_TRIAGE_AUTO_LABELS` | `true` | Add inferred labels for default issue auto-triage |
-| `GITHUB_ISSUE_AUTO_TRIAGE_DEDUPE_TTL_MS` | `300000` (5min) | Dedup window for issue auto-triage comments |
-| `GITHUB_ISSUE_AUTO_TRIAGE_SIMILAR_LIMIT` | `5` | Max number of similar issues shown in auto-triage output |
-| `GITHUB_ISSUE_TRIAGE_DISABLE_AI` | `false` | Skip AI call and use fallback triage summary only |
 | `GITHUB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/github/trigger` payload size |
 | `GITHUB_WEBHOOK_SKIP_SIGNATURE` | `false` | Debug-only signature bypass; forbidden when `NODE_ENV=production` |
 
@@ -594,7 +558,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITLAB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache |
 | `GITLAB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000` (30d) | Feedback learning signal retention |
 | `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` policy cache |
-| `GITLAB_CHANGELOG_PATH` | `CHANGELOG.md` | File path for `/changelog --apply` |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/gitlab/trigger` payload size |
 | `GITLAB_WEBHOOK_SECRET` | Required for GitLab | Missing or incorrect webhook secrets are rejected; request headers cannot provide API credentials or override review policy |
 | `ALLOW_INSECURE_GITLAB_HTTP` | `false` | Allow `http://` GitLab base URL for local testing only |
@@ -602,7 +565,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 **Tuning guidance:**
 
 - `MERGED_DEDUPE_TTL_MS` — Controls the dedup window for `merged + report` events to prevent duplicate reviews on webhook retries. Increase to `48h–72h` if you experience frequent webhook redelivery; decrease to `1h–6h` if you need faster re-trigger. This only affects merged auto-triggers; manual `/ai-review` commands use the short (5 min) dedup window.
-- `FEEDBACK_SIGNAL_TTL_MS` — Controls how long `/feedback` and review-thread resolved/unresolved signals are retained. Increase to `60–90d` for teams with slower review cadence; decrease to `7–14d` if review rules change frequently.
+- `FEEDBACK_SIGNAL_TTL_MS` — Controls how long review-thread resolved/unresolved signals are retained. Increase to `60–90d` for teams with slower review cadence; decrease to `7–14d` if review rules change frequently.
 - `COMMAND_RATE_LIMIT_*` — Controls abuse protection for comment commands. Increase limits for very active repos; lower limits if bots/users spam command threads.
 
 See `.env.example` for the baseline variable reference; advanced runtime knobs are listed above.
@@ -631,11 +594,21 @@ docker run -d \
   --name pr-agent \
   -p 3000:3000 \
   --env-file .env \
-  -v ./data:/data \
   pr-agent:latest
 ```
 
+The application image does not embed PostgreSQL or initialize external database roles. A standalone container therefore requires a separately provisioned PostgreSQL database, restricted schema-owner/application roles, and a completed migration run. Use Compose below when those components are not already managed by the deployment platform.
+
 ### Docker Compose
+
+Copy `.env.example` to `.env` and replace all placeholders. Compose requires four distinct, randomly generated PostgreSQL passwords and has no password fallbacks:
+
+```env
+HARNESS_BOOTSTRAP_PASSWORD=...
+HARNESS_MIGRATION_PASSWORD=...
+HARNESS_APP_PASSWORD=...
+HARNESS_VERIFIER_PASSWORD=...
+```
 
 ```bash
 # Start
@@ -651,9 +624,14 @@ docker compose restart pr-agent
 docker compose down
 ```
 
-The `docker-compose.yml` mounts:
-- `./data:/data` — persistent state (SQLite, event store)
+The `docker-compose.yml` uses:
+- `harness-postgres` — PostgreSQL business state and migration ledger
+- `verifier-snapshots` — optional verifier snapshots
 - `./secrets/github-app.private-key.pem:/run/secrets/github-app-private-key.pem:ro` — GitHub App private key
+
+On a fresh volume, PostgreSQL bootstraps restricted migrator, application, and verifier roles. The one-shot `database-init` service applies the schema before `pr-agent` starts. Changing `.env` does not rotate passwords in an existing volume. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
+
+Compose uses `.env` only for interpolation. The application service receives an explicit runtime allowlist rather than the whole file, so bootstrap, migration, and verifier credentials are not present in the application container.
 
 ### Nixpacks (Frontend Only)
 
@@ -675,7 +653,7 @@ graph TD
     B2 --> C
     B3 --> C
 
-    C --> D[Set State Backend = sqlite]
+    C --> D[Initialize PostgreSQL schema]
     D --> E[Deploy Container]
     E --> F[Configure Webhook URL]
     F --> G[Verify Health Endpoints]
@@ -684,7 +662,7 @@ graph TD
 
 1. **Use GitHub App integration mode** — this is the only supported integration in the current beta
 2. **Configure AI provider** — Set `AI_PROVIDER` and the corresponding API key / model
-3. **Enable state persistence** — Use `RUNTIME_STATE_BACKEND=sqlite` for production
+3. **Initialize PostgreSQL** — For Compose, configure all four database passwords and require `database-init` to complete successfully; external PostgreSQL deployments must provision equivalent restricted roles before running the migration CLI
 4. **Deploy the container** — Docker, Docker Compose, Render, Railway, Fly.io, or K8s
 5. **Set webhook URL** to `https://<domain>/api/github/webhooks`
 6. **Verify** via health endpoints and a test `/ai-review` comment
@@ -708,22 +686,13 @@ OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
 ```
 
-**Recommended single-instance extras**
+**Required durable runtime configuration**
 
 ```env
-RUNTIME_STATE_BACKEND=sqlite
-RUNTIME_STATE_SQLITE_FILE=/data/pr-agent/runtime-state.sqlite3
-WEBHOOK_EVENT_STORE_ENABLED=false
-WEBHOOK_REPLAY_ENABLED=false
+HARNESS_DATABASE_URL=postgresql://pr_agent_app:password@postgres:5432/pr_agent
 ```
 
-**Temporary replay settings for debugging**
-
-```env
-WEBHOOK_EVENT_STORE_ENABLED=true
-WEBHOOK_REPLAY_ENABLED=true
-WEBHOOK_REPLAY_TOKEN=replace-with-strong-random-token
-```
+Webhook replay is stored in PostgreSQL after signature verification. Grant `replay:read` or `replay:execute` to a scoped API principal.
 
 3. **Start backend application**
 
@@ -751,10 +720,10 @@ docker run -d --name pr-agent -p 3000:3000 --env-file .env pr-agent:latest
    - Test PR/MR commands: `/ai-review`, `/ai-review comment`
    - Webhook failure response includes structured fields: `error/type/status/path/method/timestamp`
 
-If replay is enabled:
+For a principal with the matching scoped permission:
 - `GET /webhook/events`
 - `POST /github/replay/:eventId`
-- Header: `x-pr-agent-replay-token: <WEBHOOK_REPLAY_TOKEN>`
+- Header: `Authorization: Bearer <HARNESS_API_PRINCIPAL_TOKEN>`
 
 ### Nginx Reverse Proxy
 
@@ -784,12 +753,11 @@ server {
 1. Create a GitHub App with the following permissions:
    - **Pull requests**: Read & write
    - **Issues**: Read & write
-   - **Contents**: Read & write (required for `/changelog --apply`)
-   - **Checks**: Read & write (required for `mode=enforce`)
+   - **Contents**: Read-only
+   - **Checks**: Read-only
    - **Metadata**: Read-only
 2. Subscribe to events:
    - `Pull request` (`opened` / `edited` / `synchronize` / `closed`)
-   - `Issues` (`opened` / `edited`)
    - `Issue comment`
    - `Pull request review thread` (`resolved` / `unresolved`, for feedback learning)
 3. Set webhook URL to `https://<domain>/api/github/webhooks`
@@ -825,33 +793,11 @@ All commands are triggered via PR/MR comments. Commands marked with **(PR only)*
 | `/ai-review report` **(PR only)** | Force report mode (summary comment) |
 | `/ai-review comment` **(PR only)** | Force comment mode (inline comments) |
 | `/ai-review --mode=report` / `--mode=comment` **(PR only)** | Flag-style mode override (same effect as positional mode) |
-| `/ask <question>` | Ask about the PR or Issue (multi-turn conversation) |
-| `@bot-name <question>` | @mention the bot to ask a question (set `GITHUB_APP_SLUG` or `GITHUB_BOT_LOGIN`) |
-| `/checks [question]` **(PR only)** | Analyze CI check failures |
-| `/generate_tests [focus]` **(PR only)** | Generate test code for changes |
-| `/changelog [focus]` **(PR only)** | Generate changelog entry |
-| `/changelog --apply [focus]` **(PR only)** | Generate and commit changelog to repo |
-| `/describe` **(PR only)** | Generate PR/MR description |
-| `/describe --apply` **(PR only)** | Generate and update PR/MR description |
 | `/improve [focus]` **(PR only)** | Run review in improvement-only mode |
 | `/add_doc [focus]` / `/add-doc [focus]` **(PR only)** | Generate documentation-only suggestions |
-| `/reflect [goal]` **(PR only)** | Generate clarifying requirement/acceptance questions |
-| `/similar_issue [query]` / `/similar-issue [query]` | Search related issues in the same repository |
-| `/custom_prompt <prompt>` **(PR only)** | Run a custom AI prompt against PR changes |
-| `/help_docs <question>` | Ask questions about project documentation (`/docs` directory) |
-| `/analyze` **(PR only)** | List all changed components with risk assessment |
-| `/compliance [focus]` **(PR only)** | Compliance and security review |
 | `/improve_component <component>` **(PR only)** | Improvement review scoped to a specific component |
-| `/generate_labels` **(PR only)** | Auto-generate and apply PR labels from diff content |
-| `/similar_code [query]` **(PR only)** | Detect duplicate or similar code patterns in diff |
-| `/auto_approve` **(PR only)** | Conditional auto-approve based on AI risk assessment (default off) |
-| `/scan_repo_discussions` **(PR only)** | Extract best practices from recent merged PR discussions |
-| `/feedback resolved\|dismissed\|up\|down [note]` | Provide review quality feedback |
 
-Additional aliases are supported, for example: `/ai-review ask ...`, `/ai-review checks ...`, `/ai-review generate-tests ...`, `/ai-review add-doc ...`.
-Policy toggles in `.pr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/generate_tests`, `/changelog`, `/feedback`, `/improve`, `/add_doc`, `/custom_prompt`, `/help_docs`, `/analyze`, `/compliance`, `/similar_code`, `/auto_approve`, `/scan_repo_discussions`; `/reflect` depends on `askCommandEnabled`; `/improve_component` depends on `improveCommandEnabled`; `/generate_labels` depends on `autoLabelEnabled`.
-
-> **Note:** `/ask`, `/feedback`, `/similar_issue`, `/help_docs`, and `@mention` work in both Issue and PR comments. For Issue comments, no diff or CI context is provided, but the Issue title and body are passed to the AI as context. Set `GITHUB_APP_SLUG` (GitHub App slug) or `GITHUB_BOT_LOGIN` (exact bot login) to enable `@mention` detection. Mentions with and without the `[bot]` suffix are both supported.
+GitHub supports all four commands above. GitLab currently supports `/ai-review` only. Other comment content is acknowledged and ignored without invoking the model.
 
 ---
 
@@ -860,48 +806,15 @@ Policy toggles in `.pr-agent.yml` exist for `/describe`, `/ask`, `/checks`, `/ge
 Add `.pr-agent.yml` to the repository root to configure per-repo behavior:
 
 ```yaml
-mode: remind          # remind = comment only, enforce = fail GitHub Check
-
-issue:
-  enabled: true
-  minBodyLength: 20
-  requiredSections:
-    - Summary
-    - Steps to Reproduce
-    - Expected Behavior
-
-pullRequest:
-  enabled: true
-  minBodyLength: 20
-  requireLinkedIssue: false
-  requiredSections:
-    - Summary
-    - Test Plan
-
 review:
   enabled: true
   mode: comment         # comment | report
   onOpened: true        # Review on PR open
   onEdited: false
   onSynchronize: true   # Review on new commits
-  describeEnabled: true
-  describeAllowApply: false
-  checksCommandEnabled: true
   includeCiChecks: true
-  askCommandEnabled: true
-  generateTestsCommandEnabled: true
-  changelogCommandEnabled: true
-  changelogAllowApply: false
-  feedbackCommandEnabled: true
   improveCommandEnabled: true
   addDocCommandEnabled: true
-  customPromptCommandEnabled: true
-  helpDocsCommandEnabled: true
-  analyzeCommandEnabled: true
-  complianceCommandEnabled: true
-  similarCodeCommandEnabled: true
-  autoApproveCommandEnabled: false   # default off for safety
-  scanRepoDiscussionsCommandEnabled: true
   secretScanEnabled: true
   autoLabelEnabled: true
   secretScanCustomPatterns:  # optional extra secret regex patterns
@@ -911,17 +824,7 @@ review:
     - No new `any` types allowed
 ```
 
-GitLab currently reads only the `review:` section from `.pr-agent.yml`. Top-level `mode`, `issue`, and `pullRequest` checks are enforced in GitHub policy flows.
-
-**Modes:**
-- `remind` — posts a comment noting missing fields; does not block merge
-- `enforce` — creates a failing GitHub Check (`PR Agent Policy`) that can be required in branch protection rules
-
-**Template fallback behavior:**
-- When `requiredSections` is not configured, section headings are automatically extracted from repository templates:
-  - Issue: `.github/ISSUE_TEMPLATE/*` or `.github/ISSUE_TEMPLATE.md`
-  - PR: `.github/pull_request_template.md` or `.github/PULL_REQUEST_TEMPLATE.md`
-- If no templates exist, built-in defaults are used (Issue: `Summary / Steps to Reproduce / Expected Behavior`; PR: `Summary / Test Plan / Related Issue`).
+GitHub and GitLab read the `review:` section from `.pr-agent.yml`. Issue/PR template enforcement is not part of the PostgreSQL-backed command path.
 
 **Review field reference:**
 
@@ -929,24 +832,9 @@ GitLab currently reads only the `review:` section from `.pr-agent.yml`. Top-leve
 |---|---|
 | `enabled` / `mode` | Enable AI review and set default mode (comment / report) |
 | `onOpened` / `onEdited` / `onSynchronize` | Control which PR events auto-trigger review |
-| `describeEnabled` | Enable `/describe` command |
-| `describeAllowApply` | Allow `/describe --apply` to directly update PR description |
-| `checksCommandEnabled` | Enable `/checks` command |
 | `includeCiChecks` | Include CI check results in AI context |
-| `askCommandEnabled` | Enable `/ask` command |
-| `generateTestsCommandEnabled` | Enable `/generate_tests` command |
-| `changelogCommandEnabled` | Enable `/changelog` command |
-| `changelogAllowApply` | Allow `/changelog --apply` to commit directly to the repo |
-| `feedbackCommandEnabled` | Enable `/feedback` command |
 | `improveCommandEnabled` | Enable `/improve` command |
 | `addDocCommandEnabled` | Enable `/add_doc` (`/add-doc`) command |
-| `customPromptCommandEnabled` | Enable `/custom_prompt` command |
-| `helpDocsCommandEnabled` | Enable `/help_docs` command |
-| `analyzeCommandEnabled` | Enable `/analyze` command |
-| `complianceCommandEnabled` | Enable `/compliance` command |
-| `similarCodeCommandEnabled` | Enable `/similar_code` command |
-| `autoApproveCommandEnabled` | Enable `/auto_approve` command (default **off** for safety) |
-| `scanRepoDiscussionsCommandEnabled` | Enable `/scan_repo_discussions` command |
 | `secretScanEnabled` | Scan diffs for potential secret leaks and post security warnings |
 | `secretScanCustomPatterns` | Additional repository-specific secret regex patterns |
 | `autoLabelEnabled` | Auto-add PR labels based on change content |
@@ -1000,17 +888,9 @@ Webhook errors return structured JSON. Known webhook errors (e.g. `BadWebhookReq
 
 Payloads exceeding `WEBHOOK_BODY_LIMIT` (default `1mb`) return `413 Payload Too Large`.
 
-### Webhook Replay (Debug)
+### Webhook Replay
 
-Enable temporarily for debugging:
-
-```env
-WEBHOOK_EVENT_STORE_ENABLED=true
-WEBHOOK_REPLAY_ENABLED=true
-WEBHOOK_REPLAY_TOKEN=your-secret-token
-```
-
-Endpoints (require `x-pr-agent-replay-token` header):
+Verified success and failure envelopes are stored in PostgreSQL. Endpoints require a tenant- and integration-scoped API principal:
 - `GET /webhook/events` — list stored events
 - `POST /github/replay/:eventId` — replay a GitHub event
 - `POST /gitlab/replay/:eventId` — replay a GitLab event

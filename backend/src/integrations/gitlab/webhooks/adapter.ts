@@ -1,5 +1,5 @@
 import { readOptionalStringEnv } from "#core";
-import { resolvePublicationRuntime } from "../../../agent-runtime/runtime.js";
+import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
 import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
 import { handleGitLabNoteWebhook } from "../../../commands/platforms/gitlab/handler.js";
 import { CommandAuthorizationError } from "../../../commands/authorization.js";

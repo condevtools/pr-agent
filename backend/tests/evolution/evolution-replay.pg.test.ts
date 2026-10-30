@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { spawnSync } from "node:child_process";
 import test, { after, before } from "node:test";
 
 import { Pool } from "pg";
@@ -29,6 +28,7 @@ import { EvaluationCoordinator } from "../../src/evolution/evaluations/run.js";
 import { PgEvolutionEvaluationStore } from "../../src/evolution/evaluations/store.js";
 import type { TrustedLabelSetV1 } from "../../src/evolution/feedback/contracts.js";
 import { BASELINE_REVIEW_TEXT, reviewTextHashes } from "../../src/review/strategy/text-components.js";
+import { prepareHarnessRuntimeRoles, reapplyVersionedRuntimeGrants } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -88,21 +88,11 @@ if (!databaseUrl) {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("mock server did not bind");
     origin = `http://127.0.0.1:${address.port}`;
 
+    await prepareHarnessRuntimeRoles(adminPool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(adminPool);
-    const role = await adminPool.query("SELECT 1 FROM pg_roles WHERE rolname='pr_agent_app'");
-    const ddl = await adminPool.query<{ sql: string }>(role.rowCount
-      ? "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql"
-      : "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS','pr_agent_app',$1::text) sql",
-    [appPassword]);
-    await adminPool.query(ddl.rows[0]!.sql);
     process.env.AI_PROVIDER = "openai-compatible"; process.env.AI_MODEL = "p3b-model";
     process.env.OPENAI_BASE_URL = `${origin}/v1`; process.env.OPENAI_COMPATIBLE_API_KEY = "local-model-key";
     process.env.HARNESS_MODEL_PRICING_JSON = pricing();
-    const configured = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (configured.status !== 0) throw new Error(`runtime grants failed: ${configured.stderr}`);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     process.env.HARNESS_DATABASE_URL = appUrl.toString();
     appPool = new Pool({ connectionString: appUrl.toString(), max: 16 }); appDb = new RuntimeDatabase(appPool);
@@ -184,11 +174,7 @@ if (!databaseUrl) {
 
     await adminPool.query(`GRANT INSERT,UPDATE,DELETE ON pr_agent_harness.evolution_proposal_sources,
       pr_agent_harness.evolution_candidates,pr_agent_harness.eval_runs,pr_agent_harness.eval_results TO pr_agent_app`);
-    const repaired = spawnSync(process.execPath, ["--import", "tsx", "src/agent-runtime/cli.ts", "migrate"], {
-      cwd: process.cwd(), encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, HARNESS_DATABASE_URL: databaseUrl },
-    });
-    if (repaired.status !== 0) throw new Error(`P3b grant repair failed: ${repaired.stderr}`);
+    await reapplyVersionedRuntimeGrants(adminPool);
     const privileges = await appPool.query<Record<string, boolean>>(
       `SELECT has_table_privilege(current_user,'pr_agent_harness.evolution_candidates','INSERT') candidate_insert,
         has_table_privilege(current_user,'pr_agent_harness.eval_runs','UPDATE') eval_update,

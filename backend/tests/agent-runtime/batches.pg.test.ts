@@ -57,9 +57,7 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(uuid, uuid, text, text, text, bigint) TO ${roleName}`);
-    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_legacy_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
-    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_resumable_legacy_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots, pr_agent_harness.publication_batches TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, DELETE ON pr_agent_harness.publication_batch_operations TO ${roleName}`);
@@ -86,6 +84,7 @@ if (!databaseUrl) {
   test("freeze is durable and repeated source delivery returns the original full batch", async () => {
     const first = await createScope("repeat");
     const input = {
+      runLease: first.lease,
       scope: first.scope,
       sourceKey: "webhook:delivery-1",
       sourceHash: hash("delivery-1"),
@@ -142,8 +141,8 @@ if (!databaseUrl) {
   });
 
   test("domain authorization runs after sealing for new and reused batches and rolls back denied freezes", async () => {
-    const { scope } = await createScope("domain-authorization");
-    const input = { scope, sourceKey: "domain:authorization", sourceHash: hash("authorization"),
+    const { scope, lease } = await createScope("domain-authorization");
+    const input = { runLease: lease, scope, sourceKey: "domain:authorization", sourceHash: hash("authorization"),
       operations: [{ slot: "one", payload: { body: "one" } }] };
     let calls = 0;
     await assert.rejects(batchStore.freeze({ ...input, authorize: async (client, batch) => {
@@ -163,9 +162,10 @@ if (!databaseUrl) {
   });
 
   test("all operation slots and links roll back when one member cannot freeze", async () => {
-    const { scope } = await createScope("atomic");
+    const { scope, lease } = await createScope("atomic");
     await assert.rejects(
       batchStore.freeze({
+        runLease: lease,
         scope,
         sourceKey: "webhook:atomic",
         sourceHash: hash("atomic"),
@@ -188,8 +188,9 @@ if (!databaseUrl) {
   });
 
   test("recovery skips completed members and reconciles an unknown member", async () => {
-    const { scope } = await createScope("recover");
+    const { scope, lease } = await createScope("recover");
     const batch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:recover",
       sourceHash: hash("recover"),
@@ -216,15 +217,15 @@ if (!databaseUrl) {
       find: async (marker) => marker === lostMarker ? { id: "remote-second" } : null,
     });
 
-    const waiting = await coordinator.execute(scope.tenantId, batch.id, adapterFactory);
+    const waiting = await coordinator.execute(scope.tenantId, batch.id, adapterFactory, lease);
     assert.equal(waiting.status, "waiting_reconciliation");
     assert.deepEqual(Object.fromEntries(dispatches), { first: 1, second: 1 });
     assert.deepEqual(
       (await batchStore.listRecoverable(scope.tenantId, scope.integrationId, 10)).map(({ id }) => id),
-      [batch.id],
+      [],
     );
 
-    const complete = await coordinator.execute(scope.tenantId, batch.id, adapterFactory);
+    const complete = await coordinator.execute(scope.tenantId, batch.id, adapterFactory, lease);
     assert.equal(complete.status, "succeeded");
     assert.deepEqual(Object.fromEntries(dispatches), { first: 1, second: 1 });
     assert.equal(
@@ -625,8 +626,9 @@ if (!databaseUrl) {
   });
 
   test("provider grace starts after a blocked claim acquires its final lock", async () => {
-    const { scope } = await createScope("claim-lock-wait-deadline");
+    const { scope, lease } = await createScope("claim-lock-wait-deadline");
     const batch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:claim-lock-wait-deadline",
       sourceHash: hash("claim-lock-wait-deadline"),
@@ -634,6 +636,7 @@ if (!databaseUrl) {
     });
     const input = {
       ...buildPublicationIdentity(batch.operations[0]!.request),
+      executionLease: lease,
       reconciliationGraceMs: 1_000,
     };
     const blocker = await adminPool.connect();
@@ -687,8 +690,9 @@ if (!databaseUrl) {
   });
 
   test("draining blocks a new freeze but preserves tenant-scoped load and resolution", async () => {
-    const { scope } = await createScope("draining");
+    const { scope, lease } = await createScope("draining");
     const batch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:draining",
       sourceHash: hash("draining"),
@@ -700,6 +704,7 @@ if (!databaseUrl) {
     );
     await assert.rejects(
       batchStore.freeze({
+        runLease: lease,
         scope,
         sourceKey: "webhook:new-during-drain",
         sourceHash: hash("new-during-drain"),
@@ -713,14 +718,16 @@ if (!databaseUrl) {
   });
 
   test("sealed membership, payload, and batch identity reject application mutation", async () => {
-    const { scope } = await createScope("sealed");
+    const { scope, lease } = await createScope("sealed");
     const first = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:sealed-first",
       sourceHash: hash("sealed-first"),
       operations: [{ slot: "first", payload: { body: "immutable" } }],
     });
     const second = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:sealed-second",
       sourceHash: hash("sealed-second"),
@@ -774,8 +781,9 @@ if (!databaseUrl) {
   });
 
   test("a definite predecessor failure cancels later prepared members before authority rotation", async () => {
-    const { scope } = await createScope("predecessor");
+    const { scope, lease } = await createScope("predecessor");
     const batch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:predecessor",
       sourceHash: hash("predecessor"),
@@ -798,7 +806,7 @@ if (!databaseUrl) {
         );
       },
       find: async () => null,
-    }));
+    }), lease);
     assert.equal(result.status, "failed_definite");
     assert.equal(dispatches, 1);
     const first = await operationStore.get(scope.tenantId, batch.operations[0]!.businessOperationId);
@@ -820,8 +828,11 @@ if (!databaseUrl) {
       "UPDATE pr_agent_harness.integration_bindings SET publication_state = 'active', publication_generation = 2 WHERE tenant_id = $1 AND id = $2",
       [scope.tenantId, scope.integrationId],
     );
+    const replacementScope = { ...scope, authorityGeneration: 2 };
+    const replacementLease = await createLeaseForScope(replacementScope, "predecessor-replacement");
     const replacement = await batchStore.freeze({
-      scope: { ...scope, authorityGeneration: 2 },
+      runLease: replacementLease,
+      scope: replacementScope,
       sourceKey: "webhook:predecessor-replacement",
       sourceHash: hash("predecessor-replacement"),
       operations: [
@@ -833,8 +844,9 @@ if (!databaseUrl) {
   });
 
   test("a failed member does not terminalize a batch while another member may have effects", async () => {
-    const { scope } = await createScope("mixed-outcome");
+    const { scope, lease } = await createScope("mixed-outcome");
     const batch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:mixed-outcome",
       sourceHash: hash("mixed-outcome"),
@@ -869,13 +881,14 @@ if (!databaseUrl) {
     );
     assert.deepEqual(
       (await batchStore.listRecoverable(scope.tenantId, scope.integrationId, 10)).map(({ id }) => id),
-      [batch.id],
+      [],
     );
   });
 
   test("restart treats succeeded stale as terminal and never advances the frozen batch", async () => {
-    const { scope } = await createScope("stale-predecessor");
+    const { scope, lease } = await createScope("stale-predecessor");
     const batch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:stale-predecessor",
       sourceHash: hash("stale-predecessor"),
@@ -887,7 +900,7 @@ if (!databaseUrl) {
     const service = new PublicationService(operationStore);
     let revisionReads = 0;
     await assert.rejects(
-      service.publish(batch.operations[0]!.request, {
+      service.publish({ ...batch.operations[0]!.request, executionLease: lease }, {
         dispatch: async () => ({ id: "remote-stale" }),
         find: async () => null,
         currentRevision: async () => ++revisionReads === 1 ? scope.revision : "new-head",
@@ -905,7 +918,7 @@ if (!databaseUrl) {
         dispatch: async () => ({ id: "must-not-dispatch" }),
         find: async () => null,
       };
-    });
+    }, lease);
     assert.equal(restarted.status, "failed_definite");
     assert.equal(adaptersConstructed, 0);
     const first = await operationStore.get(scope.tenantId, batch.operations[0]!.businessOperationId);
@@ -917,8 +930,9 @@ if (!databaseUrl) {
   });
 
   test("a failed batch skips a shared operation without corrupting another batch", async () => {
-    const { scope } = await createScope("shared-operation");
+    const { scope, lease } = await createScope("shared-operation");
     const failedBatch = await batchStore.freeze({
+      runLease: lease,
       scope,
       sourceKey: "webhook:shared-failed",
       sourceHash: hash("shared-failed"),
@@ -942,8 +956,9 @@ if (!databaseUrl) {
           );
         },
         find: async () => null,
-      })),
+      }), lease),
       batchStore.freeze({
+        runLease: lease,
         scope,
         sourceKey: "webhook:shared-valid",
         sourceHash: hash("shared-valid"),
@@ -959,7 +974,7 @@ if (!databaseUrl) {
     const completed = await coordinator.execute(scope.tenantId, validBatch.id, async () => ({
       dispatch: async () => ({ id: `shared-${++sharedDispatches}` }),
       find: async () => null,
-    }));
+    }), lease);
     assert.equal(completed.status, "succeeded");
     assert.equal(sharedDispatches, 1);
     assert.equal(completed.operations[0]?.skipped, false);
@@ -969,7 +984,7 @@ if (!databaseUrl) {
     assert.equal((await batchStore.refreshOutcome(scope.tenantId, failedBatch.id))?.status, "failed_definite");
   });
 
-  async function createScope(suffix: string): Promise<{ scope: PublicationRequest["scope"] }> {
+  async function createScope(suffix: string): Promise<{ scope: PublicationRequest["scope"]; lease: RunLease }> {
     const tenantId = randomUUID();
     const integrationId = randomUUID();
     await controlRunStore.registerIntegration({
@@ -983,6 +998,7 @@ if (!databaseUrl) {
       `
         UPDATE pr_agent_harness.integration_bindings
         SET publication_state = 'active', publication_generation = 1,
+            review_execution_mode = 'harness_async', execution_mode_generation = 1,
             provider_repository_id = $3, provider_actor_id = $4,
             credential_ref = 'env:GITHUB_TOKEN',
             quiescence_receipt = '{"approved":true}'::jsonb
@@ -990,39 +1006,28 @@ if (!databaseUrl) {
       `,
       [tenantId, integrationId, String(++nextProviderId), String(nextProviderId + 10_000)],
     );
-    return {
-      scope: {
-        tenantId,
-        integrationId,
-        platform: "github",
-        origin: "https://github.example.test",
-        repository: `acme/batch-${suffix}`,
-        target: "pull:42",
-        revision: "head-sha",
-        authorityGeneration: 1,
-      },
+    const scope: PublicationRequest["scope"] = {
+      tenantId,
+      integrationId,
+      platform: "github",
+      origin: "https://github.example.test",
+      repository: `acme/batch-${suffix}`,
+      target: "pull:42",
+      revision: "head-sha",
+      authorityGeneration: 1,
     };
+    const lease = await createLeaseForScope(scope, suffix);
+    return { scope, lease };
   }
 
-  async function createRunLinkedBatch(suffix: string): Promise<{
-    scope: PublicationRequest["scope"];
-    lease: RunLease;
-    batch: Awaited<ReturnType<PublicationBatchStore["freeze"]>>;
-  }> {
-    const { scope } = await createScope(suffix);
-    await adminPool.query(
-      `UPDATE pr_agent_harness.integration_bindings
-       SET review_execution_mode='harness_async',execution_mode_generation=1
-       WHERE tenant_id=$1 AND id=$2`,
-      [scope.tenantId, scope.integrationId],
-    );
+  async function createLeaseForScope(scope: PublicationRequest["scope"], suffix: string): Promise<RunLease> {
     const version = hash(`version:${suffix}`);
-    const run = await controlRunStore.createRun({
+    await controlRunStore.createRun({
       tenantId: scope.tenantId,
       integrationId: scope.integrationId,
       actorType: "service",
       actorId: "batch-test",
-      createScope: "test:run-linked-batch:v1",
+      createScope: "test:publication-batch:v1",
       createKey: suffix,
       requestHash: hash(`request:${suffix}`),
       runType: "review",
@@ -1035,7 +1040,7 @@ if (!databaseUrl) {
       policyVersionHash: version,
       runtimeVersionHash: version,
       input: { suffix },
-      authorityGeneration: scope.authorityGeneration,
+      authorityGeneration: scope.authorityGeneration!,
       executionModeGeneration: 1,
       runtimeConfig: { maxRunMs: 60_000 },
     });
@@ -1046,6 +1051,15 @@ if (!databaseUrl) {
       executionModeGeneration: 1,
     }, `batch-worker-${suffix}`, version);
     assert.ok(lease);
+    return lease;
+  }
+
+  async function createRunLinkedBatch(suffix: string): Promise<{
+    scope: PublicationRequest["scope"];
+    lease: RunLease;
+    batch: Awaited<ReturnType<PublicationBatchStore["freeze"]>>;
+  }> {
+    const { scope, lease } = await createScope(suffix);
     const batch = await batchStore.freeze({
       runLease: lease,
       scope,
