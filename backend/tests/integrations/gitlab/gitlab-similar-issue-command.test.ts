@@ -5,6 +5,8 @@ import { runGitLabWebhook } from "../../../src/integrations/gitlab/webhooks/adap
 
 test("gitlab /similar_issue command posts ranked similar issues", async () => {
   const originalFetch = globalThis.fetch;
+  const originalToken = process.env.GITLAB_TOKEN;
+  process.env.GITLAB_TOKEN = "server-token";
   const originalRetries = process.env.GITLAB_HTTP_RETRIES;
   process.env.GITLAB_HTTP_RETRIES = "0";
 
@@ -78,6 +80,7 @@ test("gitlab /similar_issue command posts ranked similar issues", async () => {
         info: () => undefined,
         error: () => undefined,
       },
+      skipSecurityVerification: true,
     });
 
     assert.equal(result.ok, true);
@@ -86,6 +89,8 @@ test("gitlab /similar_issue command posts ranked similar issues", async () => {
     assert.match(noteBody, /issues\/201/);
   } finally {
     globalThis.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITLAB_TOKEN;
+    else process.env.GITLAB_TOKEN = originalToken;
     process.env.GITLAB_HTTP_RETRIES = originalRetries;
   }
 });

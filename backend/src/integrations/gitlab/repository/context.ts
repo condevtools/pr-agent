@@ -253,11 +253,11 @@ export function buildGitLabCommentTargetFromPayload(params: {
   };
 }
 
-export function requireGitLabToken(headers: Record<string, string | undefined>): string {
-  const token = headers["x-gitlab-api-token"] ?? readOptionalStringEnv("GITLAB_TOKEN");
+export function requireGitLabToken(_headers: Record<string, string | undefined>): string {
+  const token = readOptionalStringEnv("GITLAB_TOKEN");
   if (!token) {
     throw new BadWebhookRequestError(
-      "Missing GitLab API token (x-gitlab-api-token or GITLAB_TOKEN)",
+      "Missing server-side GITLAB_TOKEN",
     );
   }
   return token;

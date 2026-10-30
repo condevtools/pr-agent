@@ -1,10 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { z } from "zod";
 
-import {
-  BadWebhookRequestError,
-  readOptionalStringEnv,
-} from "#core";
+import { BadWebhookRequestError } from "#core";
 import { runGitLabWebhook } from "../../../integrations/gitlab/webhooks/adapter.js";
 import { verifyGitLabWebhookBodySize, verifyGitLabWebhookToken, shouldRequireGitLabWebhookSecret } from "#integrations/gitlab";
 import { type GitLabWebhookBody } from "../../../integrations/gitlab/webhooks/contracts.js";
@@ -19,6 +16,7 @@ const gitlabWebhookPayloadSchema = z.object({
   event_type: z.string().optional(),
   user: z
     .object({
+      id: z.number().int().positive().optional(),
       username: z.string().optional(),
     })
     .optional(),
@@ -69,16 +67,6 @@ export class GitlabWebhookService {
     const normalizedHeaders = normalizeHeaderRecord(params.headers);
     if (!params.trustReplay) {
       verifyGitLabWebhookToken(normalizedHeaders, this.serviceLogger);
-    }
-
-    // Backward compatibility: if webhook secret is not enabled,
-    // keep accepting x-gitlab-token as API token.
-    if (
-      !normalizedHeaders["x-gitlab-api-token"] &&
-      !readOptionalStringEnv("GITLAB_WEBHOOK_SECRET") &&
-      normalizedHeaders["x-gitlab-token"]
-    ) {
-      normalizedHeaders["x-gitlab-api-token"] = normalizedHeaders["x-gitlab-token"];
     }
 
     return runGitLabWebhook({

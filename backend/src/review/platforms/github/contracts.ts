@@ -30,6 +30,7 @@ export interface GitHubReviewRunParams {
   publicationRuntime?: GitHubPublicationRuntime;
   sourceKey?: string;
   sourceHash?: string;
+  runActor?: { actorType: "user" | "service"; actorId: string };
 }
 
 export interface GitHubCollectedContext {

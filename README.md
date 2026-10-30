@@ -95,9 +95,10 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 | `/ai-review` comment command | comment / report | 5 min |
 | `/ai-review report` | report | 5 min |
 | `/ai-review comment` | comment | 5 min |
-| Webhook header `x-ai-mode` (GitLab only, unsupported in current beta) | report / comment | 5 min |
 | Issue created / edited | pre-check (GitHub) + default auto-triage when policy file is missing | 5 min |
 | PR created / edited / synced | pre-merge check (GitHub) | — |
+
+Manual review commands require repository write access on GitHub or Developer access on GitLab. The GitHub App needs Metadata read permission to check the commenter. GitLab uses the server's API token to check project membership; its webhook secret is a separate required credential. Ordinary comments and unsupported commands are ignored without calling the model.
 
 ### Roadmap & Process Assets
 
@@ -595,7 +596,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` policy cache |
 | `GITLAB_CHANGELOG_PATH` | `CHANGELOG.md` | File path for `/changelog --apply` |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/gitlab/trigger` payload size |
-| `GITLAB_REQUIRE_WEBHOOK_SECRET` | `false` | Require `GITLAB_WEBHOOK_SECRET`, otherwise reject unsigned webhooks |
+| `GITLAB_WEBHOOK_SECRET` | Required for GitLab | Missing or incorrect webhook secrets are rejected; request headers cannot provide API credentials or override review policy |
 | `ALLOW_INSECURE_GITLAB_HTTP` | `false` | Allow `http://` GitLab base URL for local testing only |
 
 **Tuning guidance:**

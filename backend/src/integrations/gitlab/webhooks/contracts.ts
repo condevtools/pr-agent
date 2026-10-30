@@ -10,6 +10,7 @@ export interface GitLabMrWebhookBody {
   object_kind?: string;
   event_type?: string;
   user?: {
+    id?: number;
     username?: string;
   };
   project: {
@@ -50,6 +51,7 @@ export interface GitLabNoteWebhookBody {
   object_kind?: string;
   event_type?: string;
   user?: {
+    id?: number;
     username?: string;
   };
   project: {
@@ -94,6 +96,7 @@ export const gitlabMrWebhookPayloadSchema = z.object({
   event_type: z.string().optional(),
   user: z
     .object({
+      id: z.number().int().positive().optional(),
       username: z.string().optional(),
     })
     .optional(),
@@ -140,6 +143,7 @@ export const gitlabNoteWebhookPayloadSchema = z.object({
   event_type: z.string().optional(),
   user: z
     .object({
+      id: z.number().int().positive().optional(),
       username: z.string().optional(),
     })
     .optional(),

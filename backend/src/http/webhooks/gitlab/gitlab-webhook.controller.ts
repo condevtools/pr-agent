@@ -114,15 +114,6 @@ export class GitlabWebhookController {
       ...event.headers,
       "x-gitlab-event": event.eventName,
     };
-    const overrideApiToken = readHeaderValue(headers, "x-gitlab-api-token");
-    if (overrideApiToken) {
-      replayHeaders["x-gitlab-api-token"] = overrideApiToken;
-    }
-    const overrideWebhookToken = readHeaderValue(headers, "x-gitlab-token");
-    if (overrideWebhookToken) {
-      replayHeaders["x-gitlab-token"] = overrideWebhookToken;
-    }
-
     try {
       const result = await this.gitlabWebhookService.handleTrigger({
         payload: payload as GitLabWebhookBody,

@@ -29,6 +29,20 @@ interface BindingRow {
   review_execution_state?: "active" | "draining";
 }
 
+export class PublicationBindingNotFoundError extends Error {
+  constructor(readonly platform: IntegrationPlatform, readonly repository: string) {
+    super("Trusted publication binding not found");
+    this.name = "PublicationBindingNotFoundError";
+  }
+}
+
+export class PublicationBindingBlockedError extends Error {
+  constructor(readonly platform: IntegrationPlatform, readonly repository: string) {
+    super("Repository publication is blocked pending administrative cutover");
+    this.name = "PublicationBindingBlockedError";
+  }
+}
+
 /** Administrative enrollment and cutover; runtime credentials have SELECT permission only. */
 export class PublicationAuthorityStore {
   constructor(private readonly db: RuntimeDatabase) {}
@@ -274,9 +288,9 @@ export class PublicationAuthorityStore {
          WHERE platform=$1 AND origin=$2 AND repository=$3 AND active`,
         [platform, normalized.origin, normalized.repository],
       );
-      if (!result.rows[0]) throw new Error("Trusted publication binding not found");
+      if (!result.rows[0]) throw new PublicationBindingNotFoundError(platform, normalized.repository);
       const binding = mapBinding(result.rows[0]);
-      if (binding.state === "blocked") throw new Error("Repository publication is blocked pending administrative cutover");
+      if (binding.state === "blocked") throw new PublicationBindingBlockedError(platform, normalized.repository);
       return binding;
     });
   }

@@ -22,6 +22,8 @@ import { buildHelpMessage } from "../../presentation/help.js";
 import { mergeChangelogContent as mergeSharedChangelogContent } from "../../presentation/changelog.js";
 import { buildCommandApplyDisabledByPolicyMessage, buildCommandDisabledByPolicyMessage, buildFeedbackSignalRecordedMessage, buildReflectDependsOnAskMessage } from "../../presentation/messages.js";
 import { DurableUnadaptedWriterBlockedError } from "../../errors.js";
+import { isDurablePublicationEnabled } from "../../../agent-runtime/publication/mode.js";
+import { authorizeGitLabDurableCommand, classifyDurableCommand } from "../../authorization.js";
 import { createGitLabCommandWorkflows } from "./workflows.js";
 import type { ReviewTrigger } from "#review";
 import { DEFAULT_DEDUPE_TTL_MS } from "../../../review/policy/triggers.js";
@@ -155,6 +157,11 @@ export async function handleGitLabNoteWebhook(params: {
     return { ok: true, message: "ignored note from bot user" };
   }
 
+  const durableCommand = classifyDurableCommand("gitlab", body);
+  if (isDurablePublicationEnabled() && !durableCommand) {
+    return { ok: true, message: "ignored note content" };
+  }
+
   const mergePayload = buildMergeRequestPayloadFromNote(payload);
   const target = buildGitLabCommentTargetFromPayload({
     payload: mergePayload,
@@ -165,12 +172,29 @@ export async function handleGitLabNoteWebhook(params: {
     origin: target.baseUrl,
     repository: payload.project.path_with_namespace ?? String(payload.project.id),
   });
-  if (durableRuntime && !parseReviewCommand(body).matched) {
+  if (durableRuntime && !durableCommand) {
     throw new DurableUnadaptedWriterBlockedError("gitlab", body.split(/\s+/u, 1)[0] ?? "unknown");
   }
   const gitlabToken = durableRuntime?.resolveCredential
     ? await durableRuntime.resolveCredential()
     : requireGitLabToken(params.headers);
+  if (durableRuntime) {
+    await authorizeGitLabDurableCommand({
+      projectId: payload.project.id,
+      userId: payload.user?.id,
+      getAccessLevel: async () => {
+        const response = await gitLabApiRequest({
+          url: `${target.baseUrl}/api/v4/projects/${encodeURIComponent(String(payload.project.id))}/members/all/${encodeURIComponent(String(payload.user?.id ?? ""))}`,
+          token: gitlabToken,
+          retry: false,
+        });
+        if (response.status === 404) return 0;
+        if (!response.ok) throw new Error(`GitLab member permission lookup failed (${response.status})`);
+        const member = await response.json() as { access_level?: unknown };
+        return typeof member.access_level === "number" ? member.access_level : undefined;
+      },
+    });
+  }
   const commentUserName = payload.user?.username;
   const baseUrl = resolveGitLabBaseUrl(
     readOptionalStringEnv("GITLAB_BASE_URL"),
@@ -1031,6 +1055,10 @@ export async function handleGitLabNoteWebhook(params: {
           payload: mergePayload,
           headers: params.headers,
           logger: params.logger,
+          runActor: {
+            actorType: "user",
+            actorId: `gitlab-user:${payload.user!.id}`,
+          },
           mode: command.mode,
           trigger: "comment-command",
           customRules: policy.customRules,

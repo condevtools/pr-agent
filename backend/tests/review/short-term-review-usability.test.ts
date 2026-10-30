@@ -576,6 +576,7 @@ test("gitlab note webhook ignores bot user comments before command handling", as
       info: () => undefined,
       error: () => undefined,
     },
+    skipSecurityVerification: true,
   });
 
   assert.deepEqual(result, { ok: true, message: "ignored note from bot user" });
@@ -584,6 +585,8 @@ test("gitlab note webhook ignores bot user comments before command handling", as
 test("gitlab pr-edited skips review when head sha is unchanged after dedupe ttl", async () => {
   const originalFetch = globalThis.fetch;
   const originalNow = Date.now;
+  const originalToken = process.env.GITLAB_TOKEN;
+  process.env.GITLAB_TOKEN = "server-token";
   let now = 2_000_000;
   Date.now = () => now;
 
@@ -682,6 +685,8 @@ test("gitlab pr-edited skips review when head sha is unchanged after dedupe ttl"
   } finally {
     globalThis.fetch = originalFetch;
     Date.now = originalNow;
+    if (originalToken === undefined) delete process.env.GITLAB_TOKEN;
+    else process.env.GITLAB_TOKEN = originalToken;
   }
 
   assert.equal(changesCalls, 1);
@@ -1446,19 +1451,19 @@ test("gitlab webhook token checker validates match and mismatch", () => {
   assert.equal(isGitLabWebhookTokenValid("my-shared-secret", "short"), false);
 });
 
-test("gitlab webhook secret requirement flag parses common true/false env forms", () => {
+test("gitlab webhook secret requirement cannot be disabled", () => {
   assert.equal(shouldRequireGitLabWebhookSecret("true"), true);
   assert.equal(shouldRequireGitLabWebhookSecret("TRUE"), true);
   assert.equal(shouldRequireGitLabWebhookSecret("1"), true);
   assert.equal(shouldRequireGitLabWebhookSecret("yes"), true);
   assert.equal(shouldRequireGitLabWebhookSecret("on"), true);
 
-  assert.equal(shouldRequireGitLabWebhookSecret("false"), false);
-  assert.equal(shouldRequireGitLabWebhookSecret("0"), false);
-  assert.equal(shouldRequireGitLabWebhookSecret("no"), false);
-  assert.equal(shouldRequireGitLabWebhookSecret("off"), false);
-  assert.equal(shouldRequireGitLabWebhookSecret(""), false);
-  assert.equal(shouldRequireGitLabWebhookSecret(undefined), false);
+  assert.equal(shouldRequireGitLabWebhookSecret("false"), true);
+  assert.equal(shouldRequireGitLabWebhookSecret("0"), true);
+  assert.equal(shouldRequireGitLabWebhookSecret("no"), true);
+  assert.equal(shouldRequireGitLabWebhookSecret("off"), true);
+  assert.equal(shouldRequireGitLabWebhookSecret(""), true);
+  assert.equal(shouldRequireGitLabWebhookSecret(undefined), true);
 });
 
 test("gemini generation config optionally includes responseSchema", () => {

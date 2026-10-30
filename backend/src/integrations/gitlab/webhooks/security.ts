@@ -3,14 +3,11 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import {
   BadWebhookRequestError,
   WebhookAuthError,
-  parseBooleanEnv,
   readNumberEnv,
   readOptionalStringEnv,
 } from "#core";
 
 const DEFAULT_GITLAB_WEBHOOK_MAX_BODY_BYTES = 10 * 1024 * 1024;
-
-let hasWarnedMissingSecret = false;
 
 /**
  * Verify that the GitLab webhook body does not exceed the configured
@@ -54,35 +51,19 @@ export function verifyGitLabWebhookBodySize(
  * Behavior:
  * - When `GITLAB_WEBHOOK_SECRET` is set, the request must include
  *   a matching `X-Gitlab-Token` header; otherwise a 403 is thrown.
- * - When `GITLAB_REQUIRE_WEBHOOK_SECRET` is true but no secret is
- *   configured, a 400 is thrown.
- * - When no secret is configured and `GITLAB_REQUIRE_WEBHOOK_SECRET`
- *   is false (default), a warning is logged once and the request
- *   is accepted.
+ * - When no secret is configured, the endpoint is disabled and a 400 is thrown.
  *
  * @param headers  Normalized (lowercase-key) header record.
  * @param logger   Optional logger for the missing-secret warning.
  */
 export function verifyGitLabWebhookToken(
   headers: Record<string, string | undefined>,
-  logger?: { warn: (message: string) => void },
+  _logger?: { warn: (message: string) => void },
 ): void {
   const expected = readOptionalStringEnv("GITLAB_WEBHOOK_SECRET");
 
   if (!expected) {
-    if (shouldRequireGitLabWebhookSecret()) {
-      throw new BadWebhookRequestError(
-        "GITLAB_WEBHOOK_SECRET is required when GITLAB_REQUIRE_WEBHOOK_SECRET=true",
-      );
-    }
-
-    if (!hasWarnedMissingSecret) {
-      hasWarnedMissingSecret = true;
-      logger?.warn(
-        "GITLAB_WEBHOOK_SECRET is not configured; GitLab webhook token verification is disabled.",
-      );
-    }
-    return;
+    throw new BadWebhookRequestError("GITLAB_WEBHOOK_SECRET is required for GitLab webhooks");
   }
 
   const actual = headers["x-gitlab-token"]?.trim();
@@ -96,15 +77,15 @@ export function verifyGitLabWebhookToken(
 }
 
 /**
- * Returns true when the deployment requires a GitLab webhook secret.
- * Reads `GITLAB_REQUIRE_WEBHOOK_SECRET` env var (defaults to false).
+ * GitLab webhooks always require a configured shared secret.
+ *
+ * The optional argument is retained for source compatibility with older
+ * callers, but it can no longer disable webhook authentication.
  */
 export function shouldRequireGitLabWebhookSecret(
-  rawValue: string | undefined = readOptionalStringEnv(
-    "GITLAB_REQUIRE_WEBHOOK_SECRET",
-  ),
+  _rawValue?: string,
 ): boolean {
-  return parseBooleanEnv(rawValue);
+  return true;
 }
 
 /**

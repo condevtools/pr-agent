@@ -84,6 +84,12 @@ export function createRestBackedOctokit(
           path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}`,
         }),
       }),
+      getCollaboratorPermissionLevel: async (params) => ({
+        data: await requestJsonRequired<{ permission?: string }>(config, {
+          method: "GET",
+          path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/collaborators/${encodeURIComponent(params.username)}/permission`,
+        }),
+      }),
       getContent: async (params) => {
         const encodedPath = encodePath(params.path);
         const query = params.ref ? `?ref=${encodeURIComponent(params.ref)}` : "";

@@ -25,7 +25,9 @@ test("gitlab policy parser accepts quoted mode/boolean values", () => {
 test("gitlab ask-disabled command should not load MR changes context", async () => {
   const originalFetch = globalThis.fetch;
   const originalRetries = process.env.GITLAB_HTTP_RETRIES;
+  const originalToken = process.env.GITLAB_TOKEN;
   process.env.GITLAB_HTTP_RETRIES = "0";
+  process.env.GITLAB_TOKEN = "server-token";
 
   let changesCalled = false;
   globalThis.fetch = async (input) => {
@@ -80,6 +82,7 @@ test("gitlab ask-disabled command should not load MR changes context", async () 
         info: () => undefined,
         error: () => undefined,
       },
+      skipSecurityVerification: true,
     });
 
     assert.equal(result.ok, true);
@@ -88,6 +91,8 @@ test("gitlab ask-disabled command should not load MR changes context", async () 
   } finally {
     globalThis.fetch = originalFetch;
     process.env.GITLAB_HTTP_RETRIES = originalRetries;
+    if (originalToken === undefined) delete process.env.GITLAB_TOKEN;
+    else process.env.GITLAB_TOKEN = originalToken;
   }
 });
 
@@ -185,7 +190,9 @@ test("github failure notification uses sanitized public error message", async ()
 test("gitlab failure notification uses sanitized public error message", async () => {
   const originalFetch = globalThis.fetch;
   const originalRetries = process.env.GITLAB_HTTP_RETRIES;
+  const originalToken = process.env.GITLAB_TOKEN;
   process.env.GITLAB_HTTP_RETRIES = "0";
+  process.env.GITLAB_TOKEN = "server-token";
 
   let notified = "";
   globalThis.fetch = async (input, init) => {
@@ -240,6 +247,8 @@ test("gitlab failure notification uses sanitized public error message", async ()
   } finally {
     globalThis.fetch = originalFetch;
     process.env.GITLAB_HTTP_RETRIES = originalRetries;
+    if (originalToken === undefined) delete process.env.GITLAB_TOKEN;
+    else process.env.GITLAB_TOKEN = originalToken;
   }
 
   assert.equal(notified.includes("sk-gitlab-secret"), false);
@@ -308,6 +317,7 @@ test("gitlab webhook rejects insecure http base url by default", async () => {
           info: () => undefined,
           error: () => undefined,
         },
+        skipSecurityVerification: true,
       }),
       /insecure.*http.*gitlab/i,
     );

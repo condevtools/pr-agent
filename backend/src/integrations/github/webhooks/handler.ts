@@ -25,7 +25,9 @@ import { resolveGitHubReviewBehaviorPolicy } from "../../../issues/policy/github
 import {
   handleGitHubIssueCommentCommand,
 } from "../../../commands/platforms/github/handler.js";
+import { CommandAuthorizationError } from "../../../commands/authorization.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime.js";
+import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
 export { createRestBackedOctokit } from "../api/http-client.js";
 export {
   handleGitHubIssueCommentCommand,
@@ -98,6 +100,7 @@ const issueCommentWebhookPayloadSchema = z.object({
     body: z.string().optional(),
     user: z
       .object({
+        id: z.number().int().positive().optional(),
         type: z.string().optional(),
         login: z.string().optional(),
       })
@@ -199,14 +202,26 @@ export async function handleGitHubWebhookEvent(params: {
     return { ok: true, message: `ignored event ${params.eventName}` };
   }
 
-  return handler({
-    payload: params.payload,
-    octokit: guardGitHubOctokit(params.octokit),
-    logger: params.logger,
-    runtimeMode: params.runtimeMode,
-    deliveryId: params.deliveryId,
-    sourceHash: params.sourceHash ?? createHash("sha256").update(JSON.stringify(params.payload)).digest("hex"),
-  });
+  try {
+    return await handler({
+      payload: params.payload,
+      octokit: guardGitHubOctokit(params.octokit),
+      logger: params.logger,
+      runtimeMode: params.runtimeMode,
+      deliveryId: params.deliveryId,
+      sourceHash: params.sourceHash ?? createHash("sha256").update(JSON.stringify(params.payload)).digest("hex"),
+    });
+  } catch (error) {
+    if (error instanceof PublicationBindingNotFoundError) {
+      params.logger.info({ reason: "publication_binding_not_found" }, "ignored unmanaged GitHub repository");
+      return { ok: true, message: "ignored unmanaged repository" };
+    }
+    if (error instanceof CommandAuthorizationError) {
+      params.logger.info({ reason: "command_actor_not_authorized" }, "ignored unauthorized GitHub command");
+      return { ok: true, message: "ignored unauthorized command" };
+    }
+    throw error;
+  }
 }
 
 async function handlePullRequestEvent(

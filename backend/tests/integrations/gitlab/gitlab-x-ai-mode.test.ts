@@ -36,10 +36,12 @@ const logger = {
   error: () => undefined,
 };
 
-test("gitlab webhook allows x-ai-mode override even when auto-review policy is disabled", async () => {
+test("gitlab webhook ignores x-ai-mode when auto-review policy is disabled", async () => {
   const originalFetch = globalThis.fetch;
   const originalRetries = process.env.GITLAB_HTTP_RETRIES;
+  const originalToken = process.env.GITLAB_TOKEN;
   process.env.GITLAB_HTTP_RETRIES = "0";
+  process.env.GITLAB_TOKEN = "server-token";
   clearDuplicateRequestState();
 
   globalThis.fetch = async (input) => {
@@ -61,6 +63,7 @@ test("gitlab webhook allows x-ai-mode override even when auto-review policy is d
         "x-gitlab-api-token": "token",
       },
       logger,
+      skipSecurityVerification: true,
     });
     assert.equal(withoutHeader.message, "merge_request action ignored by review policy");
 
@@ -71,17 +74,22 @@ test("gitlab webhook allows x-ai-mode override even when auto-review policy is d
         "x-ai-mode": "comment",
       },
       logger,
+      skipSecurityVerification: true,
     });
-    assert.equal(withHeaderOverride.message, "draft merge request skipped");
+    assert.equal(withHeaderOverride.message, "merge_request action ignored by review policy");
   } finally {
     globalThis.fetch = originalFetch;
     process.env.GITLAB_HTTP_RETRIES = originalRetries;
+    if (originalToken === undefined) delete process.env.GITLAB_TOKEN;
+    else process.env.GITLAB_TOKEN = originalToken;
     clearDuplicateRequestState();
   }
 });
 
-test("gitlab review dedupe key reflects x-ai-mode header value", async () => {
+test("gitlab review dedupe key ignores x-ai-mode header value", async () => {
   clearDuplicateRequestState();
+  const originalToken = process.env.GITLAB_TOKEN;
+  process.env.GITLAB_TOKEN = "server-token";
 
   try {
     const payload = buildDraftMergeRequestPayload();
@@ -111,7 +119,7 @@ test("gitlab review dedupe key reflects x-ai-mode header value", async () => {
       trigger: "pr-synchronize",
       dedupeSuffix: payload.object_attributes.last_commit.id,
     });
-    assert.equal(reportMode.message, "draft merge request skipped");
+    assert.equal(reportMode.message, "duplicate request ignored");
 
     const secondComment = await runGitLabReview({
       payload: payload as never,
@@ -125,6 +133,8 @@ test("gitlab review dedupe key reflects x-ai-mode header value", async () => {
     });
     assert.equal(secondComment.message, "duplicate request ignored");
   } finally {
+    if (originalToken === undefined) delete process.env.GITLAB_TOKEN;
+    else process.env.GITLAB_TOKEN = originalToken;
     clearDuplicateRequestState();
   }
 });

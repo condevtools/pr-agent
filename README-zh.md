@@ -95,9 +95,10 @@
 | `/ai-review` 评论命令 | comment / report | 5 分钟 |
 | `/ai-review report` | report | 5 分钟 |
 | `/ai-review comment` | comment | 5 分钟 |
-| Webhook Header `x-ai-mode`（仅 GitLab，当前 beta 不支持） | report / comment | 5 分钟 |
 | Issue 创建 / 编辑 | 流程预检（GitHub）+ 缺省策略自动分诊（无策略文件时） | 5 分钟 |
 | PR 创建 / 编辑 / 同步 | 合并前预检（GitHub） | — |
+
+手动评审命令要求 GitHub 仓库 write 及以上权限，或 GitLab Developer 及以上权限。GitHub App 需要 Metadata 读取权限以核查评论者；GitLab 使用服务端 API token 核查项目成员权限，Webhook secret 是另一项必填凭据。普通评论和不支持的命令会被忽略，不调用模型。
 
 ### 路线图与流程资产
 
@@ -595,7 +596,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略缓存 |
 | `GITLAB_CHANGELOG_PATH` | `CHANGELOG.md` | `/changelog --apply` 写回路径 |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/gitlab/trigger` 的额外请求体硬上限 |
-| `GITLAB_REQUIRE_WEBHOOK_SECRET` | `false` | 设为 `true` 时必须配置 `GITLAB_WEBHOOK_SECRET` |
+| `GITLAB_WEBHOOK_SECRET` | GitLab 必填 | 缺失或不匹配时拒绝 Webhook；请求头不能提供 API 凭据或覆盖评审策略 |
 | `ALLOW_INSECURE_GITLAB_HTTP` | `false` | 仅本地调试允许 `http://` GitLab 地址 |
 
 **调参建议：**

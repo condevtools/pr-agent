@@ -115,6 +115,11 @@ export interface MinimalGitHubOctokit {
   };
   repos: {
     get?(params: { owner: string; repo: string }): Promise<{ data: { id: number; full_name?: string } }>;
+    getCollaboratorPermissionLevel?(params: {
+      owner: string;
+      repo: string;
+      username: string;
+    }): Promise<{ data: { permission?: string } }>;
     getContent(params: {
       owner: string;
       repo: string;

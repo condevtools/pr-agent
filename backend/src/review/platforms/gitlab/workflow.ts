@@ -34,6 +34,7 @@ export interface GitLabReviewRunParams {
   enableAutoLabel?: boolean;
   throwOnError?: boolean;
   publicationRuntime?: GitLabPublicationRuntime;
+  runActor?: { actorType: "user" | "service"; actorId: string };
 }
 
 
@@ -68,15 +69,6 @@ export function shouldSkipGitLabReviewForDraft(
   return shouldSkipReviewForDraft(trigger, isDraft);
 }
 
-function parseMode(modeRaw: string | undefined): ReviewMode | undefined {
-  if (!modeRaw?.trim()) return undefined;
-  const mode = modeRaw.trim().toLowerCase();
-  if (mode === "comment") return "comment";
-  if (mode === "report") return "report";
-  return undefined;
-}
-
-
 export async function runGitLabReview(
   params: GitLabReviewRunParams,
 ): Promise<{ ok: boolean; message: string; runId?: string }> {
@@ -105,7 +97,7 @@ export async function runGitLabReview(
     return { ok: true, message: "ignored closed merge request event" };
   }
 
-  const mode = modeOverride ?? parseMode(headers["x-ai-mode"]) ?? "report";
+  const mode = modeOverride ?? "report";
   const reviewTarget = buildGitLabCommentTargetFromPayload({
     payload,
     baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),

@@ -22,6 +22,11 @@ import type { GitHubReviewContext } from "../../../review/platforms/github/contr
 import { resolveGitHubReviewBehaviorPolicy } from "../../../issues/policy/github/workflow.js";
 import { runGitHubImplementCommand } from "./implement.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime.js";
+import { isDurablePublicationEnabled } from "../../../agent-runtime/publication/mode.js";
+import {
+  authorizeGitHubDurableCommand,
+  classifyDurableCommand,
+} from "../../authorization.js";
 import { guardGitHubOctokit } from "../../../integrations/github/api/http-client.js";
 import { findSimilarIssues } from "../../../issues/similarity/scorer.js";
 import { parseAddDocCommand, parseAskCommand, parseChangelogCommand, parseChecksCommand, parseConfigCommand, parseDescribeCommand, parseFeedbackCommand, parseGenerateTestsCommand, parseHelpCommand, parseImproveCommand, parseImplementCommand, parseMentionCommand, parseReflectCommand, parseReviewCommand, parseSimilarIssueCommand, parseCustomPromptCommand, parseHelpDocsCommand, parseAnalyzeCommand, parseComplianceCommand, parseImproveComponentCommand, parseGenerateLabelsCommand, parseSimilarCodeCommand, parseAutoApproveCommand, parseScanRepoDiscussionsCommand } from "../../parsers/index.js";
@@ -85,6 +90,7 @@ export async function handleGitHubIssueCommentCommand(params: {
   body: string;
   commentUser?:
     | {
+        id?: number;
         type?: string;
         login?: string;
       }
@@ -108,17 +114,39 @@ export async function handleGitHubIssueCommentCommand(params: {
   }
 
   const body = params.body.trim();
+  const durableCommand = classifyDurableCommand("github", body);
+  if (isDurablePublicationEnabled() && !durableCommand) {
+    return { ok: true, message: "ignored issue_comment content" };
+  }
   const durableRuntime = await resolvePublicationRuntime({
     platform: "github",
     origin: readOptionalStringEnv("GITHUB_API_URL") ?? "https://api.github.com",
     repository: `${params.owner}/${params.repo}`,
   });
-  const durableReviewCommand = parseReviewCommand(body).matched || parseImproveCommand(body).matched || parseAddDocCommand(body).matched || parseImproveComponentCommand(body).matched;
-  if (durableRuntime && !durableReviewCommand) {
+  if (durableRuntime && !durableCommand) {
     throw new DurableUnadaptedWriterBlockedError("github", body.split(/\s+/u, 1)[0] ?? "unknown");
   }
   const locale = resolveUiLocale();
   const commentUserLogin = params.commentUser?.login;
+  if (durableRuntime) {
+    if (!params.context.octokit.repos.getCollaboratorPermissionLevel) {
+      throw new Error("GitHub collaborator permission API is unavailable");
+    }
+    await authorizeGitHubDurableCommand({
+      owner: params.owner,
+      repo: params.repo,
+      login: commentUserLogin,
+      userId: params.commentUser?.id,
+      getPermission: async () => (await params.context.octokit.repos.getCollaboratorPermissionLevel!({
+        owner: params.owner,
+        repo: params.repo,
+        username: commentUserLogin ?? "",
+      })).data.permission,
+    });
+  }
+  const durableRunActor = durableRuntime
+    ? { actorType: "user" as const, actorId: `github-user:${params.commentUser!.id}` }
+    : undefined;
   const throwOnError = Boolean(params.throwOnError);
   const isPullRequest = params.isPullRequest ?? true;
   const appSlug = readOptionalStringEnv("GITHUB_APP_SLUG");
@@ -555,6 +583,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           throwOnError,
           sourceKey: params.sourceKey,
           sourceHash: params.sourceHash,
+          runActor: durableRunActor,
         });
         return { ok: true, message: "improve command triggered" };
       },
@@ -598,6 +627,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           throwOnError,
           sourceKey: params.sourceKey,
           sourceHash: params.sourceHash,
+          runActor: durableRunActor,
         });
         return { ok: true, message: "add_doc command triggered" };
       },
@@ -915,6 +945,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           throwOnError,
           sourceKey: params.sourceKey,
           sourceHash: params.sourceHash,
+          runActor: durableRunActor,
         });
         return { ok: true, message: "improve_component command triggered" };
       },
@@ -1094,6 +1125,7 @@ export async function handleGitHubIssueCommentCommand(params: {
           throwOnError,
           sourceKey: params.sourceKey,
           sourceHash: params.sourceHash,
+          runActor: durableRunActor,
         });
 
         return { ok: true, message: "issue_comment review triggered" };

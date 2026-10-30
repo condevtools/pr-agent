@@ -19,12 +19,16 @@ export function shouldQueueReview(binding?: PublicationBinding): binding is Publ
 }
 
 /** Called only after authenticated provider routing has resolved the trusted binding. */
-export async function enqueueReviewRun(binding: PublicationBinding, input: ReviewRunInput): Promise<{ id: string; created: boolean }> {
+export async function enqueueReviewRun(
+  binding: PublicationBinding,
+  input: ReviewRunInput,
+  identity?: { actorType: "user" | "service"; actorId: string; parentRunId?: string },
+): Promise<{ id: string; created: boolean }> {
   if (binding.reviewExecutionMode !== "harness_async"
       || (binding.reviewExecutionState ?? "active") !== "active") {
     throw new Error("Active asynchronous review execution authority is required");
   }
-  const creation = await buildReviewRunCreationInput(binding, input);
+  const creation = await buildReviewRunCreationInput(binding, input, identity);
   const services = await getAgentRuntimeServices();
   const result = await new RunStore(services.db).createRun(creation);
   return { id: result.id, created: result.created };

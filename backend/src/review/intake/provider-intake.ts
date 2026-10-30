@@ -25,7 +25,7 @@ export async function enqueueGitHubReview(params: GitHubReviewRunParams, binding
     mode: params.mode, trigger: params.trigger, options: options(params),
     presentation: { title: pull.title, body: pull.body ?? "", author: pull.user?.login ?? "unknown",
       baseBranch: pull.base.ref, headBranch: pull.head.ref, webUrl: pull.html_url, draft: Boolean(pull.draft) },
-  });
+  }, params.runActor);
   return run.id;
 }
 
@@ -53,6 +53,6 @@ export async function enqueueGitLabReview(
     presentation: { title: attributes.title, body: attributes.description ?? "", author: params.payload.user?.username ?? "unknown",
       baseBranch: attributes.target_branch, headBranch: attributes.source_branch, webUrl: attributes.url,
       draft: Boolean(attributes.draft || attributes.work_in_progress) },
-  });
+  }, params.runActor);
   return run.id;
 }

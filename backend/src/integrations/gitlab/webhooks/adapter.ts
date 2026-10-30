@@ -1,7 +1,8 @@
 import { readOptionalStringEnv } from "#core";
-import type { ReviewMode } from "#review";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime.js";
+import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
 import { handleGitLabNoteWebhook } from "../../../commands/platforms/gitlab/handler.js";
+import { CommandAuthorizationError } from "../../../commands/authorization.js";
 import { resolveGitLabReviewPolicy, type GitLabReviewPolicy } from "../../../review/policy/gitlab.js";
 import { runGitLabReview } from "../../../review/platforms/gitlab/workflow.js";
 import type { GitLabPublicationRuntime } from "../publication/adapter.js";
@@ -11,6 +12,28 @@ import { type LoggerLike } from "./contracts.js";
 import { verifyGitLabWebhookBodySize, verifyGitLabWebhookToken } from "./security.js";
 
 export async function runGitLabWebhook(params: {
+  payload: GitLabWebhookBody;
+  headers: Record<string, string | undefined>;
+  logger: LoggerLike;
+  rawBody?: string | Buffer;
+  skipSecurityVerification?: boolean;
+}): Promise<{ ok: boolean; message: string }> {
+  try {
+    return await runTrustedGitLabWebhook(params);
+  } catch (error) {
+    if (error instanceof PublicationBindingNotFoundError) {
+      params.logger.info({ reason: "publication_binding_not_found" }, "ignored unmanaged GitLab repository");
+      return { ok: true, message: "ignored unmanaged repository" };
+    }
+    if (error instanceof CommandAuthorizationError) {
+      params.logger.info({ reason: "command_actor_not_authorized" }, "ignored unauthorized GitLab command");
+      return { ok: true, message: "ignored unauthorized command" };
+    }
+    throw error;
+  }
+}
+
+async function runTrustedGitLabWebhook(params: {
   payload: GitLabWebhookBody;
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
@@ -63,11 +86,9 @@ export async function runGitLabWebhook(params: {
       ref: payload.object_attributes.target_branch,
     });
 
-    const headerMode = parseMode(params.headers["x-ai-mode"]);
-    const resolvedMode =
-      actionKind === "merged" ? "report" : (headerMode ?? policy.mode);
+    const resolvedMode = actionKind === "merged" ? "report" : policy.mode;
     const shouldRunByPolicy = shouldRunGitLabAutoReview(policy, actionKind);
-    if (!shouldRunByPolicy && !headerMode) {
+    if (!shouldRunByPolicy) {
       return { ok: true, message: "merge_request action ignored by review policy" };
     }
 
@@ -139,12 +160,4 @@ function shouldRunGitLabAutoReview(
     return policy.onSynchronize;
   }
   return true;
-}
-
-function parseMode(modeRaw: string | undefined): ReviewMode | undefined {
-  if (!modeRaw?.trim()) return undefined;
-  const mode = modeRaw.trim().toLowerCase();
-  if (mode === "comment") return "comment";
-  if (mode === "report") return "report";
-  return undefined;
 }
