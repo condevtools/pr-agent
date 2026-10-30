@@ -1,16 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeChangelogContent } from "../../src/commands/presentation/changelog.js";
 import {
   buildAddDocRule,
-  buildChecksQuestion,
-  buildGenerateTestsQuestion,
   buildImproveRule,
-  buildReflectQuestion,
 } from "../../src/commands/builders/questions.ts";
-import { buildDescribeQuestion } from "../../src/commands/builders/describe-question.ts";
-import { getPublicErrorMessage } from "../../src/commands/presentation/public-error.ts";
 import {
   parseYamlBooleanMaybe,
   stripYamlQuotes,
@@ -25,47 +19,6 @@ import {
   resolveSimilarIssueQuery,
 } from "../../src/issues/similarity/presentation.ts";
 
-test("shared changelog merger is idempotent for same title", () => {
-  const existing = [
-    "# Changelog",
-    "",
-    "## Unreleased",
-    "",
-    "### PR #123",
-    "",
-    "- Existing entry",
-    "",
-  ].join("\n");
-
-  const merged = mergeChangelogContent(existing, "- New entry", "PR #123");
-  assert.equal(merged, existing);
-});
-
-test("shared changelog merger inserts under Unreleased when title is new", () => {
-  const existing = ["# Changelog", "", "## Unreleased", "", "### PR #120", "", "- Old", ""].join(
-    "\n",
-  );
-  const merged = mergeChangelogContent(existing, "- Added retry cap", "PR #124");
-
-  assert.match(
-    merged,
-    /## Unreleased\n+\s*### PR #124\n+\s*- Added retry cap\n+\s*### PR #120/s,
-  );
-});
-
-test("shared public error message returns allowlisted runtime errors as-is", () => {
-  const message = getPublicErrorMessage(new Error("Missing OPENAI_API_KEY"));
-  assert.equal(message, "Missing OPENAI_API_KEY");
-});
-
-test("shared public error message masks unknown errors", () => {
-  const messageEn = getPublicErrorMessage(new Error("database went away"), "en");
-  assert.match(messageEn, /internal execution error/i);
-
-  const messageZh = getPublicErrorMessage(new Error("database went away"), "zh");
-  assert.match(messageZh, /内部执行错误/);
-});
-
 test("shared improve/add-doc builders keep focus behavior", () => {
   assert.match(
     buildImproveRule("api timeout"),
@@ -79,20 +32,6 @@ test("shared improve/add-doc builders keep focus behavior", () => {
   assert.match(buildAddDocRule("auth token"), /auth token/);
 });
 
-test("shared reflect builder switches between PR and MR wording", () => {
-  const prText = buildReflectQuestion("PR", "stability", "zh");
-  const mrText = buildReflectQuestion("MR", "stability", "zh");
-
-  assert.match(prText, /当前 PR 改动/);
-  assert.match(mrText, /当前 MR 改动/);
-  assert.match(prText, /目标：stability/);
-  assert.match(mrText, /目标：stability/);
-
-  const prEn = buildReflectQuestion("PR", "stability", "en");
-  assert.match(prEn, /Based on current PR changes/i);
-  assert.match(prEn, /Goal: stability/);
-});
-
 test("shared yaml helpers strip quotes and parse boolean aliases", () => {
   assert.equal(stripYamlQuotes("'enforce'"), "enforce");
   assert.equal(stripYamlQuotes("  \"report\"  "), "report");
@@ -103,33 +42,6 @@ test("shared yaml helpers strip quotes and parse boolean aliases", () => {
   assert.equal(parseYamlBooleanMaybe("0"), false);
   assert.equal(parseYamlBooleanMaybe("off"), false);
   assert.equal(parseYamlBooleanMaybe("maybe"), undefined);
-});
-
-test("shared checks/generate-tests questions are locale-aware", () => {
-  assert.match(buildChecksQuestion("PR", "", "en"), /current PR CI check failures/i);
-  assert.match(
-    buildChecksQuestion("MR", "pipeline flaky?", "zh"),
-    /请结合当前 MR 的 CI 检查结果给出修复建议。额外问题：pipeline flaky\?/,
-  );
-
-  assert.match(
-    buildGenerateTestsQuestion("PR", "auth", "en"),
-    /Based on current PR changes/i,
-  );
-  assert.match(
-    buildGenerateTestsQuestion("MR", "", "zh"),
-    /请基于当前 MR 改动生成可执行测试方案和测试代码草案。/,
-  );
-});
-
-test("shared describe question keeps PR/MR specific structures", () => {
-  const prEn = buildDescribeQuestion("PR", "en");
-  assert.match(prEn, /Based on current PR changes/i);
-  assert.match(prEn, /## Related Issue/);
-
-  const mrZh = buildDescribeQuestion("MR", "zh");
-  assert.match(mrZh, /请基于当前 MR 的变更内容/);
-  assert.doesNotMatch(mrZh, /## Related Issue/);
 });
 
 test("shared secret scan uses consistent placeholder filter and sample redaction", () => {

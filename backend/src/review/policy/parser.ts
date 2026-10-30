@@ -6,17 +6,11 @@ import { parseYamlBooleanMaybe } from "../../core/config/yaml.js";
 export const reviewPolicyOverridesSchema = z.object({
   enabled: z.boolean().optional(), mode: z.enum(["comment", "report"]).optional(),
   onOpened: z.boolean().optional(), onEdited: z.boolean().optional(),
-  onSynchronize: z.boolean().optional(), describeEnabled: z.boolean().optional(),
-  describeAllowApply: z.boolean().optional(), checksCommandEnabled: z.boolean().optional(),
+  onSynchronize: z.boolean().optional(),
   includeCiChecks: z.boolean().optional(), secretScanEnabled: z.boolean().optional(),
   secretScanCustomPatterns: z.array(z.string()).optional(), autoLabelEnabled: z.boolean().optional(),
-  askCommandEnabled: z.boolean().optional(), generateTestsCommandEnabled: z.boolean().optional(),
-  changelogCommandEnabled: z.boolean().optional(), changelogAllowApply: z.boolean().optional(),
   feedbackCommandEnabled: z.boolean().optional(), improveCommandEnabled: z.boolean().optional(),
-  addDocCommandEnabled: z.boolean().optional(), customPromptCommandEnabled: z.boolean().optional(),
-  helpDocsCommandEnabled: z.boolean().optional(), analyzeCommandEnabled: z.boolean().optional(),
-  complianceCommandEnabled: z.boolean().optional(), similarCodeCommandEnabled: z.boolean().optional(),
-  scanRepoDiscussionsCommandEnabled: z.boolean().optional(), customRules: z.array(z.string()).optional(),
+  addDocCommandEnabled: z.boolean().optional(), customRules: z.array(z.string()).optional(),
 }).strict().partial();
 
 const policySectionOverridesSchema = z.object({
@@ -45,26 +39,14 @@ const reviewFields: Readonly<Record<string, readonly [keyof ReviewPolicyOverride
   enabled: ["enabled", coerceBoolean],
   mode: ["mode", (value) => coerceEnum(value, ["comment", "report"])],
   onopened: ["onOpened", coerceBoolean], onedited: ["onEdited", coerceBoolean],
-  onsynchronize: ["onSynchronize", coerceBoolean], describeenabled: ["describeEnabled", coerceBoolean],
-  describeallowapply: ["describeAllowApply", coerceBoolean],
-  checkscommandenabled: ["checksCommandEnabled", coerceBoolean],
+  onsynchronize: ["onSynchronize", coerceBoolean],
   includecichecks: ["includeCiChecks", coerceBoolean],
   secretscanenabled: ["secretScanEnabled", coerceBoolean],
   secretscancustompatterns: ["secretScanCustomPatterns", coerceStringList],
   autolabelenabled: ["autoLabelEnabled", coerceBoolean],
-  askcommandenabled: ["askCommandEnabled", coerceBoolean],
-  generatetestscommandenabled: ["generateTestsCommandEnabled", coerceBoolean],
-  changelogcommandenabled: ["changelogCommandEnabled", coerceBoolean],
-  changelogallowapply: ["changelogAllowApply", coerceBoolean],
   feedbackcommandenabled: ["feedbackCommandEnabled", coerceBoolean],
   improvecommandenabled: ["improveCommandEnabled", coerceBoolean],
   adddoccommandenabled: ["addDocCommandEnabled", coerceBoolean],
-  custompromptcommandenabled: ["customPromptCommandEnabled", coerceBoolean],
-  helpdocscommandenabled: ["helpDocsCommandEnabled", coerceBoolean],
-  analyzecommandenabled: ["analyzeCommandEnabled", coerceBoolean],
-  compliancecommandenabled: ["complianceCommandEnabled", coerceBoolean],
-  similarcodecommandenabled: ["similarCodeCommandEnabled", coerceBoolean],
-  scanrepodiscussionscommandenabled: ["scanRepoDiscussionsCommandEnabled", coerceBoolean],
   customrules: ["customRules", coerceStringList],
 };
 
@@ -76,6 +58,14 @@ const pullRequestFields = {
   ...sectionFields,
   requirelinkedissue: ["requireLinkedIssue", coerceBoolean] as const,
 };
+
+const retiredReviewFields = new Set([
+  "describeenabled", "describeallowapply", "checkscommandenabled",
+  "askcommandenabled", "generatetestscommandenabled", "changelogcommandenabled",
+  "changelogallowapply", "custompromptcommandenabled", "helpdocscommandenabled",
+  "analyzecommandenabled", "compliancecommandenabled", "similarcodecommandenabled",
+  "scanrepodiscussionscommandenabled",
+]);
 
 export function parseReviewPolicyOverridesFromConfigText(raw: string): ReviewPolicyOverrides {
   const parsed = parseConfigText(raw);
@@ -90,7 +80,7 @@ export function parseRepositoryPolicyOverridesFromConfigText(raw: string): Repos
   const trimmed = raw.trim();
   if (!trimmed) return {};
   if (trimmed.startsWith("{")) {
-    return validate(repositoryPolicyOverridesSchema, JSON.parse(trimmed) as unknown,
+    return validate(repositoryPolicyOverridesSchema, stripRetiredRepositoryReviewFields(JSON.parse(trimmed) as unknown),
       "Invalid JSON policy config");
   }
   let parsed: unknown;
@@ -111,6 +101,18 @@ export function parseRepositoryPolicyOverridesFromConfigText(raw: string): Repos
   const review = asRecord(findAliasedValue(root, "review"));
   if (review) normalized.review = normalizeFields(review, reviewFields);
   return validate(repositoryPolicyOverridesSchema, normalized, "Invalid YAML policy config");
+}
+
+function stripRetiredRepositoryReviewFields(value: unknown): unknown {
+  const root = asRecord(value);
+  const review = root ? asRecord(root.review) : undefined;
+  if (!root || !review) return value;
+  return {
+    ...root,
+    review: Object.fromEntries(
+      Object.entries(review).filter(([key]) => !retiredReviewFields.has(normalizeKey(key))),
+    ),
+  };
 }
 
 function parseConfigText(raw: string): unknown {

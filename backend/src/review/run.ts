@@ -1,8 +1,8 @@
 import { collectGitHubPullRequestContext } from "../integrations/github/repository/context.js";
-import { runGitHubReview } from "./platforms/github/workflow.js";
+import { executeGitHubReview } from "./platforms/github/workflow.js";
 import { createRestBackedOctokit } from "../integrations/github/api/http-client.js";
 import { collectGitLabMergeRequestContext } from "../integrations/gitlab/repository/context.js";
-import { runGitLabReview } from "./platforms/gitlab/workflow.js";
+import { executeGitLabReview } from "./platforms/gitlab/workflow.js";
 import { GitHubRepositoryReadAdapter } from "../integrations/github/repository/read-adapter.js";
 import { GitLabRepositoryReadAdapter } from "../integrations/gitlab/repository/read-adapter.js";
 import { currentRunExecutionContext, durableReviewCollection } from "../agent-runtime/execution/run-context.js";
@@ -45,7 +45,7 @@ export async function executeReviewRun(lease: RunLease, binding: PublicationBind
       }));
       return;
     }
-    await runGitHubReview({
+    await executeGitHubReview({
       context: { repo: () => ({ owner, repo }), octokit, log: logger },
       pullNumber: input.target.number, mode: input.mode, trigger: input.trigger,
       ...input.options, sourceKey: input.source.key, sourceHash: input.source.hash,
@@ -74,7 +74,7 @@ export async function executeReviewRun(lease: RunLease, binding: PublicationBind
     }));
     return;
   }
-  const result = await runGitLabReview({ payload,
+  const result = await executeGitLabReview({ payload,
     headers: {}, logger, mode: input.mode, trigger: input.trigger,
     ...input.options, sourceKey: input.source.key, sourceHash: input.source.hash,
     publicationRuntime: { ...runtime, binding: { ...binding, platform: "gitlab" } }, throwOnError: true,

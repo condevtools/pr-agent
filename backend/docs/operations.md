@@ -126,7 +126,7 @@ npm --prefix backend run test:harness:backup
 | 异步 drain/resume、迟到 freeze、原子 dispatch fence | `agent-runtime/execution-rollout.pg.test.ts`、provider replay 测试 |
 | RLS 与连接复用、共享预算争抢 | Run store/query、model budget PG suites |
 | SSE 补历史、隐藏事件游标、慢消费者与权限撤销 | `http/sse.test.ts`、API/query suites、容量工具 |
-| retention 与 operation revive 并发 | `agent-runtime/maintenance.pg.test.ts` |
+| retention 与 operation revive、late hold 并发 | `agent-runtime/periodic-maintenance.pg.test.ts` |
 | 迁移中断与恢复 | crash suite、备份恢复演练 |
 
 当前调度完全依赖 polling；没有启用 LISTEN/NOTIFY，因此不存在“丢失通知导致任务永久不执行”的依赖，也不把未实现的通知重连算作已验证功能。进程故障测试为缩短运行时间在隔离库中推进 lease 到期，随后调用实际 PG-clock sweeper/claim；这不等于测量了真实生产机器的最坏故障切换时间。

@@ -12,11 +12,11 @@ const COPY = {
       'Turn webhook intake into review output that actually fits engineering flow.',
     cardCta: 'See Workflow',
     body:
-      'PR Agent is built with TypeScript + NestJS and designed around real GitHub and GitLab collaboration paths. It supports automatic review as well as comment commands for Q&A, checks, test drafting, and documentation help.',
+      'PR Agent is built with TypeScript + NestJS for GitHub and GitLab review workflows. It provides automatic review, authorized durable review commands, and protected API paths for Deep Review and gated Fix proposals.',
     bullets: [
       'Supports GitHub App, GitHub Webhook, and GitLab Webhook modes.',
       'Supports comment/report modes with line-aware diff mapping.',
-      'Uses .pr-agent.yml for policy reminders, command switches, and review guardrails.',
+      'Uses .pr-agent.yml for review triggers, supported command switches, and review guardrails.',
     ],
     cta: 'View Capabilities',
   },
@@ -27,11 +27,11 @@ const COPY = {
     cardBody: '把 webhook 输入真正转换成符合研发流程的评审输出。',
     cardCta: '查看流程',
     body:
-      'PR Agent 基于 TypeScript + NestJS 构建，围绕 GitHub 与 GitLab 的真实协作链路设计，同时覆盖自动评审与评论命令。',
+      'PR Agent 基于 TypeScript + NestJS 构建，覆盖 GitHub 与 GitLab 自动评审、经过授权的持久化评审命令，以及受保护 API 下的 Deep Review 与受控 Fix 提案。',
     bullets: [
       '支持 GitHub App、GitHub Webhook 与 GitLab Webhook 三种接入方式。',
       '支持 comment / report 模式，并按行映射 diff 输出反馈。',
-      '通过 .pr-agent.yml 管理策略提醒、命令开关与评审护栏。',
+      '通过 .pr-agent.yml 管理评审触发、受支持的命令开关与评审护栏。',
     ],
     cta: '查看能力',
   },

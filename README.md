@@ -28,8 +28,8 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 ## Beta Status
 
 - PR Agent is currently in **beta**.
-- The only officially supported integration mode is **GitHub App**.
-- Plain GitHub Webhook and GitLab code paths may still exist in the repository, but they are not part of the supported deployment surface right now.
+- GitHub App, authenticated plain GitHub Webhook and authenticated GitLab Webhook all use the PostgreSQL execution path.
+- Supported commands differ by platform; Fix publication remains GitHub-only and requires qualification and human approval.
 
 ## Features
 
@@ -37,7 +37,7 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 - Automatic AI code review on PR open / update / merge
 - Inline comments with GitHub Suggested Changes
 - Report-mode summaries with risk assessment
-- Incremental review (only new commits since last review)
+- Review of immutable base/head revisions frozen when the Run is created
 - Mermaid change-structure diagrams in reports (directory/file visualization)
 - Secret leak detection in diffs (lightweight regex-based scanning)
 - Auto-labeling (bugfix / feature / refactor / docs / security)
@@ -53,9 +53,9 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 - Process guideline detection (`.github/.gitlab` workflows, templates, CODEOWNERS, CONTRIBUTING) with compliance suggestions
 
 **Current Support**
-- GitHub App only
-- Plain GitHub Webhook — unsupported in the current beta
-- GitLab Webhook — unsupported in the current beta
+- GitHub App
+- Plain GitHub Webhook with server credentials and signature verification
+- GitLab Webhook with a required secret and server API credentials
 - GitHub Actions integration mode — not supported (repository CI is provided separately)
 
 **Multi-Provider AI**
@@ -66,17 +66,14 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 
 ### Review Triggers
 
-| Trigger | Mode | Dedup Window |
-|---|---|---|
-| PR opened (`opened`) | comment / report (per config) | 5 min |
-| PR updated (`synchronize`) | comment / report | 5 min (per new commit SHA) |
-| PR edited (`edited`) | comment / report | 5 min |
-| PR merged (`closed` + merged) | report | 24h (configurable) |
-| `/ai-review` comment command | comment / report | 5 min |
-| `/ai-review report` | report | 5 min |
-| `/ai-review comment` | comment | 5 min |
-| Issue created / edited | pre-check (GitHub) + default auto-triage when policy file is missing | 5 min |
-| PR created / edited / synced | pre-merge check (GitHub) | — |
+| Trigger | Review mode |
+|---|---|
+| GitHub PR opened / edited / synchronized | comment / report, according to repository policy |
+| GitHub PR merged | report |
+| GitLab MR event | comment / report, according to repository policy |
+| Authorized `/ai-review` command | report by default; explicit report / comment accepted |
+
+Duplicate deliveries reuse a durable PostgreSQL source identity and Run. Ordinary Issue events and unsupported commands are ignored; there is no local TTL deduplication window.
 
 Manual review commands require repository write access on GitHub or Developer access on GitLab. The GitHub App needs Metadata read permission to check the commenter. GitLab uses the server's API token to check project membership; its webhook secret is a separate required credential. Ordinary comments and unsupported commands are ignored without calling the model.
 
@@ -110,212 +107,35 @@ graph LR
     ROOT --> DOCS[docs/<br/>roadmaps and process assets]
 ```
 
-### High-Level Overview
+### Runtime Architecture
 
-```mermaid
-graph TB
-    subgraph Platforms
-        GH_APP[GitHub App<br/>Probot]
-        GH_WH[GitHub Webhook]
-        GL_WH[GitLab Webhook]
-    end
-
-    subgraph NestJS Application
-        direction TB
-        CTRL[Controllers<br/>Route & Validate]
-        SVC[Services<br/>Signature Verify & Dispatch]
-        INT[Integration Layer<br/>GitHub / GitLab Adapters]
-        RE[Review Engine<br/>AI Reviewer + Patch Parser]
-        RR[Report Renderer<br/>Markdown + Suggestions]
-    end
-
-    subgraph External
-        AI[AI Providers<br/>OpenAI / Anthropic / Gemini]
-        GH_API[GitHub API]
-        GL_API[GitLab API]
-        NOTIFY[Notifications<br/>Slack / Discord / WeChat]
-    end
-
-    GH_APP -->|Webhook Event| CTRL
-    GH_WH -->|Webhook Event| CTRL
-    GL_WH -->|Webhook Event| CTRL
-    CTRL --> SVC
-    SVC --> INT
-    INT --> RE
-    RE -->|LLM Call| AI
-    RE --> RR
-    RR -->|Post Comment / Report| GH_API
-    RR -->|Post Comment / Report| GL_API
-    INT -.->|Optional| NOTIFY
-```
-
-### Request Processing Flow
-
-```mermaid
-sequenceDiagram
-    participant P as Platform (GitHub/GitLab)
-    participant C as Controller
-    participant S as Service
-    participant D as Deduplication
-    participant I as Integration
-    participant A as AI Reviewer
-    participant R as Report Renderer
-
-    P->>C: Webhook Event
-    C->>S: Validate signature & parse payload
-    S->>D: Check dedup (FNV hash, 5min window)
-    alt Duplicate
-        D-->>S: Skip (already processed)
-    else New request
-        D-->>S: Proceed
-        S->>I: Dispatch to platform handler
-        I->>I: Fetch diff, file contents, policy
-        I->>A: Send context + diff to AI model
-        A-->>I: Structured review result (Zod-validated)
-        I->>R: Format report / inline comments
-        R->>P: Post review via API
-        I-->>P: Optional notification webhook
-    end
-```
-
-### Module Dependency Graph
-
-```mermaid
-graph LR
-    APP[AppModule] --> HTTP[http: capability APIs]
-    APP --> BOOT[bootstrap: Probot and lifecycle]
-    HTTP --> RUN[agent-runtime]
-    HTTP --> FIX[fix]
-    HTTP --> EVO[evolution]
-    BOOT --> REV[review: standard and deep]
-    BOOT --> CMD[commands]
-    RUN --> REV
-    RUN --> FIX
-    RUN --> EVO
-    RUN --> PG[PostgreSQL]
-    REV --> MODEL[model]
-    REV --> REPO[repository]
-    REV --> INT[integrations]
-    CMD --> REV
-    CMD --> MODEL
-    CMD --> INT
-    FIX --> MODEL
-    FIX --> REPO
-    EVO --> MODEL
-    EVO --> REV
-    MODEL --> CORE[core]
-    REPO --> CORE
-    INT --> CORE
-```
+One codebase runs separate web, worker, recovery and maintenance processes. PostgreSQL owns durable Runs, budgets, publication intents, feedback and artifacts. The composition root registers workflows explicitly; only leased workers execute reviews and the model gateway requires a budget context. Recovery reconciles uncertain external effects. An optional verifier runs in an isolated operator deployment.
 
 ### Detailed Request Flow
 
-The following diagram traces every request path — from webhook entry through event routing, command parsing, the common review engine, and output delivery.
+The following diagram shows the production flow. Webhook handlers enqueue reviews; leased workers execute them. GitHub supports review, improve, add_doc and improve_component; GitLab supports review. Single is the default; an explicit API request or an administrator-controlled binding can select Deep. Fix/Evolution require enabled capabilities.
 
 ```mermaid
 flowchart LR
-    subgraph E["Entry Endpoints (NestJS + Probot)"]
-        E1["/api/github/webhooks<br/>GithubAppBootstrapService"]
-        E2["/github/trigger<br/>GithubWebhookController"]
-        E3["/gitlab/trigger<br/>GitlabWebhookController"]
-        E4["/github/replay/:eventId<br/>/gitlab/replay/:eventId"]
-        E5["/health /metrics /webhook/events"]
-    end
-
-    subgraph GHA["GitHub App Event Routing (backend/src/bootstrap/probot-app.ts)"]
-        A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
-        A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
-        A3["resolveGitHubPullRequestAutoReviewPolicy"]
-        A4["pull_request.closed (merged)<br/>resolveGitHubReviewBehaviorPolicy"]
-        A5["issue_comment.created (PR + Issue)<br/>handleGitHubIssueCommentCommand"]
-        A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
-    end
-
-    subgraph GHW["Plain GitHub Webhook (backend/src/integrations/github/webhooks/handler.ts)"]
-        B1["handlePlainGitHubWebhook"]
-        B2["verifyWebhookSignature + payload schema"]
-        B3["pull_request / issues / issue_comment / review_thread dispatch"]
-        B4["runGitHubPullRequestPolicyCheck + runGitHubIssuePolicyCheck"]
-        B5["handleGitHubIssueCommentCommand"]
-    end
-
-    subgraph GLW["GitLab Webhook (backend/src/integrations/gitlab/webhooks/adapter.ts)"]
-        C1["runGitLabWebhook"]
-        C2["verify token + payload schema"]
-        C3["handleGitLabMergeRequestWebhook"]
-        C4["handleGitLabNoteWebhook"]
-        C5["resolveGitLabReviewPolicy (.pr-agent.yml)"]
-    end
-
-    subgraph CMD["Command Parsing Surface"]
-        D1["parseReviewCommand"]
-        D2["parseAsk / parseMention / parseChecks / parseGenerateTests"]
-        D3["parseDescribe / parseChangelog"]
-        D4["parseImprove / parseAddDoc / parseReflect / parseSimilarIssue / parseFeedback"]
-    end
-
-    subgraph CORE["Common Review Engine"]
-        R1["runGitHubReview / runGitLabReview"]
-        R2["dedupe + rate-limit + incremental head + feedback signals"]
-        R3["collect context: diff/files/ci/policy"]
-        R4["analyzePullRequest / answerPullRequestQuestion"]
-        R5["patch parser + hunk prioritize + line mapping"]
-        R6["secret scan + auto label"]
-    end
-
-    subgraph OUT["Output + Ops"]
-        O1["buildReportCommentMarkdown"]
-        O2["buildIssueCommentMarkdown"]
-        O3["createComment / notes / managed upsert"]
-        O4["publishNotification (optional)"]
-        O5["pr_agent_* metrics + replay store"]
-    end
-
-    E1 --> A1
-    E1 --> A2 --> A3 --> R1
-    E1 --> A4 --> R1
-    E1 --> A5
-    E1 --> A6
-
-    E2 --> B1 --> B2 --> B3
-    B3 --> B4 --> R1
-    B3 --> B5
-
-    E3 --> C1 --> C2
-    C2 --> C3 --> C5 --> R1
-    C2 --> C4 --> C5
-
-    A5 --> D1
-    A5 --> D2
-    A5 --> D3
-    A5 --> D4
-    B5 --> D1
-    B5 --> D2
-    B5 --> D3
-    B5 --> D4
-    C4 --> D1
-    C4 --> D2
-    C4 --> D3
-    C4 --> D4
-
-    D1 --> R1
-    D2 --> R4
-    D3 --> R4
-    D4 --> R1
-
-    R1 --> R2 --> R3 --> R4 --> R5
-    R4 --> R6
-    R5 --> O1 --> O3
-    R5 --> O2 --> O3
-    R6 --> O3
-    O3 --> O4
-
-    E4 --> B1
-    E4 --> C1
-    E5 --> O5
-    E2 --> O5
-    E3 --> O5
-    O3 -. feedback signals .-> R2
+    GH[GitHub App / webhook] --> SIGN[Signature + payload validation]
+    GL[GitLab webhook] --> SIGN
+    SIGN --> ROUTE[Canonical event + command recognition]
+    ROUTE --> IGNORE[Ignore ordinary / unsupported / unmanaged events]
+    ROUTE --> AUTH[Repository binding; command author permission]
+    AUTH --> ENQUEUE[Explicit review enqueue]
+    API[Protected Run API] --> ENQUEUE
+    ENQUEUE --> PG[(PostgreSQL: Runs, budget, events, artifacts)]
+    PG --> WORKER[Compatible leased Worker]
+    WORKER --> REVIEW[Single / explicit Deep Review]
+    REVIEW --> MODEL[Budgeted model gateway]
+    REVIEW --> PUB[Durable publication batch]
+    PUB --> PROVIDER[GitHub / GitLab]
+    RECOVERY[Recovery: reconcile uncertain effects] --> PUB
+    FEEDBACK[Authorized feedback command / API] --> PG
+    FIX[Optional Fix + isolated verifier + human approval] --> PG
+    EVOLUTION[Optional Evolution evaluation / release] --> PG
+    MAINT[Restricted maintenance: preview / retention] --> PG
+    HEALTH[Liveness / capability-aware readiness] -.-> PG
 ```
 
 ---
@@ -351,7 +171,7 @@ pr-agent/
 │   │   ├── agent-runtime/           # Run execution, budgets, persistence and publication recovery
 │   │   ├── model/                   # Model contracts, providers and concurrency control
 │   │   ├── review/                  # Standard/deep review, strategy and rendering
-│   │   ├── commands/                # Command parsing, Ask sessions and orchestration
+│   │   ├── commands/                # Command recognition, authorization and review intake
 │   │   ├── repository/              # Repository ports, diffs and content safety
 │   │   ├── issues/                  # Issue similarity, triage and policy
 │   │   ├── fix/                     # Fix proposals, verification, approval and publication
@@ -453,11 +273,12 @@ curl http://localhost:3000/github/health       # GitHub config status
 
 ### Environment Variables
 
-Copy `.env.example` and fill in the required values. The supported minimal configuration is:
+Copy `.env.example` and fill in the required values. Choose the minimal configuration for your platform:
 
 - `.env.github-app.min.example` — GitHub App minimum
 
-Legacy minimal examples for plain GitHub Webhook and GitLab remain in the repository for reference only; they are not part of the supported beta deployment path.
+- `.env.github-webhook.min.example` — plain GitHub Webhook minimum
+- `.env.gitlab.min.example` — GitLab Webhook minimum
 
 ### AI Provider
 
@@ -546,8 +367,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 
 | Variable | Default | Description |
 |---|---|---|
-| `GITHUB_MERGED_DEDUPE_TTL_MS` | `86400000` (24h) | Dedup window for merged + report events |
-| `GITHUB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000` (30d) | Feedback signal retention window |
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache lifetime |
 | `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` cache for policy/review behavior |
 | `GITHUB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/github/trigger` payload size |
@@ -557,9 +376,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 
 | Variable | Default | Description |
 |---|---|---|
-| `GITLAB_MERGED_DEDUPE_TTL_MS` | `86400000` (24h) | Merged + report event dedup window |
 | `GITLAB_INCREMENTAL_STATE_TTL_MS` | `604800000` (7d) | Incremental review SHA cache |
-| `GITLAB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000` (30d) | Feedback learning signal retention |
 | `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000` (5min) | `.pr-agent.yml` policy cache |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760` (10MB) | Extra hard cap for `/gitlab/trigger` payload size |
 | `GITLAB_WEBHOOK_SECRET` | Required for GitLab | Missing or incorrect webhook secrets are rejected; request headers cannot provide API credentials or override review policy |
@@ -567,8 +384,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 
 **Tuning guidance:**
 
-- `MERGED_DEDUPE_TTL_MS` — Controls the dedup window for `merged + report` events to prevent duplicate reviews on webhook retries. Increase to `48h–72h` if you experience frequent webhook redelivery; decrease to `1h–6h` if you need faster re-trigger. This only affects merged auto-triggers; manual `/ai-review` commands use the short (5 min) dedup window.
-- `FEEDBACK_SIGNAL_TTL_MS` — Controls how long review-thread resolved/unresolved signals are retained. Increase to `60–90d` for teams with slower review cadence; decrease to `7–14d` if review rules change frequently.
 - `COMMAND_RATE_LIMIT_*` — Controls abuse protection for comment commands. Increase limits for very active repos; lower limits if bots/users spam command threads.
 
 See `.env.example` for the baseline variable reference; advanced runtime knobs are listed above.
@@ -692,11 +507,11 @@ graph TD
     G --> H[Test with /ai-review Command]
 ```
 
-1. **Use GitHub App integration mode** — this is the only supported integration in the current beta
+1. **Configure platform credentials and webhook verification** — GitHub App, plain GitHub or GitLab
 2. **Configure AI provider and budget policy** — Set `AI_PROVIDER`, the corresponding API key/model, and a deployment-specific `HARNESS_MODEL_PRICING_JSON` derived from [`.env.example`](.env.example)
 3. **Initialize PostgreSQL** — For Compose, configure all five database passwords and require `database-init` to complete successfully; external PostgreSQL deployments must provision equivalent restricted roles before running the migration CLI
 4. **Deploy the container** — Docker, Docker Compose, Render, Railway, Fly.io, or K8s
-5. **Set webhook URL** to `https://<domain>/api/github/webhooks`
+5. **Set webhook URL** — append `/api/github/webhooks` for GitHub App, `/github/trigger` for plain GitHub, or `/gitlab/trigger` for GitLab to your HTTPS domain
 6. **Verify** via health endpoints and a test `/ai-review` comment
 
 ### Quick Deployment Reference
@@ -785,7 +600,7 @@ server {
 
 ## Platform Integration
 
-### GitHub App (Only Supported Mode)
+### GitHub App
 
 1. Create a GitHub App with the following permissions:
    - **Pull requests**: Read & write
@@ -811,12 +626,11 @@ WEBHOOK_SECRET=your-webhook-secret
 - Base `docker-compose.yml` uses inline `PRIVATE_KEY` and does not require a host PEM, which is the Coolify-compatible path. The optional `docker-compose.secret-file.yml` overlay creates the file secret from `./secrets/github-app.private-key.pem`; on Linux, provision it for UID/GID `10001:10001` with mode `0400` before starting the overlay.
 - For the optional file overlay, create only the managed secret directory: `mkdir -p secrets`.
 
-> If `APP_ID` + `PRIVATE_KEY` (+ `WEBHOOK_SECRET`) are not configured, GitHub App mode is disabled and the beta deployment is considered incomplete.
+> GitHub App mode requires its complete credential set. Deployments using plain GitHub or GitLab webhooks configure the corresponding server credentials and webhook secret instead.
 
-### Unsupported Integrations In Current Beta
+### Other Webhook Integrations
 
-- Plain GitHub Webhook is not a supported deployment target right now.
-- GitLab Webhook is not a supported deployment target right now.
+Plain GitHub uses `/github/trigger`; GitLab uses `/gitlab/trigger`. Configure server API credentials, the platform webhook secret, and an active repository binding before sending events. Request headers cannot supply API credentials or override repository policy.
 
 ---
 
@@ -875,7 +689,7 @@ GitHub and GitLab read the `review:` section from `.pr-agent.yml`. Issue/PR temp
 | `secretScanEnabled` | Scan diffs for potential secret leaks and post security warnings |
 | `secretScanCustomPatterns` | Additional repository-specific secret regex patterns |
 | `autoLabelEnabled` | Auto-add PR labels based on change content |
-| `customRules` | Team-specific review rules (natural language); enforced in both reviews and Q&A |
+| `customRules` | Team-specific review rules (natural language); included in reviews |
 
 ---
 
@@ -905,7 +719,7 @@ Prometheus-format metrics are exposed at `GET /metrics`:
 | `GET /health` | Public liveness probe; platform `/github/health` and `/gitlab/health` routes accept `?deep=1` to check local webhook configuration |
 | `GET /ready` | Readiness for enabled capabilities and runtime dependencies |
 | `GET /github/health` | GitHub webhook config validation |
-| `GET /gitlab/health` | Legacy GitLab webhook config validation (unsupported in current beta) |
+| `GET /gitlab/health` | GitLab webhook config validation |
 
 ### Error Handling
 

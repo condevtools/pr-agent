@@ -24,7 +24,6 @@ import { buildReviewRunCreationInput } from "../../src/review/intake/run-intake.
 import { RunWorker } from "../../src/agent-runtime/execution/run-worker.js";
 import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
 import { closeAgentRuntime, executeAgentRun } from "../../src/agent-runtime/runtime.js";
-import { RuntimeMaintenanceStore } from "../../src/agent-runtime/maintenance.js";
 import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint, runtimeVersionManifest, type RunVersionManifest } from "../../src/agent-runtime/versions.js";
 import { getModelExecutionPolicy, ModelBudgetStore } from "../../src/agent-runtime/budget/model-budget-store.js";
@@ -500,7 +499,7 @@ if (!databaseUrl) {
       WHERE tenant_id=$1 AND id=$2`, [tenantId, candidateId]));
   });
 
-  test("retention excludes qualified sources and nonbaseline release selections", async () => {
+  test("canonical retention excludes qualified sources and immutable release assignments", async () => {
     assert.ok(selectedRunId && baselineRunId);
     const sourceRunId = (await pool.query<{ source_run_id: string }>(`SELECT source_run_id
       FROM pr_agent_harness.eval_cases WHERE tenant_id=$1 AND dataset_id=$2 ORDER BY ordinal LIMIT 1`,
@@ -509,12 +508,17 @@ if (!databaseUrl) {
       SET finished_at=clock_timestamp()-interval '40 days'
       WHERE tenant_id=$1 AND id=ANY($2::uuid[])`,
     [tenantId, [sourceRunId, proposalRunId, selectedRunId, baselineRunId]]));
-    const preview = await new RuntimeMaintenanceStore(pool).preview({ tenantId, olderThanDays: 30, limit: 1000 });
-    const candidates = new Set(preview.candidates.map(({ runId }) => runId));
-    assert.ok(candidates.has(baselineRunId), "an unprotected baseline Run proves the preview scanned this cutoff");
-    assert.ok(!candidates.has(sourceRunId));
-    assert.ok(!candidates.has(proposalRunId));
-    assert.ok(!candidates.has(selectedRunId));
+    const eligibility = await pool.query<{ id: string; eligible: boolean }>(
+      `SELECT run.id,pr_agent_harness.maintenance_run_content_eligible(run.tenant_id,run.id,30) eligible
+       FROM pr_agent_harness.agent_runs run WHERE run.tenant_id=$1 AND run.id=ANY($2::uuid[])`,
+      [tenantId, [sourceRunId, proposalRunId, selectedRunId, baselineRunId]],
+    );
+    const eligibilityByRun = new Map(eligibility.rows.map((row) => [row.id, row.eligible]));
+    assert.equal(eligibilityByRun.get(sourceRunId), false);
+    assert.equal(eligibilityByRun.get(proposalRunId), false);
+    assert.equal(eligibilityByRun.get(selectedRunId), false);
+    assert.equal(eligibilityByRun.get(baselineRunId), false,
+      "baseline assignments remain immutable release identities under canonical retention");
   });
 
   test("FORCE RLS and store scope hide another tenant and integration", async () => {

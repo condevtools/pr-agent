@@ -13,7 +13,7 @@ P2 实现了独立的修复建议、隔离验证、人工相关性标注和审�
 7. Proposal maker 创建审批预览，另一 actor 审批，事务内创建唯一 `fix.publish.v1` child。审批绑定不可变 ordered operation plan；生成后不改补丁。过期审批可创建新 generation，历史保留。
 8. GitHub 的 branch→commit→Draft PR 整批先冻结，再在同一事务内消费审批并关联 child Run。每次实际写入再次检查消费记录与精确 operation set。commit 使用 GraphQL `expectedHeadOid`；Draft 的目标是原 PR 的 head branch。每次写后核验远端事实。响应丢失/结果不一致进入只读对账，不能自动重发。
 
-GitLab FixRun 可生成建议，但发布明确禁用。其 [Commit API](https://docs.gitlab.com/api/commits/) 没有此实现可依赖的分支 expected-head 条件写入；`start_sha` 不能当作 CAS。GitHub 使用官方 [createCommitOnBranch](https://docs.github.com/en/graphql/reference/mutations#createcommitonbranch)。fork/cross-repository 发布也拒绝。Harness 模式下旧 `/implement` 被禁用。
+GitLab FixRun 可生成建议，但发布明确禁用。其 [Commit API](https://docs.gitlab.com/api/commits/) 没有此实现可依赖的分支 expected-head 条件写入；`start_sha` 不能当作 CAS。GitHub 使用官方 [createCommitOnBranch](https://docs.github.com/en/graphql/reference/mutations#createcommitonbranch)。fork/cross-repository 发布也拒绝。旧 `/implement` 实现已删除，修复发布统一经过受控 Fix API。
 
 ## API 与权限
 

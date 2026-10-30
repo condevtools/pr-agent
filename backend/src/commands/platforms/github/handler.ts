@@ -1,6 +1,6 @@
 import { readNumberEnv, readOptionalStringEnv } from "#core";
 import type { GitHubReviewContext } from "../../../review/platforms/github/contracts.js";
-import { runGitHubReview } from "../../../review/platforms/github/workflow.js";
+import { enqueueGitHubReview } from "../../../review/platforms/github/workflow.js";
 import { resolveGitHubReviewBehaviorPolicy } from "../../../issues/policy/github/workflow.js";
 import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
@@ -70,7 +70,7 @@ export async function handleGitHubIssueCommentCommand(params: {
     enableAutoLabel = false;
   }
 
-  await runGitHubReview({
+  await enqueueGitHubReview({
     context, pullNumber: params.issueNumber, mode: parsedReview.matched ? parsedReview.mode : "comment",
     trigger: "comment-command", customRules, includeCiChecks: behavior.includeCiChecks,
     enableSecretScan, secretScanCustomPatterns: behavior.secretScanCustomPatterns, enableAutoLabel,

@@ -9,6 +9,7 @@ import {
 import { buildMergeRequestPayloadFromNote } from "../../../src/integrations/gitlab/webhooks/events.js";
 import { inferMergeRequestLabels } from "../../../src/review/platforms/gitlab/publication.js";
 import { mapGitLabStatusToConclusion } from "../../../src/integrations/gitlab/repository/ci-checks.js";
+import { parseGitLabReviewPolicyConfig } from "../../../src/review/policy/gitlab.js";
 import type { PullRequestReviewResult } from "../../../src/review/contracts.ts";
 
 const lowRiskResult: PullRequestReviewResult = {
@@ -91,14 +92,14 @@ test("github yaml parser throws on invalid tab indentation instead of silent ski
 test("github yaml parser supports anchors/inline map and key aliases", () => {
   const config = parseRepoPolicyConfig([
     "defaults: &review_defaults",
-    "  ask_command_enabled: no",
+    "  improve_command_enabled: no",
     "  include_ci_checks: yes",
     "review:",
     "  <<: *review_defaults",
     "pull_request: { requireLinkedIssue: yes, min_body_length: 8 }",
   ].join("\n"));
 
-  assert.equal(config.review?.askCommandEnabled, false);
+  assert.equal(config.review?.improveCommandEnabled, false);
   assert.equal(config.review?.includeCiChecks, true);
   assert.equal(config.pullRequest?.requireLinkedIssue, true);
   assert.equal(config.pullRequest?.minBodyLength, 8);
@@ -114,6 +115,9 @@ test("github json policy parser rejects unexpected structure before normalize", 
       }),
     ),
   );
+  assert.throws(() =>
+    parseRepoPolicyConfig(JSON.stringify({ review: { includeCiCheks: true } })),
+  );
 });
 
 test("github json policy parser keeps valid structures", () => {
@@ -121,15 +125,48 @@ test("github json policy parser keeps valid structures", () => {
     JSON.stringify({
       mode: "enforce",
       review: {
-        askCommandEnabled: false,
+        improveCommandEnabled: false,
         customRules: ["规则 A"],
       },
     }),
   );
 
   assert.equal(config.mode, "enforce");
-  assert.equal(config.review?.askCommandEnabled, false);
+  assert.equal(config.review?.improveCommandEnabled, false);
   assert.deepEqual(config.review?.customRules, ["规则 A"]);
+});
+
+test("legacy command policy keys are ignored while live review fields still apply", () => {
+  const legacyKeys = [
+    "describeEnabled", "describeAllowApply", "checksCommandEnabled",
+    "askCommandEnabled", "generateTestsCommandEnabled", "changelogCommandEnabled",
+    "changelogAllowApply", "customPromptCommandEnabled", "helpDocsCommandEnabled",
+    "analyzeCommandEnabled", "complianceCommandEnabled", "similarCodeCommandEnabled",
+    "scanRepoDiscussionsCommandEnabled",
+  ];
+  const legacyJson = Object.fromEntries(legacyKeys.map((key) => [key, true]));
+  const github = parseRepoPolicyConfig(JSON.stringify({
+    review: {
+      ...legacyJson,
+      improveCommandEnabled: false,
+      addDocCommandEnabled: true,
+      includeCiChecks: false,
+    },
+  })).review as Record<string, unknown>;
+  const gitlab = parseGitLabReviewPolicyConfig([
+    "review:",
+    ...legacyKeys.map((key) => `  ${key}: true`),
+    "  improveCommandEnabled: false",
+    "  addDocCommandEnabled: true",
+    "  includeCiChecks: false",
+  ].join("\n")) as unknown as Record<string, unknown>;
+
+  for (const policy of [github, gitlab]) {
+    assert.equal(policy.improveCommandEnabled, false);
+    assert.equal(policy.addDocCommandEnabled, true);
+    assert.equal(policy.includeCiChecks, false);
+    for (const key of legacyKeys) assert.equal(key in policy, false);
+  }
 });
 
 test("gitlab note payload builder accepts string iid and noteable_iid fallback", () => {

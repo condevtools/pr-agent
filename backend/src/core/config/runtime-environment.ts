@@ -205,15 +205,15 @@ function validateVerifier(env: Record<string, string>): void {
 }
 
 function validateTuning(env: Record<string, string>, profile: RuntimeEnvironmentProfile): void {
-  const commonNumbers: Array<[string, number, number, number]> = [
-    ["HTTP_TIMEOUT_MS", 30_000, 100, 300_000], ["HTTP_RETRIES", 2, 0, 10],
-    ["HTTP_RETRY_BACKOFF_MS", 400, 0, 60_000], ["HTTP_RETRY_MAX_DELAY_MS", 10_000, 1, 300_000],
-    ["GITHUB_HTTP_TIMEOUT_MS", 30_000, 100, 300_000], ["GITHUB_HTTP_RETRIES", 2, 0, 10],
-    ["GITHUB_HTTP_RETRY_BACKOFF_MS", 400, 0, 60_000], ["GITLAB_HTTP_TIMEOUT_MS", 30_000, 100, 300_000],
-    ["GITLAB_HTTP_RETRIES", 2, 0, 10], ["GITLAB_HTTP_RETRY_BACKOFF_MS", 400, 0, 60_000],
+  const commonNumbers: Array<[string, number, number]> = [
+    ["HTTP_TIMEOUT_MS", 100, 300_000], ["HTTP_RETRIES", 0, 10],
+    ["HTTP_RETRY_BACKOFF_MS", 0, 60_000], ["HTTP_RETRY_MAX_DELAY_MS", 1, 300_000],
+    ["GITHUB_HTTP_TIMEOUT_MS", 100, 300_000], ["GITHUB_HTTP_RETRIES", 0, 10],
+    ["GITHUB_HTTP_RETRY_BACKOFF_MS", 0, 60_000], ["GITLAB_HTTP_TIMEOUT_MS", 100, 300_000],
+    ["GITLAB_HTTP_RETRIES", 0, 10], ["GITLAB_HTTP_RETRY_BACKOFF_MS", 0, 60_000],
   ];
   if (["web", "worker", "recovery"].includes(profile)) {
-    for (const rule of commonNumbers) integer(env, ...rule);
+    for (const rule of commonNumbers) optionalInteger(env, ...rule);
     for (const name of ["GITHUB_API_URL", "GITLAB_BASE_URL"] as const) httpUrl(env, name, false);
     boolean(env, "ALLOW_INSECURE_GITLAB_HTTP", false);
     for (const name of ["GITHUB_PUSH_URL", "GITLAB_PUSH_URL", "NOTIFY_WEBHOOK_URL"] as const) {
@@ -221,45 +221,45 @@ function validateTuning(env: Record<string, string>, profile: RuntimeEnvironment
     }
   }
   if (profile === "web") {
-    const rules: Array<[string, number, number, number]> = [
-      ["GITHUB_WEBHOOK_MAX_BODY_BYTES", 1_048_576, 1_024, 33_554_432],
-      ["GITLAB_WEBHOOK_MAX_BODY_BYTES", 1_048_576, 1_024, 33_554_432],
-      ["COMMAND_RATE_LIMIT_MAX", 10, 1, 10_000], ["COMMAND_RATE_LIMIT_WINDOW_MS", 60_000, 1_000, 86_400_000],
-      ["MAX_METRIC_COUNTER_RECORDS", 100, 1, 100_000],
+    const rules: Array<[string, number, number]> = [
+      ["GITHUB_WEBHOOK_MAX_BODY_BYTES", 1_024, 33_554_432],
+      ["GITLAB_WEBHOOK_MAX_BODY_BYTES", 1_024, 33_554_432],
+      ["COMMAND_RATE_LIMIT_MAX", 1, 10_000], ["COMMAND_RATE_LIMIT_WINDOW_MS", 1_000, 86_400_000],
+      ["MAX_METRIC_COUNTER_RECORDS", 1, 100_000],
     ];
-    for (const rule of rules) integer(env, ...rule);
+    for (const rule of rules) optionalInteger(env, ...rule);
     boolean(env, "PR_AGENT_CORE_LOGS", false);
   }
   if (profile === "web" || profile === "worker") {
-    const reviewRules: Array<[string, number, number, number]> = [
-      ["GITHUB_POLICY_CONFIG_CACHE_TTL_MS", 300_000, 1_000, 86_400_000],
-      ["GITLAB_POLICY_CONFIG_CACHE_TTL_MS", 300_000, 1_000, 86_400_000],
-      ["GITHUB_GUIDELINE_CACHE_TTL_MS", 300_000, 1_000, 86_400_000],
-      ["GITLAB_GUIDELINE_CACHE_TTL_MS", 300_000, 1_000, 86_400_000],
-      ["GITHUB_INCREMENTAL_STATE_TTL_MS", 604_800_000, 60_000, 31_536_000_000],
-      ["GITLAB_INCREMENTAL_STATE_TTL_MS", 604_800_000, 60_000, 31_536_000_000],
-      ["NOTIFY_HTTP_TIMEOUT_MS", 15_000, 100, 300_000],
-      ["NOTIFY_HTTP_RETRIES", 1, 0, 10],
-      ["NOTIFY_HTTP_RETRY_BACKOFF_MS", 300, 0, 60_000],
+    const reviewRules: Array<[string, number, number]> = [
+      ["GITHUB_POLICY_CONFIG_CACHE_TTL_MS", 1_000, 86_400_000],
+      ["GITLAB_POLICY_CONFIG_CACHE_TTL_MS", 1_000, 86_400_000],
+      ["GITHUB_GUIDELINE_CACHE_TTL_MS", 1_000, 86_400_000],
+      ["GITLAB_GUIDELINE_CACHE_TTL_MS", 1_000, 86_400_000],
+      ["GITHUB_INCREMENTAL_STATE_TTL_MS", 60_000, 31_536_000_000],
+      ["GITLAB_INCREMENTAL_STATE_TTL_MS", 60_000, 31_536_000_000],
+      ["NOTIFY_HTTP_TIMEOUT_MS", 100, 300_000],
+      ["NOTIFY_HTTP_RETRIES", 0, 10],
+      ["NOTIFY_HTTP_RETRY_BACKOFF_MS", 0, 60_000],
     ];
-    for (const rule of reviewRules) integer(env, ...rule);
+    for (const rule of reviewRules) optionalInteger(env, ...rule);
   }
   if (profile === "web" && feature(env, "FEATURE_FIX", false)) {
-    integer(env, "FIX_APPROVAL_TTL_SECONDS", 86_400, 300, 86_400);
+    optionalInteger(env, "FIX_APPROVAL_TTL_SECONDS", 300, 86_400);
   }
   if (profile === "worker") {
-    const rules: Array<[string, number, number, number]> = [
-      ["AI_HTTP_TIMEOUT_MS", 30_000, 500, 600_000], ["AI_HTTP_RETRIES", 0, 0, 10],
-      ["AI_HTTP_RETRY_BACKOFF_MS", 400, 0, 60_000], ["AI_MAX_CONCURRENCY", 4, 1, 128],
-      ["AI_MAX_QUEUE_SIZE", 100, 1, 100_000], ["AI_SHUTDOWN_DRAIN_TIMEOUT_MS", 30_000, 1_000, 600_000],
-      ["OPENAI_MAX_COMPLETION_TOKENS", 8_192, 1, 1_000_000], ["ANTHROPIC_MAX_TOKENS", 8_192, 1, 1_000_000],
-      ["GEMINI_MAX_OUTPUT_TOKENS", 8_192, 1, 1_000_000], ["MAX_OPENAI_CLIENT_CACHE_ENTRIES", 32, 1, 10_000],
-      ["GITHUB_MAX_PATCH_CHARS_PER_FILE", 200_000, 1, 100_000_000],
-      ["GITHUB_MAX_TOTAL_PATCH_CHARS", 1_000_000, 1, 500_000_000],
-      ["GITLAB_MAX_PATCH_CHARS_PER_FILE", 200_000, 1, 100_000_000],
-      ["GITLAB_MAX_TOTAL_PATCH_CHARS", 1_000_000, 1, 500_000_000],
+    const rules: Array<[string, number, number]> = [
+      ["AI_HTTP_TIMEOUT_MS", 500, 600_000], ["AI_HTTP_RETRIES", 0, 10],
+      ["AI_HTTP_RETRY_BACKOFF_MS", 0, 60_000], ["AI_MAX_CONCURRENCY", 1, 128],
+      ["AI_MAX_QUEUE_SIZE", 1, 100_000], ["AI_SHUTDOWN_DRAIN_TIMEOUT_MS", 1_000, 600_000],
+      ["OPENAI_MAX_COMPLETION_TOKENS", 1, 1_000_000], ["ANTHROPIC_MAX_TOKENS", 1, 1_000_000],
+      ["GEMINI_MAX_OUTPUT_TOKENS", 1, 1_000_000], ["MAX_OPENAI_CLIENT_CACHE_ENTRIES", 1, 10_000],
+      ["GITHUB_MAX_PATCH_CHARS_PER_FILE", 1, 100_000_000],
+      ["GITHUB_MAX_TOTAL_PATCH_CHARS", 1, 500_000_000],
+      ["GITLAB_MAX_PATCH_CHARS_PER_FILE", 1, 100_000_000],
+      ["GITLAB_MAX_TOTAL_PATCH_CHARS", 1, 500_000_000],
     ];
-    for (const rule of rules) integer(env, ...rule);
+    for (const rule of rules) optionalInteger(env, ...rule);
     boolean(env, "AI_DEBUG_LOGS", false);
   }
   const format = optional(env, "NOTIFY_WEBHOOK_FORMAT")?.toLowerCase();
@@ -319,6 +319,9 @@ function definedEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 function optional(env: Record<string, string>, name: string): string | undefined { return env[name]?.trim() || undefined; }
+function optionalInteger(env: Record<string, string>, name: string, min: number, max: number): void {
+  if (optional(env, name) !== undefined) integer(env, name, min, min, max);
+}
 function integer(env: Record<string, string>, name: string, fallback: number, min: number, max: number): number {
   const raw = optional(env, name); if (!raw) return fallback;
   if (!/^[0-9]+$/u.test(raw)) invalid(name);

@@ -34,26 +34,13 @@ export interface ReviewPolicyConfig {
   onOpened: boolean;
   onEdited: boolean;
   onSynchronize: boolean;
-  describeEnabled: boolean;
-  describeAllowApply: boolean;
-  checksCommandEnabled: boolean;
   includeCiChecks: boolean;
   secretScanEnabled: boolean;
   secretScanCustomPatterns: string[];
   autoLabelEnabled: boolean;
-  askCommandEnabled: boolean;
-  generateTestsCommandEnabled: boolean;
-  changelogCommandEnabled: boolean;
-  changelogAllowApply: boolean;
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
-  customPromptCommandEnabled: boolean;
-  helpDocsCommandEnabled: boolean;
-  analyzeCommandEnabled: boolean;
-  complianceCommandEnabled: boolean;
-  similarCodeCommandEnabled: boolean;
-  scanRepoDiscussionsCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -91,26 +78,13 @@ export const defaultPolicyConfig: RepoPolicyConfig = {
     onOpened: true,
     onEdited: false,
     onSynchronize: true,
-    describeEnabled: true,
-    describeAllowApply: false,
-    checksCommandEnabled: true,
     includeCiChecks: true,
     secretScanEnabled: true,
     secretScanCustomPatterns: [],
     autoLabelEnabled: true,
-    askCommandEnabled: true,
-    generateTestsCommandEnabled: true,
-    changelogCommandEnabled: true,
-    changelogAllowApply: false,
     feedbackCommandEnabled: true,
     improveCommandEnabled: true,
     addDocCommandEnabled: true,
-    customPromptCommandEnabled: true,
-    helpDocsCommandEnabled: true,
-    analyzeCommandEnabled: true,
-    complianceCommandEnabled: true,
-    similarCodeCommandEnabled: true,
-    scanRepoDiscussionsCommandEnabled: true,
     customRules: [],
   },
 };
@@ -316,26 +290,13 @@ function normalizeRepoPolicyConfig(raw: Partial<RepoPolicyConfig>): RepoPolicyCo
       onOpened: review.onOpened !== false,
       onEdited: Boolean(review.onEdited),
       onSynchronize: review.onSynchronize !== false,
-      describeEnabled: review.describeEnabled !== false,
-      describeAllowApply: Boolean(review.describeAllowApply),
-      checksCommandEnabled: review.checksCommandEnabled !== false,
       includeCiChecks: review.includeCiChecks !== false,
       secretScanEnabled: review.secretScanEnabled !== false,
       secretScanCustomPatterns: normalizeStringList(review.secretScanCustomPatterns).slice(0, 20),
       autoLabelEnabled: review.autoLabelEnabled !== false,
-      askCommandEnabled: review.askCommandEnabled !== false,
-      generateTestsCommandEnabled: review.generateTestsCommandEnabled !== false,
-      changelogCommandEnabled: review.changelogCommandEnabled !== false,
-      changelogAllowApply: Boolean(review.changelogAllowApply),
       feedbackCommandEnabled: review.feedbackCommandEnabled !== false,
       improveCommandEnabled: review.improveCommandEnabled !== false,
       addDocCommandEnabled: review.addDocCommandEnabled !== false,
-      customPromptCommandEnabled: review.customPromptCommandEnabled !== false,
-      helpDocsCommandEnabled: review.helpDocsCommandEnabled !== false,
-      analyzeCommandEnabled: review.analyzeCommandEnabled !== false,
-      complianceCommandEnabled: review.complianceCommandEnabled !== false,
-      similarCodeCommandEnabled: review.similarCodeCommandEnabled !== false,
-      scanRepoDiscussionsCommandEnabled: review.scanRepoDiscussionsCommandEnabled !== false,
       customRules: normalizeStringList(review.customRules).slice(0, 30),
     },
   };

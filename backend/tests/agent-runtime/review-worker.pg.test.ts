@@ -20,7 +20,7 @@ import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
 import { closeAgentRuntime, publicationRuntimeForBinding } from "../../src/agent-runtime/runtime.js";
 import { executeReviewRun } from "../../src/review/run.js";
-import { runGitHubReview } from "../../src/review/platforms/github/workflow.js";
+import { enqueueGitHubReview } from "../../src/review/platforms/github/workflow.js";
 import { createRestBackedOctokit } from "../../src/integrations/github/api/http-client.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
@@ -464,7 +464,7 @@ if (!databaseUrl) {
     runtime.batchCoordinator.execute = async () => { throw new Error("Webhook must not dispatch a Run-linked batch"); };
     let replayRunId: string | undefined;
     try {
-      await runGitHubReview({
+      replayRunId = await enqueueGitHubReview({
         context: { repo: () => ({ owner: "acme", repo: "durable-review" }),
           octokit: createRestBackedOctokit({ token: "local-fixture", baseUrl: origin }),
           log: { info: () => undefined, error: () => undefined } },
@@ -472,7 +472,7 @@ if (!databaseUrl) {
         sourceKey: "production-path:42", sourceHash: hash("production-path:42"),
         includeCiChecks: false, enableSecretScan: false, enableAutoLabel: false,
         publicationRuntime: { ...runtime, binding: { ...binding, platform: "github" } },
-        onQueued: (runId) => { replayRunId = runId; }, throwOnError: true,
+        throwOnError: true,
       });
     } finally {
       runtime.batchCoordinator.execute = executeBatch;

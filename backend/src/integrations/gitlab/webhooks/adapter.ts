@@ -4,7 +4,7 @@ import { PublicationBindingNotFoundError } from "../../../agent-runtime/authorit
 import { handleGitLabNoteWebhook } from "../../../commands/platforms/gitlab/handler.js";
 import { CommandAuthorizationError } from "../../../commands/authorization.js";
 import { resolveGitLabReviewPolicy, type GitLabReviewPolicy } from "../../../review/policy/gitlab.js";
-import { runGitLabReview } from "../../../review/platforms/gitlab/workflow.js";
+import { enqueueGitLabReview } from "../../../review/platforms/gitlab/workflow.js";
 import type { GitLabPublicationRuntime } from "../publication/adapter.js";
 import { requireGitLabToken, resolveGitLabBaseUrl } from "../repository/context.js";
 import { gitlabMrWebhookPayloadSchema, gitlabNoteWebhookPayloadSchema, parseGitLabPayload,
@@ -103,7 +103,7 @@ async function runTrustedGitLabWebhook(params: {
             : actionKind === "merged"
               ? "merged"
               : "gitlab-webhook";
-    return runGitLabReview({
+    return enqueueGitLabReview({
       payload,
       headers: params.headers,
       logger: params.logger,

@@ -7,8 +7,7 @@ import { publishGitLabNoteDurably, type GitLabPublicationRuntime } from "../../.
 import { buildGitLabCommentTargetFromPayload, collectGitLabMergeRequestContext } from "../../../integrations/gitlab/repository/context.js";
 import type { GitLabMrWebhookBody } from "../../../integrations/gitlab/webhooks/contracts.js";
 import type { LoggerLike } from "../../../integrations/gitlab/webhooks/contracts.js";
-import { enqueueGitLabReview } from "../../intake/provider-intake.js";
-import { shouldQueueReview } from "../../intake/run-intake.js";
+import { enqueueGitLabReviewForBinding } from "../../intake/provider-intake.js";
 import { analyzePullRequest, buildReportCommentMarkdown, type ReviewMode, type ReviewTrigger } from "#review";
 import { findPotentialSecrets as findSharedPotentialSecrets } from "../../../repository/content-safety/secret-scan.js";
 import { buildSecretWarningComment } from "../../rendering/secret-warning.js";
@@ -70,9 +69,55 @@ export function shouldSkipGitLabReviewForDraft(
   return shouldSkipReviewForDraft(trigger, isDraft);
 }
 
-export async function runGitLabReview(
+export async function enqueueGitLabReview(
   params: GitLabReviewRunParams,
 ): Promise<{ ok: boolean; message: string; runId?: string }> {
+  const { payload, headers } = params;
+  if (payload.object_kind && payload.object_kind !== "merge_request") {
+    return { ok: true, message: `ignored object_kind=${payload.object_kind}` };
+  }
+  const actionRaw = payload.object_attributes.action;
+  const action = typeof actionRaw === "string" ? actionRaw.toLowerCase() : undefined;
+  if (action === "close" || action === "closed") {
+    return { ok: true, message: "ignored closed merge request event" };
+  }
+  const mode = params.mode ?? "report";
+  const reviewTarget = buildGitLabCommentTargetFromPayload({
+    payload,
+    baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
+  });
+  const runtime = params.publicationRuntime ?? await resolvePublicationRuntime({
+    platform: "gitlab",
+    origin: reviewTarget.baseUrl,
+    repository: payload.project.path_with_namespace ?? String(payload.project.id),
+  });
+  if (runtime.binding?.platform !== "gitlab") {
+    throw new Error("GitLab review requires a trusted GitLab publication binding");
+  }
+  if (!runtime.resolveCredential) throw new Error("Server publication credential resolver is required");
+  const sourceKey = params.sourceKey ?? headers["x-gitlab-event-uuid"] ?? `gitlab:canonical:${stableGitLabEventHash(payload)}`;
+  const sourceHash = params.sourceHash ?? stableGitLabEventHash({ payload, mode, trigger: params.trigger ?? "gitlab-webhook" });
+  const runId = await enqueueGitLabReviewForBinding(
+    params,
+    runtime.binding,
+    { key: sourceKey, hash: sourceHash },
+    mode,
+    await runtime.resolveCredential(),
+  );
+  return { ok: true, message: "durable GitLab review queued", runId };
+}
+
+export interface GitLabReviewExecutionParams extends GitLabReviewRunParams {
+  publicationRuntime: GitLabPublicationRuntime;
+  sourceKey: string;
+  sourceHash: string;
+}
+
+export async function executeGitLabReview(
+  params: GitLabReviewExecutionParams,
+): Promise<{ ok: boolean; message: string; runId?: string }> {
+  const lease = currentRunLease();
+  if (!lease) throw new Error("GitLab review execution requires a leased worker Run");
   const {
     payload,
     headers,
@@ -101,13 +146,7 @@ export async function runGitLabReview(
     payload,
     baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
   });
-  const resolvedPublicationRuntime = publicationRuntime ??
-    (await resolvePublicationRuntime({
-      platform: "gitlab",
-      origin: reviewTarget.baseUrl,
-      repository:
-        payload.project.path_with_namespace ?? String(payload.project.id),
-    }));
+  const resolvedPublicationRuntime = publicationRuntime;
   if (resolvedPublicationRuntime?.binding && resolvedPublicationRuntime.binding.platform !== "gitlab") {
     throw new Error("GitLab review resolved a non-GitLab publication binding");
   }
@@ -116,12 +155,6 @@ export async function runGitLabReview(
   let activePublicationRuntime = resolvedPublicationRuntime as GitLabPublicationRuntime;
   const durableSourceKey = params.sourceKey ?? headers["x-gitlab-event-uuid"] ?? `gitlab:canonical:${stableGitLabEventHash(payload)}`;
   const durableSourceHash = params.sourceHash ?? stableGitLabEventHash({ payload, mode, trigger });
-  if (shouldQueueReview(activePublicationRuntime?.binding)) {
-    if (!activePublicationRuntime?.resolveCredential) throw new Error("Server publication credential resolver is required");
-    const runId = await enqueueGitLabReview(params, activePublicationRuntime.binding!,
-      { key: durableSourceKey, hash: durableSourceHash }, mode, await activePublicationRuntime.resolveCredential());
-    return { ok: true, message: "durable GitLab review queued", runId };
-  }
   if (activePublicationRuntime?.batchStore && activePublicationRuntime.batchCoordinator && activePublicationRuntime.createAdapter) {
     const existing = await activePublicationRuntime.batchStore.findBySource(
       { ...activePublicationRuntime.scope, target: String(reviewTarget.mrId), revision: "source-lookup" },
@@ -129,8 +162,6 @@ export async function runGitLabReview(
       durableSourceHash,
     );
     if (existing) {
-      const lease = currentRunLease();
-      if (!lease) throw new Error("Publication batch execution requires a Run lease");
       await activePublicationRuntime.batchStore.attachExistingBatchToRun(lease, existing.id);
       await assertRunActive();
       assertGitLabBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(
@@ -182,7 +213,7 @@ export async function runGitLabReview(
       payload,
       gitlabToken,
       baseUrl: readOptionalStringEnv("GITLAB_BASE_URL"),
-      incrementalBaseSha: currentRunLease() ? undefined : incrementalBaseSha,
+      incrementalBaseSha: undefined,
       customRules,
       includeCiChecks,
       feedbackSignals,

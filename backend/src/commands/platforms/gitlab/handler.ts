@@ -12,7 +12,7 @@ import {
   type LoggerLike,
 } from "../../../integrations/gitlab/webhooks/contracts.js";
 import { resolveGitLabReviewPolicy } from "../../../review/policy/gitlab.js";
-import { runGitLabReview } from "../../../review/platforms/gitlab/workflow.js";
+import { enqueueGitLabReview } from "../../../review/platforms/gitlab/workflow.js";
 import type { GitLabPublicationRuntime } from "../../../integrations/gitlab/publication/adapter.js";
 import { authorizeGitLabDurableCommand, classifyDurableCommand } from "../../authorization.js";
 import { parseReviewCommand } from "../../parsers/index.js";
@@ -81,7 +81,7 @@ export async function handleGitLabNoteWebhook(params: {
     ref: mergePayload.object_attributes.target_branch,
   });
   const parsed = parseReviewCommand(body);
-  const result = await runGitLabReview({
+  const result = await enqueueGitLabReview({
     payload: mergePayload,
     headers: params.headers,
     logger: params.logger,

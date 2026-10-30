@@ -8,6 +8,7 @@ import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
 import { PublicationAuthorityStore } from "../../src/agent-runtime/authority/publication-authority.js";
+import { ModelBudgetStore } from "../../src/agent-runtime/budget/model-budget-store.js";
 import { PgRunArtifactStore, prepareRunArtifact } from "../../src/agent-runtime/artifacts/index.js";
 import { PeriodicMaintenanceStore } from "../../src/agent-runtime/retention/periodic-store.js";
 import { runMaintenanceOnce } from "../../src/agent-runtime/maintenance-process.js";
@@ -116,6 +117,66 @@ if (!databaseUrl) {
 
   test("preview and apply use the same bounded candidates and scrub raw content", async () => {
     const run = await createOldRun("raw-content");
+    const outputHash = hash("retained-output-hash");
+    const stateHash = hash("retained-state-hash");
+    const requestHash = hash("retained-request-hash");
+    const responseHash = hash("retained-response-hash");
+    const artifactStore = new PgRunArtifactStore(new RuntimeDatabase(owner));
+    const step = await owner.query<{ id: string }>(
+      `INSERT INTO pr_agent_harness.agent_steps
+         (tenant_id,run_id,step_key,step_kind,input_hash,status,output_hash,output_json,
+          last_lease_epoch,attempt_count,completed_at)
+       VALUES ($1,$2,'retention-model','model',$3,'succeeded',$4,$5::jsonb,1,1,
+         clock_timestamp()-interval '31 days') RETURNING id`,
+      [tenantId, run.id, hash("retained-input-hash"), outputHash,
+        JSON.stringify({ secret: "step output" })],
+    );
+    const attempt = await owner.query<{ id: string }>(
+      `INSERT INTO pr_agent_harness.step_attempts
+         (tenant_id,run_id,step_id,attempt_number,lease_owner,lease_epoch,status,completed_at)
+       VALUES ($1,$2,$3,1,'retention-worker',1,'succeeded',
+         clock_timestamp()-interval '31 days') RETURNING id`,
+      [tenantId, run.id, step.rows[0]!.id],
+    );
+    await owner.query(
+      `INSERT INTO pr_agent_harness.checkpoints
+         (tenant_id,run_id,sequence,step_id,step_attempt_id,schema_version,runtime_version_hash,
+          state_hash,state_json,lease_epoch,created_at)
+       VALUES ($1,$2,1,$3,$4,1,$5,$6,$7::jsonb,1,clock_timestamp()-interval '31 days')`,
+      [tenantId, run.id, step.rows[0]!.id, attempt.rows[0]!.id, version, stateHash,
+        JSON.stringify({ secret: "checkpoint state" })],
+    );
+    const modelCall = await owner.query<{ id: string }>(
+      `INSERT INTO pr_agent_harness.model_calls
+         (tenant_id,run_id,step_id,step_attempt_id,physical_ordinal,provider,model,request_kind,
+          request_hash,input_token_bound,output_token_bound,response_json,response_hash,status,
+          lease_epoch,created_at,finished_at)
+       VALUES ($1,$2,$3,$4,1,'openai','retention-model','review.single.v1',$5,10,10,
+         $6::jsonb,$7,'succeeded',1,clock_timestamp()-interval '31 days',
+         clock_timestamp()-interval '31 days') RETURNING id`,
+      [tenantId, run.id, step.rows[0]!.id, attempt.rows[0]!.id, requestHash,
+        JSON.stringify({ secret: "model response" }), responseHash],
+    );
+    const toolResult = await artifactStore.putStepOutput({ tenantId, integrationId, runId: run.id },
+      Buffer.from(JSON.stringify({ value: { secret: "tool result" } }), "utf8"));
+    await owner.query(
+      `INSERT INTO pr_agent_harness.tool_calls
+         (tenant_id,run_id,step_id,step_attempt_id,tool_kind,tool_name,request_hash,status,
+          result_hash,result_ref,started_at,completed_at)
+       VALUES ($1,$2,$3,$4,'provider_read','retention-tool',$5,'succeeded',$6,$7,
+         clock_timestamp()-interval '31 days',clock_timestamp()-interval '31 days')`,
+      [tenantId, run.id, step.rows[0]!.id, attempt.rows[0]!.id,
+        hash("retained-tool-request"), hash("retained-tool-result"), toolResult.artifactHash],
+    );
+    await insertEstimatedBudget(run.id, modelCall.rows[0]!.id);
+    const budget = new ModelBudgetStore(new RuntimeDatabase(owner));
+    await budget.reconcileActualUsage({
+      tenantId, integrationId, runId: run.id, modelCallId: modelCall.rows[0]!.id,
+      providerUsageRevision: "retention-provider-v1", supersedesProviderUsageRevision: null,
+      evidenceReference: "provider://sensitive/pre-retention-evidence",
+      usage: { inputTokens: 4, outputTokens: 2, original: { secret: "purge-before-adjusting" } },
+      actorType: "service", actorId: "retention-reconciler",
+    });
     await owner.query(
       `INSERT INTO pr_agent_harness.webhook_replay_events
          (tenant_id,integration_id,platform,delivery_id,event_name,received_at,outcome,outcome_code,
@@ -166,20 +227,66 @@ if (!databaseUrl) {
     assert.equal(applied.applied.repositoryOperations, 1);
 
     const state = await owner.query<{ input_json: Record<string, unknown>; content_purged_at: Date | null;
+      event_retention_floor: string; next_event_seq: string; output_json: Record<string, unknown>;
+      output_hash: string; state_json: Record<string, unknown>; state_hash: string;
+      response_json: Record<string, unknown>; response_hash: string; request_hash: string;
+      result_ref: string | null;
       retention_events: number; replay_rows: number }>(
-      `SELECT r.input_json,r.content_purged_at,
+      `SELECT r.input_json,r.content_purged_at,r.event_retention_floor,r.next_event_seq,
+              step.output_json,step.output_hash,checkpoint.state_json,checkpoint.state_hash,
+              model.response_json,model.response_hash,model.request_hash,tool.result_ref,
               (SELECT count(*)::int FROM pr_agent_harness.run_events e
                WHERE e.tenant_id=r.tenant_id AND e.run_id=r.id
                  AND e.event_type='maintenance.retention_applied') retention_events,
               (SELECT count(*)::int FROM pr_agent_harness.webhook_replay_events e
                WHERE e.tenant_id=r.tenant_id) replay_rows
-       FROM pr_agent_harness.agent_runs r WHERE r.tenant_id=$1 AND r.id=$2`,
+       FROM pr_agent_harness.agent_runs r
+       JOIN pr_agent_harness.agent_steps step ON step.tenant_id=r.tenant_id AND step.run_id=r.id
+       JOIN pr_agent_harness.checkpoints checkpoint
+         ON checkpoint.tenant_id=r.tenant_id AND checkpoint.run_id=r.id
+       JOIN pr_agent_harness.model_calls model ON model.tenant_id=r.tenant_id AND model.run_id=r.id
+       JOIN pr_agent_harness.tool_calls tool ON tool.tenant_id=r.tenant_id AND tool.run_id=r.id
+       WHERE r.tenant_id=$1 AND r.id=$2`,
       [tenantId, run.id],
     );
     assert.deepEqual(state.rows[0]!.input_json, {});
     assert.ok(state.rows[0]!.content_purged_at);
+    assert.deepEqual(state.rows[0]!.output_json, {});
+    assert.deepEqual(state.rows[0]!.state_json, {});
+    assert.deepEqual(state.rows[0]!.response_json, {});
+    assert.equal(state.rows[0]!.output_hash, outputHash);
+    assert.equal(state.rows[0]!.state_hash, stateHash);
+    assert.equal(state.rows[0]!.request_hash, requestHash);
+    assert.equal(state.rows[0]!.response_hash, responseHash);
+    assert.equal(state.rows[0]!.result_ref, null);
+    assert.equal(Number(state.rows[0]!.next_event_seq), Number(state.rows[0]!.event_retention_floor) + 1);
     assert.equal(state.rows[0]!.retention_events, 1);
     assert.equal(state.rows[0]!.replay_rows, 0);
+    await budget.reconcileActualUsage({
+      tenantId, integrationId, runId: run.id, modelCallId: modelCall.rows[0]!.id,
+      providerUsageRevision: "retention-provider-v2",
+      supersedesProviderUsageRevision: "retention-provider-v1",
+      evidenceReference: "provider://sensitive/post-retention-evidence",
+      usage: { inputTokens: 2, outputTokens: 1, original: { secret: "must-not-return" } },
+      actorType: "service", actorId: "retention-reconciler",
+    });
+    const reconciled = await owner.query<{ original_usage_json: Record<string, unknown>;
+      adjustments: number; evidence_redacted: boolean; all_purged: boolean }>(
+      `SELECT usage.original_usage_json,count(adjustment.id)::int adjustments,
+              bool_and(adjustment.evidence_reference='retained-ledger-only') evidence_redacted,
+              bool_and(adjustment.content_purged_at IS NOT NULL) all_purged
+       FROM pr_agent_harness.usage_records usage
+       JOIN pr_agent_harness.model_usage_adjustments adjustment
+         ON adjustment.tenant_id=usage.tenant_id
+         AND adjustment.model_call_id=usage.model_call_id
+       WHERE usage.tenant_id=$1 AND usage.model_call_id=$2
+       GROUP BY usage.original_usage_json`,
+      [tenantId, modelCall.rows[0]!.id],
+    );
+    assert.deepEqual(reconciled.rows[0]!.original_usage_json, {});
+    assert.equal(reconciled.rows[0]!.adjustments, 2);
+    assert.equal(reconciled.rows[0]!.evidence_redacted, true);
+    assert.equal(reconciled.rows[0]!.all_purged, true);
     const operations = await owner.query<{ business_operation_id: string }>(
       "SELECT business_operation_id FROM pr_agent_harness.repository_operations WHERE tenant_id=$1 ORDER BY business_operation_id",
       [tenantId],
@@ -190,6 +297,7 @@ if (!databaseUrl) {
   test("terminal Fix holds release once without deleting retained artifact content", async () => {
     const run = await createOldRun("terminal-fix-hold");
     const freshRun = await createOldRun("fresh-terminal-fix-hold", 1);
+    const legalRun = await createOldRun("terminal-legal-hold");
     const artifactStore = new PgRunArtifactStore(new RuntimeDatabase(owner));
     const artifact = await artifactStore.putStepOutput({ tenantId, integrationId, runId: run.id },
       Buffer.from(JSON.stringify({ value: { proof: "fix verification" } }), "utf8"));
@@ -197,10 +305,15 @@ if (!databaseUrl) {
       { tenantId, integrationId, runId: freshRun.id },
       Buffer.from(JSON.stringify({ value: { proof: "fresh fix verification" } }), "utf8"),
     );
+    const legalArtifact = await artifactStore.putStepOutput(
+      { tenantId, integrationId, runId: legalRun.id }, Buffer.from("retained legal evidence"),
+    );
     await artifactStore.hold({ tenantId, integrationId, runId: run.id }, artifact.artifactHash,
       `fix:${run.id}`, "fix");
     await artifactStore.hold({ tenantId, integrationId, runId: freshRun.id }, freshArtifact.artifactHash,
       `fix:${freshRun.id}`, "fix");
+    await artifactStore.hold({ tenantId, integrationId, runId: legalRun.id }, legalArtifact.artifactHash,
+      `legal:${legalRun.id}`, "legal");
     const store = new PeriodicMaintenanceStore(maintenancePool);
     const policy = { action: "apply" as const, contentDays: 30, replayDays: 90,
       traceDays: 400, batchLimit: 100 };
@@ -224,6 +337,10 @@ if (!databaseUrl) {
        WHERE tenant_id=$1 AND run_id=$2 AND artifact_hash=$3`,
       [tenantId, freshRun.id, freshArtifact.artifactHash],
     )).rowCount, 0, "a newly terminal Fix Run keeps its human approval window");
+    assert.equal((await owner.query<{ content_purged_at: Date | null }>(
+      "SELECT content_purged_at FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
+      [tenantId, legalRun.id],
+    )).rows[0]!.content_purged_at, null, "a legal hold preserves Run content");
     const second = await store.run(randomUUID(), policy);
     assert.equal(second.applied.fixHoldReleases, 0);
     assert.equal(second.applied.artifacts, 0);
@@ -424,6 +541,90 @@ if (!databaseUrl) {
     assert.equal(byId.get(unknownDeadletter)?.content_purged_at, null);
   });
 
+  test("content retention waits for a concurrent publication revive and rechecks the operation", async () => {
+    const run = await createOldRun("periodic-revive-race", 31);
+    const publication = await insertClosedPublicationGraph(run.id, null);
+    const revive = await owner.connect();
+    let settled = false;
+    try {
+      await revive.query("BEGIN");
+      await revive.query(
+        `SELECT 1 FROM pr_agent_harness.repository_operations
+         WHERE tenant_id=$1 AND business_operation_id=$2 FOR UPDATE`,
+        [tenantId, publication.operationId],
+      );
+      const applying = new PeriodicMaintenanceStore(maintenancePool).run(randomUUID(), {
+        action: "apply", contentDays: 30, replayDays: 90, traceDays: 400, batchLimit: 100,
+      }).finally(() => { settled = true; });
+      await waitForLockWaits(1);
+      assert.equal(settled, false);
+      await revive.query(
+        `UPDATE pr_agent_harness.repository_operations
+         SET status='prepared',outcome_code=NULL,resolved_at=NULL,version=version+1,updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND business_operation_id=$2`,
+        [tenantId, publication.operationId],
+      );
+      await revive.query(
+        `UPDATE pr_agent_harness.publication_batches
+         SET status='pending',updated_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2`,
+        [tenantId, publication.batchId],
+      );
+      await revive.query("COMMIT");
+      await applying;
+    } catch (error) {
+      await revive.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally { revive.release(); }
+    const state = await owner.query<{ content_purged_at: Date | null; input_json: Record<string, unknown> }>(
+      "SELECT content_purged_at,input_json FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
+      [tenantId, run.id],
+    );
+    assert.equal(state.rows[0]!.content_purged_at, null);
+    assert.deepEqual(state.rows[0]!.input_json, { secret: "periodic-revive-race" });
+  });
+
+  test("content retention wins the Run lock before a late artifact hold", async () => {
+    const run = await createOldRun("periodic-hold-race", 31);
+    const artifactStore = new PgRunArtifactStore(new RuntimeDatabase(owner));
+    const artifact = await artifactStore.putStepOutput({ tenantId, integrationId, runId: run.id },
+      Buffer.from("late qualification evidence"));
+    const eventBlocker = await owner.connect();
+    let maintenanceSettled = false;
+    let holdSettled = false;
+    try {
+      await eventBlocker.query("BEGIN");
+      await eventBlocker.query(
+        `SELECT sequence FROM pr_agent_harness.run_events
+         WHERE tenant_id=$1 AND run_id=$2 FOR UPDATE`, [tenantId, run.id],
+      );
+      const applying = new PeriodicMaintenanceStore(maintenancePool).run(randomUUID(), {
+        action: "apply", contentDays: 30, replayDays: 90, traceDays: 400, batchLimit: 100,
+      }).finally(() => { maintenanceSettled = true; });
+      await waitForLockWaits(1);
+      const holding = artifactStore.hold({ tenantId, integrationId, runId: run.id },
+        artifact.artifactHash, `qualification:${run.id}`, "qualification")
+        .finally(() => { holdSettled = true; });
+      await waitForLockWaits(2);
+      assert.equal(maintenanceSettled, false);
+      assert.equal(holdSettled, false);
+      await eventBlocker.query("COMMIT");
+      await applying;
+      await assert.rejects(holding, /artifact is gone/i);
+    } catch (error) {
+      await eventBlocker.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally { eventBlocker.release(); }
+    const state = await owner.query<{ content_purged_at: Date | null; holds: number }>(
+      `SELECT run.content_purged_at,
+              (SELECT count(*)::int FROM pr_agent_harness.run_artifact_holds hold
+               WHERE hold.tenant_id=run.tenant_id AND hold.run_id=run.id) holds
+       FROM pr_agent_harness.agent_runs run WHERE run.tenant_id=$1 AND run.id=$2`,
+      [tenantId, run.id],
+    );
+    assert.ok(state.rows[0]!.content_purged_at);
+    assert.equal(state.rows[0]!.holds, 0);
+  });
+
   test("periodic artifact GC preserves unknown model and unclosed budget Runs", async () => {
     const ordinary = await createOldRun("gc-ordinary");
     const unknown = await createOldRun("gc-unknown-model");
@@ -483,6 +684,12 @@ if (!databaseUrl) {
     assert.ok(artifacts.rows.find((row) => row.artifact_hash === ordinaryHash)?.purged_at);
     assert.equal(artifacts.rows.find((row) => row.artifact_hash === unknownHash)?.purged_at, null);
     assert.equal(artifacts.rows.find((row) => row.artifact_hash === budgetHash)?.purged_at, null);
+    const protectedRuns = await owner.query<{ id: string; content_purged_at: Date | null }>(
+      `SELECT id,content_purged_at FROM pr_agent_harness.agent_runs
+       WHERE tenant_id=$1 AND id=ANY($2::uuid[])`, [tenantId, [unknown.id, budget.id]],
+    );
+    assert.ok(protectedRuns.rows.every((row) => row.content_purged_at === null),
+      "unknown model and unclosed budget preserve Run content as well as artifacts");
   });
 
   async function createOldRun(key: string, ageDays = 31) {
@@ -556,6 +763,47 @@ if (!databaseUrl) {
       [tenantId, runId, job.rows[0]!.id, JSON.stringify({ secret })],
     );
     return deadletter.rows[0]!.id;
+  }
+
+  async function insertEstimatedBudget(runId: string, modelCallId: string): Promise<void> {
+    const pricingHash = hash("retention-reconciliation-pricing");
+    const rates = { inputMicrosPerMillion: 1_000_000, cachedInputMicrosPerMillion: 1_000_000,
+      cacheWriteInputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 1_000_000,
+      thoughtOutputMicrosPerMillion: 1_000_000, toolInputMicrosPerMillion: 1_000_000 };
+    await owner.query(
+      `INSERT INTO pr_agent_harness.model_pricing_snapshots
+         (tenant_id,pricing_hash,pricing_version,provider,model,currency,rates_json,policy_json)
+       VALUES ($1,$2,'retention','openai','retention-model','USD',$3::jsonb,'{}'::jsonb)`,
+      [tenantId, pricingHash, JSON.stringify(rates)],
+    );
+    await owner.query(
+      `INSERT INTO pr_agent_harness.tenant_budget_accounts
+         (tenant_id,period_key,currency,input_token_limit,output_token_limit,cost_limit_micros,
+          spent_input_tokens,spent_output_tokens,spent_cost_micros)
+       VALUES ($1,'2026-03','USD',1000,1000,1000,10,10,20)`, [tenantId],
+    );
+    await owner.query(
+      `INSERT INTO pr_agent_harness.run_budget_envelopes
+         (tenant_id,run_id,period_key,currency,pricing_hash,input_token_limit,output_token_limit,
+          cost_limit_micros,actual_input_tokens,actual_output_tokens,actual_cost_micros,status,closed_at)
+       VALUES ($1,$2,'2026-03','USD',$3,100,100,100,10,10,20,'closed',
+         clock_timestamp()-interval '31 days')`,
+      [tenantId, runId, pricingHash],
+    );
+    await owner.query(
+      `INSERT INTO pr_agent_harness.model_budget_reservations
+         (tenant_id,run_id,model_call_id,reserved_input_tokens,reserved_output_tokens,reserved_cost_micros,
+          actual_input_tokens,actual_output_tokens,actual_cost_micros,status,settlement_kind)
+       VALUES ($1,$2,$3,10,10,20,10,10,20,'settled','estimated_upper_bound')`,
+      [tenantId, runId, modelCallId],
+    );
+    await owner.query(
+      `INSERT INTO pr_agent_harness.usage_records
+         (tenant_id,run_id,model_call_id,measurement_status,input_tokens,output_tokens,total_tokens,
+          cost_micros,currency,pricing_hash,original_usage_json)
+       VALUES ($1,$2,$3,'estimated_upper_bound',10,10,20,20,'USD',$4,$5::jsonb)`,
+      [tenantId, runId, modelCallId, pricingHash, JSON.stringify({ secret: "purge-me" })],
+    );
   }
 
   async function insertClosedPublicationGraph(runId: string, stepId: string | null) {
@@ -659,6 +907,19 @@ if (!databaseUrl) {
         JSON.stringify({ status: "succeeded", jobId: manualJob.rows[0]!.id })],
     );
     return { batchId, operationId, runReceiptId, waitId, manualJobId: manualJob.rows[0]!.id };
+  }
+
+  async function waitForLockWaits(minimum: number): Promise<void> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const waiting = await owner.query<{ count: number }>(
+        `SELECT count(*)::int count FROM pg_stat_activity
+         WHERE datname=current_database() AND pid<>pg_backend_pid()
+           AND state='active' AND wait_event_type='Lock'`,
+      );
+      if ((waiting.rows[0]?.count ?? 0) >= minimum) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`expected at least ${minimum} blocked database operation(s)`);
   }
 
   function rolePool(user: string, password: string): Pool {

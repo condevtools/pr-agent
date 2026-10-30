@@ -12,26 +12,13 @@ export interface GitLabReviewPolicy {
   onOpened: boolean;
   onEdited: boolean;
   onSynchronize: boolean;
-  describeEnabled: boolean;
-  describeAllowApply: boolean;
-  checksCommandEnabled: boolean;
   includeCiChecks: boolean;
   secretScanEnabled: boolean;
   secretScanCustomPatterns: string[];
   autoLabelEnabled: boolean;
-  askCommandEnabled: boolean;
-  generateTestsCommandEnabled: boolean;
-  changelogCommandEnabled: boolean;
-  changelogAllowApply: boolean;
   feedbackCommandEnabled: boolean;
   improveCommandEnabled: boolean;
   addDocCommandEnabled: boolean;
-  customPromptCommandEnabled: boolean;
-  helpDocsCommandEnabled: boolean;
-  analyzeCommandEnabled: boolean;
-  complianceCommandEnabled: boolean;
-  similarCodeCommandEnabled: boolean;
-  scanRepoDiscussionsCommandEnabled: boolean;
   customRules: string[];
 }
 
@@ -41,26 +28,13 @@ const defaultGitLabReviewPolicy: GitLabReviewPolicy = {
   onOpened: true,
   onEdited: false,
   onSynchronize: true,
-  describeEnabled: true,
-  describeAllowApply: false,
-  checksCommandEnabled: true,
   includeCiChecks: true,
   secretScanEnabled: true,
   secretScanCustomPatterns: [],
   autoLabelEnabled: true,
-  askCommandEnabled: true,
-  generateTestsCommandEnabled: true,
-  changelogCommandEnabled: true,
-  changelogAllowApply: false,
   feedbackCommandEnabled: true,
   improveCommandEnabled: true,
   addDocCommandEnabled: true,
-  customPromptCommandEnabled: true,
-  helpDocsCommandEnabled: true,
-  analyzeCommandEnabled: true,
-  complianceCommandEnabled: true,
-  similarCodeCommandEnabled: true,
-  scanRepoDiscussionsCommandEnabled: true,
   customRules: [],
 };
 
@@ -145,9 +119,6 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
     onOpened: overrides.onOpened ?? basePolicy.onOpened,
     onEdited: overrides.onEdited ?? basePolicy.onEdited,
     onSynchronize: overrides.onSynchronize ?? basePolicy.onSynchronize,
-    describeEnabled: overrides.describeEnabled ?? basePolicy.describeEnabled,
-    describeAllowApply: overrides.describeAllowApply ?? basePolicy.describeAllowApply,
-    checksCommandEnabled: overrides.checksCommandEnabled ?? basePolicy.checksCommandEnabled,
     includeCiChecks: overrides.includeCiChecks ?? basePolicy.includeCiChecks,
     secretScanEnabled: overrides.secretScanEnabled ?? basePolicy.secretScanEnabled,
     secretScanCustomPatterns: normalizePolicyStringList(
@@ -155,30 +126,12 @@ export function parseGitLabReviewPolicyConfig(raw: string): GitLabReviewPolicy {
       20,
     ),
     autoLabelEnabled: overrides.autoLabelEnabled ?? basePolicy.autoLabelEnabled,
-    askCommandEnabled: overrides.askCommandEnabled ?? basePolicy.askCommandEnabled,
-    generateTestsCommandEnabled:
-      overrides.generateTestsCommandEnabled ?? basePolicy.generateTestsCommandEnabled,
-    changelogCommandEnabled:
-      overrides.changelogCommandEnabled ?? basePolicy.changelogCommandEnabled,
-    changelogAllowApply: overrides.changelogAllowApply ?? basePolicy.changelogAllowApply,
     feedbackCommandEnabled:
       overrides.feedbackCommandEnabled ?? basePolicy.feedbackCommandEnabled,
     improveCommandEnabled:
       overrides.improveCommandEnabled ?? basePolicy.improveCommandEnabled,
     addDocCommandEnabled:
       overrides.addDocCommandEnabled ?? basePolicy.addDocCommandEnabled,
-    customPromptCommandEnabled:
-      overrides.customPromptCommandEnabled ?? basePolicy.customPromptCommandEnabled,
-    helpDocsCommandEnabled:
-      overrides.helpDocsCommandEnabled ?? basePolicy.helpDocsCommandEnabled,
-    analyzeCommandEnabled:
-      overrides.analyzeCommandEnabled ?? basePolicy.analyzeCommandEnabled,
-    complianceCommandEnabled:
-      overrides.complianceCommandEnabled ?? basePolicy.complianceCommandEnabled,
-    similarCodeCommandEnabled:
-      overrides.similarCodeCommandEnabled ?? basePolicy.similarCodeCommandEnabled,
-    scanRepoDiscussionsCommandEnabled:
-      overrides.scanRepoDiscussionsCommandEnabled ?? basePolicy.scanRepoDiscussionsCommandEnabled,
     customRules: normalizePolicyStringList(overrides.customRules, 30),
   };
 }

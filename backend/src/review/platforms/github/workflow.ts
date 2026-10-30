@@ -1,6 +1,5 @@
 import { assertRunActive, assertReviewRunRevision, currentRunLease, durableReviewAnalysis, durableReviewCollection } from "../../../agent-runtime/execution/run-context.js";
-import { shouldQueueReview } from "../../intake/run-intake.js";
-import { enqueueGitHubReview } from "../../intake/provider-intake.js";
+import { enqueueGitHubReviewForBinding } from "../../intake/provider-intake.js";
 import {
   ensureError,
   localizeText,
@@ -45,9 +44,32 @@ export function shouldSkipGitHubReviewForDraft(
   return shouldSkipReviewForDraft(trigger, isDraft);
 }
 
-export async function runGitHubReview(
-  params: GitHubReviewRunParams,
+export async function enqueueGitHubReview(params: GitHubReviewRunParams): Promise<string> {
+  const { owner, repo } = params.context.repo();
+  const runtime = params.publicationRuntime ?? await resolvePublicationRuntime({
+    platform: "github",
+    origin: readOptionalStringEnv("GITHUB_API_URL") ?? "https://api.github.com",
+    repository: `${owner}/${repo}`,
+  });
+  if (runtime.binding?.platform !== "github") {
+    throw new Error("GitHub review requires a trusted GitHub publication binding");
+  }
+  const runId = await enqueueGitHubReviewForBinding(params, runtime.binding);
+  params.context.log.info({ runId }, "Durable GitHub review queued");
+  return runId;
+}
+
+export interface GitHubReviewExecutionParams extends GitHubReviewRunParams {
+  publicationRuntime: GitHubPublicationRuntime;
+  sourceKey: string;
+  sourceHash: string;
+}
+
+export async function executeGitHubReview(
+  params: GitHubReviewExecutionParams,
 ): Promise<void> {
+  const lease = currentRunLease();
+  if (!lease) throw new Error("GitHub review execution requires a leased worker Run");
   const {
     context,
     pullNumber,
@@ -63,12 +85,7 @@ export async function runGitHubReview(
     sourceHash,
   } = params;
   const { owner, repo } = context.repo();
-  const resolvedPublicationRuntime = publicationRuntime ??
-    (await resolvePublicationRuntime({
-      platform: "github",
-      origin: readOptionalStringEnv("GITHUB_API_URL") ?? "https://api.github.com",
-      repository: `${owner}/${repo}`,
-    }));
+  const resolvedPublicationRuntime = publicationRuntime;
   if (resolvedPublicationRuntime?.binding && resolvedPublicationRuntime.binding.platform !== "github") {
     throw new Error("GitHub review resolved a non-GitHub publication binding");
   }
@@ -77,12 +94,6 @@ export async function runGitHubReview(
   let activePublicationRuntime = resolvedPublicationRuntime as GitHubPublicationRuntime;
   const durableSourceKey = sourceKey;
   const durableSourceHash = sourceHash;
-  if (shouldQueueReview(activePublicationRuntime?.binding)) {
-    const runId = await enqueueGitHubReview(params, activePublicationRuntime.binding!);
-    params.onQueued?.(runId);
-    context.log.info({ runId }, "Durable GitHub review queued");
-    return;
-  }
   if (activePublicationRuntime?.batchStore && activePublicationRuntime.batchCoordinator && activePublicationRuntime.createAdapter) {
     if (!durableSourceKey || !durableSourceHash) throw new Error("durable GitHub review requires an authenticated source key and hash");
     const existing = await activePublicationRuntime.batchStore.findBySource(
@@ -91,8 +102,6 @@ export async function runGitHubReview(
       durableSourceHash,
     );
     if (existing) {
-      const lease = currentRunLease();
-      if (!lease) throw new Error("Publication batch execution requires a Run lease");
       await activePublicationRuntime.batchStore.attachExistingBatchToRun(lease, existing.id);
       await assertRunActive();
       assertGitHubBatchSucceeded(await activePublicationRuntime.batchCoordinator.execute(
@@ -156,7 +165,7 @@ export async function runGitHubReview(
       owner,
       repo,
       pullNumber,
-      incrementalBaseSha: currentRunLease() ? undefined : incrementalBaseSha,
+      incrementalBaseSha: undefined,
       customRules,
       includeCiChecks,
       feedbackSignals,

@@ -10,7 +10,7 @@ import {
 import { createGitHubPublicationAdapter } from "../../src/integrations/github/publication/adapter.js";
 import { type GitHubPublicationBinding } from "../../src/integrations/github/publication/contracts.js";
 import type { MinimalGitHubOctokit } from "../../src/integrations/github/api/types.js";
-import { runGitHubReview } from "../../src/review/platforms/github/workflow.js";
+import { executeGitHubReview } from "../../src/review/platforms/github/workflow.js";
 import {
   prepareGitHubPublicationBatch,
   publishSecretWarningComment,
@@ -247,7 +247,7 @@ test("existing frozen review batch resumes before context collection or model an
       } as never,
       assertActive: async () => undefined,
       step: async (_key, _kind, _inputHash, action) => action(),
-    }, () => runGitHubReview({
+    }, () => executeGitHubReview({
         context: context as never,
         pullNumber: 42,
         mode: "report",

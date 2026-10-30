@@ -27,112 +27,29 @@ frontend/
 
 ## 架构
 
-下图展示 PR Agent 后端的完整请求流——从 Webhook 入口到命令解析、通用评审引擎、输出与运维。
+下图展示后端生产请求流。Webhook 只负责入队，持有租约的 Worker 执行评审；支持的命令和能力配置见根目录 README。
 
 ```mermaid
 flowchart LR
-    subgraph E["入口端点 (NestJS + Probot)"]
-        E1["/api/github/webhooks<br/>GithubAppBootstrapService"]
-        E2["/github/trigger<br/>GithubWebhookController"]
-        E3["/gitlab/trigger<br/>GitlabWebhookController"]
-        E4["/github/replay/:eventId<br/>/gitlab/replay/:eventId"]
-        E5["/health /metrics /webhook/events"]
-    end
-
-    subgraph GHA["GitHub App 事件路由 (src/bootstrap/probot-app.ts)"]
-        A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
-        A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
-        A3["resolveGitHubPullRequestAutoReviewPolicy"]
-        A4["pull_request.closed (merged)<br/>resolveGitHubReviewBehaviorPolicy"]
-        A5["issue_comment.created (PR + Issue)<br/>handleGitHubIssueCommentCommand"]
-        A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
-    end
-
-    subgraph GHW["原生 GitHub Webhook (src/integrations/github/webhooks/handler.ts)"]
-        B1["handlePlainGitHubWebhook"]
-        B2["verifyWebhookSignature + payload schema"]
-        B3["pull_request / issues / issue_comment / review_thread dispatch"]
-        B4["runGitHubPullRequestPolicyCheck + runGitHubIssuePolicyCheck"]
-        B5["handleGitHubIssueCommentCommand"]
-    end
-
-    subgraph GLW["GitLab Webhook (src/integrations/gitlab/webhooks/adapter.ts)"]
-        C1["runGitLabWebhook"]
-        C2["verify token + payload schema"]
-        C3["handleGitLabMergeRequestWebhook"]
-        C4["handleGitLabNoteWebhook"]
-        C5["resolveGitLabReviewPolicy (.pr-agent.yml)"]
-    end
-
-    subgraph CMD["命令解析层"]
-        D1["parseReviewCommand"]
-        D2["parseAsk / parseMention / parseChecks / parseGenerateTests"]
-        D3["parseDescribe / parseChangelog"]
-        D4["parseImprove / parseAddDoc / parseReflect / parseSimilarIssue / parseFeedback"]
-    end
-
-    subgraph CORE["通用评审引擎"]
-        R1["runGitHubReview / runGitLabReview"]
-        R2["去重 + 限流 + 增量 head + 反馈信号"]
-        R3["收集上下文: diff/files/ci/policy"]
-        R4["analyzePullRequest / answerPullRequestQuestion"]
-        R5["patch 解析 + hunk 优先级 + 行映射"]
-        R6["密钥扫描 + 自动标签"]
-    end
-
-    subgraph OUT["输出与运维"]
-        O1["buildReportCommentMarkdown"]
-        O2["buildIssueCommentMarkdown"]
-        O3["createComment / notes / managed upsert"]
-        O4["publishNotification (可选)"]
-        O5["pr_agent_* 指标 + replay 存储"]
-    end
-
-    E1 --> A1
-    E1 --> A2 --> A3 --> R1
-    E1 --> A4 --> R1
-    E1 --> A5
-    E1 --> A6
-
-    E2 --> B1 --> B2 --> B3
-    B3 --> B4 --> R1
-    B3 --> B5
-
-    E3 --> C1 --> C2
-    C2 --> C3 --> C5 --> R1
-    C2 --> C4 --> C5
-
-    A5 --> D1
-    A5 --> D2
-    A5 --> D3
-    A5 --> D4
-    B5 --> D1
-    B5 --> D2
-    B5 --> D3
-    B5 --> D4
-    C4 --> D1
-    C4 --> D2
-    C4 --> D3
-    C4 --> D4
-
-    D1 --> R1
-    D2 --> R4
-    D3 --> R4
-    D4 --> R1
-
-    R1 --> R2 --> R3 --> R4 --> R5
-    R4 --> R6
-    R5 --> O1 --> O3
-    R5 --> O2 --> O3
-    R6 --> O3
-    O3 --> O4
-
-    E4 --> B1
-    E4 --> C1
-    E5 --> O5
-    E2 --> O5
-    E3 --> O5
-    O3 -. 反馈信号 .-> R2
+    GH[GitHub App / webhook] --> SIGN[验签与载荷校验]
+    GL[GitLab webhook] --> SIGN
+    SIGN --> ROUTE[统一事件与命令识别]
+    ROUTE --> IGNORE[忽略普通、不支持或未纳管事件]
+    ROUTE --> AUTH[仓库绑定；命令作者权限]
+    AUTH --> ENQUEUE[显式评审入队]
+    API[受保护 Run API] --> ENQUEUE
+    ENQUEUE --> PG[(PostgreSQL: Runs, budget, events, artifacts)]
+    PG --> WORKER[持有租约的兼容 Worker]
+    WORKER --> REVIEW[Single / 显式 Deep Review]
+    REVIEW --> MODEL[受预算约束的模型网关]
+    REVIEW --> PUB[持久化发布批次]
+    PUB --> PROVIDER[GitHub / GitLab]
+    RECOVERY[Recovery：对账未知外部效果] --> PUB
+    FEEDBACK[授权反馈命令 / API] --> PG
+    FIX[可选 Fix、隔离验证与人工审批] --> PG
+    EVOLUTION[可选 Evolution 评测与发布] --> PG
+    MAINT[受限维护：预览 / 保留清理] --> PG
+    HEALTH[存活与按能力就绪检查] -.-> PG
 ```
 
 ## 部署

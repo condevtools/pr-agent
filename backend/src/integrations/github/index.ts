@@ -3,7 +3,7 @@ export {
   resolveGitHubReviewBehaviorPolicy,
 } from "../../issues/policy/github/workflow.js";
 export {
-  runGitHubReview,
+  enqueueGitHubReview,
 } from "../../review/platforms/github/workflow.js";
 export type { LoggerLike } from "../../review/platforms/github/contracts.js";
 export {

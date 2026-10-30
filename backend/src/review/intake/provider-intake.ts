@@ -14,7 +14,7 @@ function options(input: GitHubReviewRunParams | GitLabReviewRunParams): ReviewRu
   };
 }
 
-export async function enqueueGitHubReview(params: GitHubReviewRunParams, binding: PublicationBinding): Promise<string> {
+export async function enqueueGitHubReviewForBinding(params: GitHubReviewRunParams, binding: PublicationBinding): Promise<string> {
   if (!params.sourceKey || !params.sourceHash) throw new Error("Durable review intake requires authenticated source identity");
   const { owner, repo } = params.context.repo();
   const { data: pull } = await params.context.octokit.pulls.get({ owner, repo, pull_number: params.pullNumber });
@@ -30,7 +30,7 @@ export async function enqueueGitHubReview(params: GitHubReviewRunParams, binding
   return run.id;
 }
 
-export async function enqueueGitLabReview(
+export async function enqueueGitLabReviewForBinding(
   params: GitLabReviewRunParams,
   binding: PublicationBinding,
   source: ReviewRunInput["source"],

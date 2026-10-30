@@ -4,22 +4,12 @@ import { RunStore, type CreateRunInput } from "../../agent-runtime/postgres/run-
 import { getModelExecutionPolicy, reserveRunBudgetInTransaction } from "../../agent-runtime/budget/model-budget-store.js";
 import { resolveModelConfiguration } from "../../model/configuration.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
-import { currentRunExecutionContext } from "../../agent-runtime/execution/run-context.js";
 import { reviewCreationRequestHash, reviewRunInputSchema, type ReviewRunInput } from "./run-input.js";
 import { AGENT_RUNTIME_CONFIG, runtimeVersionManifest } from "../../agent-runtime/versions.js";
 import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../strategy/text-components.js";
 import { recordDeepReleaseSelection, resolveBaselineDeepReleaseSelection,
   resolveDeepReleaseSelection } from "../../evolution/releases/selection.js";
 import { bindingAllowsCapability } from "../../agent-runtime/runtime/capabilities.js";
-
-export function shouldQueueReview(binding?: PublicationBinding): binding is PublicationBinding {
-  if (!binding) throw new Error("Trusted PostgreSQL review execution binding is required");
-  if (currentRunExecutionContext()) return false;
-  if ((binding.reviewExecutionState ?? "active") !== "active") {
-    throw new Error("Review execution is draining; new reviews are not admitted");
-  }
-  return true;
-}
 
 /** Called only after authenticated provider routing has resolved the trusted binding. */
 export async function enqueueReviewRun(

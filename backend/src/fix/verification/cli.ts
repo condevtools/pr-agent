@@ -8,7 +8,7 @@ import { VerifierWorker } from "./worker.js";
 import { agentRuntimePoolConfig } from "../../agent-runtime/runtime/config.js";
 import { verifierCapabilityHash } from "../../agent-runtime/versions.js";
 import { ProcessHeartbeatLoop, ProcessHeartbeatStore } from "../../agent-runtime/runtime/heartbeat.js";
-import { validateRuntimeEnvironment } from "#core";
+import { logCore, validateRuntimeEnvironment } from "#core";
 
 validateRuntimeEnvironment(process.env, "verifier");
 const pool = new Pool(agentRuntimePoolConfig(process.env, "web", "verifier"));
@@ -43,4 +43,7 @@ const shutdown = () => worker.stop();
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 try { await processHeartbeat.start(); await worker.run(); }
-finally { await processHeartbeat.stop().catch(() => undefined); await pool.end(); }
+finally {
+  await processHeartbeat.stop().catch((error) => logCore("error", "verifier.heartbeat.stop_failed", { error }));
+  await pool.end();
+}

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { runGitLabReview } from "../../src/review/platforms/gitlab/workflow.js";
+import { executeGitLabReview } from "../../src/review/platforms/gitlab/workflow.js";
 import { ReviewRunRevisionChangedError, withRunExecutionContext } from "../../src/agent-runtime/execution/run-context.js";
 import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 
@@ -32,7 +32,7 @@ test("durable GitLab collection rejects changed diff refs before reading guideli
           if (kind === "model") modelSteps += 1;
           return action();
         },
-      }, () => runGitLabReview({
+      }, () => executeGitLabReview({
         payload: {
           object_kind: "merge_request",
           user: { username: "alice" },

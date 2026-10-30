@@ -28,8 +28,8 @@
 ## Beta 阶段说明
 
 - PR Agent 当前处于 **beta** 阶段。
-- 当前唯一正式支持的接入方式是 **GitHub App**。
-- 仓库里仍可能保留普通 GitHub Webhook 和 GitLab 的代码路径，但它们目前不属于受支持的部署范围。
+- GitHub App、验签的普通 GitHub Webhook 与验签的 GitLab Webhook 均使用 PostgreSQL 执行路径。
+- 各平台支持的命令不同；Fix 发布仅支持 GitHub，且需要资格证据与人工审批。
 
 ## 功能特性
 
@@ -37,7 +37,7 @@
 - PR 打开 / 更新 / 合并时自动 AI 代码评审
 - 行内评论，支持 GitHub Suggested Changes 建议代码块
 - Report 模式汇总评审，含风险等级评估
-- 增量评审（仅评审上次评审后的新提交）
+- 按创建 Run 时冻结的不可变 base/head 版本执行评审
 - 报告内 Mermaid 变更结构图（按目录/文件可视化）
 - Diff 中疑似密钥泄露检测（轻量正则扫描）
 - 自动标签（bugfix / feature / refactor / docs / security）
@@ -53,9 +53,9 @@
 - `.github/.gitlab` 模板/流程文件识别（workflow/template/CODEOWNERS/CONTRIBUTING）并给出流程建议
 
 **当前支持范围**
-- 仅支持 GitHub App
-- 普通 GitHub Webhook — 当前 beta 不支持
-- GitLab Webhook — 当前 beta 不支持
+- GitHub App
+- 普通 GitHub Webhook：使用服务端凭据并强制验签
+- GitLab Webhook：要求独立 Webhook secret 和服务端 API 凭据
 - GitHub Actions 接入模式 — 暂不支持（仓库 CI 另行提供）
 
 **多模型 Provider**
@@ -66,17 +66,14 @@
 
 ### 评审触发
 
-| 触发方式 | 评审模式 | 去重窗口 |
-|---|---|---|
-| PR 打开（`opened`） | comment / report（按配置） | 5 分钟 |
-| PR 更新（`synchronize`） | comment / report | 5 分钟（按新 commit SHA） |
-| PR 编辑（`edited`） | comment / report | 5 分钟 |
-| PR 合并（`closed` + merged） | report | 24 小时（可配置） |
-| `/ai-review` 评论命令 | comment / report | 5 分钟 |
-| `/ai-review report` | report | 5 分钟 |
-| `/ai-review comment` | comment | 5 分钟 |
-| Issue 创建 / 编辑 | 流程预检（GitHub）+ 缺省策略自动分诊（无策略文件时） | 5 分钟 |
-| PR 创建 / 编辑 / 同步 | 合并前预检（GitHub） | — |
+| 触发方式 | 评审模式 |
+|---|---|
+| GitHub PR 打开 / 编辑 / 更新 | 按仓库策略使用 comment / report |
+| GitHub PR 合并 | report |
+| GitLab MR 事件 | 按仓库策略使用 comment / report |
+| 已授权 `/ai-review` 命令 | 默认 report，可显式指定 report / comment |
+
+重复投递复用 PostgreSQL 中的持久化来源身份和 Run。普通 Issue 事件与不支持的命令会被忽略，不再使用本地 TTL 去重窗口。
 
 手动评审命令要求 GitHub 仓库 write 及以上权限，或 GitLab Developer 及以上权限。GitHub App 需要 Metadata 读取权限以核查评论者；GitLab 使用服务端 API token 核查项目成员权限，Webhook secret 是另一项必填凭据。普通评论和不支持的命令会被忽略，不调用模型。
 
@@ -110,212 +107,35 @@ graph LR
     ROOT --> DOCS[docs/<br/>路线图与流程资产]
 ```
 
-### 整体架构
+### 运行时架构
 
-```mermaid
-graph TB
-    subgraph 平台入口
-        GH_APP[GitHub App<br/>Probot]
-        GH_WH[GitHub Webhook]
-        GL_WH[GitLab Webhook]
-    end
-
-    subgraph NestJS 应用
-        direction TB
-        CTRL[Controllers<br/>路由 & 校验]
-        SVC[Services<br/>签名验证 & 分发]
-        INT[集成层<br/>GitHub / GitLab 适配器]
-        RE[评审引擎<br/>AI Reviewer + Patch 解析]
-        RR[报告渲染器<br/>Markdown + 建议代码块]
-    end
-
-    subgraph 外部服务
-        AI[AI Providers<br/>OpenAI / Anthropic / Gemini]
-        GH_API[GitHub API]
-        GL_API[GitLab API]
-        NOTIFY[通知推送<br/>Slack / Discord / 企业微信]
-    end
-
-    GH_APP -->|Webhook 事件| CTRL
-    GH_WH -->|Webhook 事件| CTRL
-    GL_WH -->|Webhook 事件| CTRL
-    CTRL --> SVC
-    SVC --> INT
-    INT --> RE
-    RE -->|LLM 调用| AI
-    RE --> RR
-    RR -->|发布评论 / 报告| GH_API
-    RR -->|发布评论 / 报告| GL_API
-    INT -.->|可选| NOTIFY
-```
-
-### 请求处理流程
-
-```mermaid
-sequenceDiagram
-    participant P as 平台 (GitHub/GitLab)
-    participant C as Controller
-    participant S as Service
-    participant D as 去重模块
-    participant I as 集成层
-    participant A as AI 评审引擎
-    participant R as 报告渲染器
-
-    P->>C: Webhook 事件
-    C->>S: 验证签名 & 解析请求体
-    S->>D: 去重检查（FNV 哈希，5 分钟窗口）
-    alt 重复请求
-        D-->>S: 跳过（已处理过）
-    else 新请求
-        D-->>S: 放行
-        S->>I: 分发到平台处理器
-        I->>I: 获取 diff、文件内容、策略配置
-        I->>A: 发送上下文 + diff 给 AI 模型
-        A-->>I: 结构化评审结果（Zod 校验）
-        I->>R: 格式化报告 / 行内评论
-        R->>P: 通过 API 发布评审
-        I-->>P: 可选：通知 Webhook
-    end
-```
-
-### 模块依赖关系
-
-```mermaid
-graph LR
-    APP[AppModule] --> HTTP[http: capability APIs]
-    APP --> BOOT[bootstrap: Probot and lifecycle]
-    HTTP --> RUN[agent-runtime]
-    HTTP --> FIX[fix]
-    HTTP --> EVO[evolution]
-    BOOT --> REV[review: standard and deep]
-    BOOT --> CMD[commands]
-    RUN --> REV
-    RUN --> FIX
-    RUN --> EVO
-    RUN --> PG[PostgreSQL]
-    REV --> MODEL[model]
-    REV --> REPO[repository]
-    REV --> INT[integrations]
-    CMD --> REV
-    CMD --> MODEL
-    CMD --> INT
-    FIX --> MODEL
-    FIX --> REPO
-    EVO --> MODEL
-    EVO --> REV
-    MODEL --> CORE[core]
-    REPO --> CORE
-    INT --> CORE
-```
+同一代码库分别运行 web、worker、recovery 和 maintenance 进程。PostgreSQL 保存持久化 Run、预算、发布意图、反馈和产物。组合根显式注册工作流；只有持有租约的 Worker 执行评审，模型网关要求预算上下文。Recovery 对账未知外部效果，可选 verifier 在隔离的 operator 部署中运行。
 
 ### 详细请求流
 
-下图追踪每一条请求路径——从 Webhook 入口经过事件路由、命令解析、通用评审引擎，到最终输出与运维。
+下图展示生产请求流。Webhook 只负责入队，持有租约的 Worker 执行评审。GitHub 支持 review、improve、add_doc、improve_component，GitLab 支持 review；默认使用 Single；显式 API 请求或管理员配置的仓库绑定可选择 Deep，Fix/Evolution 需启用相应能力。
 
 ```mermaid
 flowchart LR
-    subgraph E["入口端点 (NestJS + Probot)"]
-        E1["/api/github/webhooks<br/>GithubAppBootstrapService"]
-        E2["/github/trigger<br/>GithubWebhookController"]
-        E3["/gitlab/trigger<br/>GitlabWebhookController"]
-        E4["/github/replay/:eventId<br/>/gitlab/replay/:eventId"]
-        E5["/health /metrics /webhook/events"]
-    end
-
-    subgraph GHA["GitHub App 事件路由 (backend/src/bootstrap/probot-app.ts)"]
-        A1["issues.opened, issues.edited<br/>runGitHubIssuePolicyCheck"]
-        A2["pull_request.opened, edited, synchronize<br/>runGitHubPullRequestPolicyCheck"]
-        A3["resolveGitHubPullRequestAutoReviewPolicy"]
-        A4["pull_request.closed (merged)<br/>resolveGitHubReviewBehaviorPolicy"]
-        A5["issue_comment.created (PR + Issue)<br/>handleGitHubIssueCommentCommand"]
-        A6["pull_request_review_thread<br/>recordGitHubFeedbackSignal"]
-    end
-
-    subgraph GHW["原生 GitHub Webhook (backend/src/integrations/github/webhooks/handler.ts)"]
-        B1["handlePlainGitHubWebhook"]
-        B2["verifyWebhookSignature + payload schema"]
-        B3["pull_request / issues / issue_comment / review_thread dispatch"]
-        B4["runGitHubPullRequestPolicyCheck + runGitHubIssuePolicyCheck"]
-        B5["handleGitHubIssueCommentCommand"]
-    end
-
-    subgraph GLW["GitLab Webhook (backend/src/integrations/gitlab/webhooks/adapter.ts)"]
-        C1["runGitLabWebhook"]
-        C2["verify token + payload schema"]
-        C3["handleGitLabMergeRequestWebhook"]
-        C4["handleGitLabNoteWebhook"]
-        C5["resolveGitLabReviewPolicy (.pr-agent.yml)"]
-    end
-
-    subgraph CMD["命令解析层"]
-        D1["parseReviewCommand"]
-        D2["parseAsk / parseMention / parseChecks / parseGenerateTests"]
-        D3["parseDescribe / parseChangelog"]
-        D4["parseImprove / parseAddDoc / parseReflect / parseSimilarIssue / parseFeedback"]
-    end
-
-    subgraph CORE["通用评审引擎"]
-        R1["runGitHubReview / runGitLabReview"]
-        R2["去重 + 限流 + 增量 head + 反馈信号"]
-        R3["收集上下文: diff/files/ci/policy"]
-        R4["analyzePullRequest / answerPullRequestQuestion"]
-        R5["patch 解析 + hunk 优先级 + 行映射"]
-        R6["密钥扫描 + 自动标签"]
-    end
-
-    subgraph OUT["输出与运维"]
-        O1["buildReportCommentMarkdown"]
-        O2["buildIssueCommentMarkdown"]
-        O3["createComment / notes / managed upsert"]
-        O4["publishNotification (可选)"]
-        O5["pr_agent_* 指标 + replay 存储"]
-    end
-
-    E1 --> A1
-    E1 --> A2 --> A3 --> R1
-    E1 --> A4 --> R1
-    E1 --> A5
-    E1 --> A6
-
-    E2 --> B1 --> B2 --> B3
-    B3 --> B4 --> R1
-    B3 --> B5
-
-    E3 --> C1 --> C2
-    C2 --> C3 --> C5 --> R1
-    C2 --> C4 --> C5
-
-    A5 --> D1
-    A5 --> D2
-    A5 --> D3
-    A5 --> D4
-    B5 --> D1
-    B5 --> D2
-    B5 --> D3
-    B5 --> D4
-    C4 --> D1
-    C4 --> D2
-    C4 --> D3
-    C4 --> D4
-
-    D1 --> R1
-    D2 --> R4
-    D3 --> R4
-    D4 --> R1
-
-    R1 --> R2 --> R3 --> R4 --> R5
-    R4 --> R6
-    R5 --> O1 --> O3
-    R5 --> O2 --> O3
-    R6 --> O3
-    O3 --> O4
-
-    E4 --> B1
-    E4 --> C1
-    E5 --> O5
-    E2 --> O5
-    E3 --> O5
-    O3 -. 反馈信号 .-> R2
+    GH[GitHub App / webhook] --> SIGN[验签与载荷校验]
+    GL[GitLab webhook] --> SIGN
+    SIGN --> ROUTE[统一事件与命令识别]
+    ROUTE --> IGNORE[忽略普通、不支持或未纳管事件]
+    ROUTE --> AUTH[仓库绑定；命令作者权限]
+    AUTH --> ENQUEUE[显式评审入队]
+    API[受保护 Run API] --> ENQUEUE
+    ENQUEUE --> PG[(PostgreSQL: Runs, budget, events, artifacts)]
+    PG --> WORKER[持有租约的兼容 Worker]
+    WORKER --> REVIEW[Single / 显式 Deep Review]
+    REVIEW --> MODEL[受预算约束的模型网关]
+    REVIEW --> PUB[持久化发布批次]
+    PUB --> PROVIDER[GitHub / GitLab]
+    RECOVERY[Recovery：对账未知外部效果] --> PUB
+    FEEDBACK[授权反馈命令 / API] --> PG
+    FIX[可选 Fix、隔离验证与人工审批] --> PG
+    EVOLUTION[可选 Evolution 评测与发布] --> PG
+    MAINT[受限维护：预览 / 保留清理] --> PG
+    HEALTH[存活与按能力就绪检查] -.-> PG
 ```
 
 ---
@@ -351,7 +171,7 @@ pr-agent/
 │   │   ├── agent-runtime/           # Run 执行、预算、持久化、发布恢复
 │   │   ├── model/                   # 模型契约、配置、Provider 与并发控制
 │   │   ├── review/                  # 标准评审、多 Agent 深度评审、策略与渲染
-│   │   ├── commands/                # 命令解析、Ask 会话与命令编排
+│   │   ├── commands/                # 命令识别、授权与评审入队
 │   │   ├── repository/              # 仓库读取契约、diff 与内容安全
 │   │   ├── issues/                  # 相似 Issue、分诊与策略
 │   │   ├── fix/                     # 修复提案、验证、审批与发布
@@ -453,11 +273,12 @@ curl http://localhost:3000/github/health       # GitHub 配置状态
 
 ### 环境变量
 
-复制 `.env.example` 并填入所需值。当前受支持的最小配置模板是：
+复制 `.env.example` 并填入所需值。按平台选择最小配置模板：
 
 - `.env.github-app.min.example` — GitHub App 最小配置
 
-普通 GitHub Webhook 和 GitLab 的最小示例文件仍保留在仓库中，仅供参考，不属于当前 beta 的受支持部署路径。
+- `.env.github-webhook.min.example` — 普通 GitHub Webhook 最小配置
+- `.env.gitlab.min.example` — GitLab Webhook 最小配置
 
 ### AI Provider 配置
 
@@ -546,8 +367,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `GITHUB_MERGED_DEDUPE_TTL_MS` | `86400000`（24 小时） | `merged + report` 事件去重窗口 |
-| `GITHUB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000`（30 天） | 反馈学习信号保留时长 |
 | `GITHUB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审 SHA 缓存有效期 |
 | `GITHUB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略/评审配置缓存 |
 | `GITHUB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/github/trigger` 的额外请求体硬上限 |
@@ -557,9 +376,7 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `GITLAB_MERGED_DEDUPE_TTL_MS` | `86400000`（24 小时） | `merged + report` 去重窗口 |
 | `GITLAB_INCREMENTAL_STATE_TTL_MS` | `604800000`（7 天） | 增量评审状态缓存 |
-| `GITLAB_FEEDBACK_SIGNAL_TTL_MS` | `2592000000`（30 天） | 反馈学习信号保留窗口 |
 | `GITLAB_POLICY_CONFIG_CACHE_TTL_MS` | `300000`（5 分钟） | `.pr-agent.yml` 策略缓存 |
 | `GITLAB_WEBHOOK_MAX_BODY_BYTES` | `10485760`（10MB） | `/gitlab/trigger` 的额外请求体硬上限 |
 | `GITLAB_WEBHOOK_SECRET` | GitLab 必填 | 缺失或不匹配时拒绝 Webhook；请求头不能提供 API 凭据或覆盖评审策略 |
@@ -567,8 +384,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 
 **调参建议：**
 
-- `MERGED_DEDUPE_TTL_MS` — 控制 `merged + report` 事件的去重窗口，防止 Webhook 重投时重复评审。遇到较多 Webhook 重试/Redeliver 时可调大到 `48h~72h`；需要更快允许同一 PR 合并事件再次触发时可调小到 `1h~6h`。该变量只影响合并自动触发；手动评论命令触发（`/ai-review ...`）仍使用短窗口（5 分钟）去重策略。
-- `FEEDBACK_SIGNAL_TTL_MS` — 控制 review thread resolved/unresolved 信号的保留时长。团队评审节奏慢、希望长期记忆偏好可设为 `60~90` 天；规则变化快、希望更快"遗忘"历史偏好可设为 `7~14` 天。
 - `COMMAND_RATE_LIMIT_*` — 控制评论命令的防滥用阈值。高活跃仓库可适当上调，命令刷屏场景可下调。
 
 `.env.example` 提供基础变量参考；上方补充的是代码已实现但通常不在最小模板中的高级开关。
@@ -692,11 +507,11 @@ graph TD
     G --> H[测试 /ai-review 命令]
 ```
 
-1. **使用 GitHub App 接入模式** — 这是当前 beta 唯一受支持的接入方式
+1. **配置平台凭据与 Webhook 验签** — GitHub App、普通 GitHub 或 GitLab
 2. **配置 AI Provider 与预算策略** — 设置 `AI_PROVIDER`、对应的 API Key/模型名称，并基于 [`.env.example`](.env.example) 配置部署专用的 `HARNESS_MODEL_PRICING_JSON`
 3. **初始化 PostgreSQL** — Compose 必须配置五个数据库密码并确认 `database-init` 成功；外部 PostgreSQL 则必须先建立等价的受限角色，再运行迁移 CLI
 4. **部署容器** — Docker、Docker Compose、Render、Railway、Fly.io 或 K8s
-5. **配置 Webhook URL** 为 `https://<域名>/api/github/webhooks`
+5. **配置 Webhook URL** — HTTPS 域名后使用 GitHub App 的 `/api/github/webhooks`、普通 GitHub 的 `/github/trigger` 或 GitLab 的 `/gitlab/trigger`
 6. **验证** — 访问健康检查端点，并在 PR 中测试 `/ai-review` 命令
 
 ### 快速部署参考
@@ -785,7 +600,7 @@ server {
 
 ## 平台接入
 
-### GitHub App（当前唯一支持的方式）
+### GitHub App
 
 1. 创建 GitHub App，配置以下权限：
    - **Pull requests**：Read & write
@@ -811,12 +626,11 @@ WEBHOOK_SECRET=your-webhook-secret
 - 基础 `docker-compose.yml` 使用内联 `PRIVATE_KEY`，不要求宿主 PEM 文件，这也是 Coolify 兼容路径。可选 `docker-compose.secret-file.yml` overlay 从 `./secrets/github-app.private-key.pem` 创建文件 secret；Linux 上必须先把它设置为 UID/GID `10001:10001`、权限 `0400`。
 - 仅在使用可选文件 overlay 时创建受管秘钥目录：`mkdir -p secrets`。
 
-> 若未配置 `APP_ID` + `PRIVATE_KEY`（+ `WEBHOOK_SECRET`），GitHub App 模式会被禁用，此时当前 beta 部署也视为不完整。
+> GitHub App 模式需要完整的 App 凭据；使用普通 GitHub 或 GitLab Webhook 的部署应配置对应服务端凭据与 Webhook secret。
 
-### 当前 Beta 不支持的集成方式
+### 其他 Webhook 接入
 
-- 普通 GitHub Webhook 目前不是受支持的部署目标。
-- GitLab Webhook 目前不是受支持的部署目标。
+普通 GitHub 使用 `/github/trigger`，GitLab 使用 `/gitlab/trigger`。发送事件前配置服务端 API 凭据、对应平台 Webhook secret 与活动仓库绑定；请求头不能注入 API 凭据或覆盖仓库策略。
 
 ---
 
@@ -875,7 +689,7 @@ GitHub 和 GitLab 都读取 `.pr-agent.yml` 中的 `review:` 段。PostgreSQL �
 | `secretScanEnabled` | 是否扫描 diff 中疑似密钥泄露并发布安全提示 |
 | `secretScanCustomPatterns` | 仓库自定义密钥正则补充规则 |
 | `autoLabelEnabled` | 是否根据变更内容自动追加 PR 标签 |
-| `customRules` | 团队自定义评审规则（自然语言），在评审与问答中都会强制纳入 |
+| `customRules` | 团队自定义评审规则（自然语言），纳入评审 |
 
 ---
 
@@ -905,7 +719,7 @@ Prometheus 格式指标通过 `GET /metrics` 暴露：
 | `GET /health` | 公开存活探针；`/github/health` 和 `/gitlab/health` 支持 `?deep=1` 检查本地 Webhook 配置 |
 | `GET /ready` | 检查已启用能力及运行时依赖是否就绪 |
 | `GET /github/health` | GitHub Webhook 配置校验 |
-| `GET /gitlab/health` | GitLab Webhook 遗留配置校验（当前 beta 不支持） |
+| `GET /gitlab/health` | GitLab Webhook 配置校验 |
 
 ### 错误处理
 

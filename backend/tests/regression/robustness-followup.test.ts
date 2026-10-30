@@ -5,7 +5,6 @@ import { encodePath } from "../../src/core/paths/encode-path.ts";
 import {
   createOpenAIClientCache,
 } from "../../src/model/client-cache.ts";
-import { buildAskPrompt, resolveAskSystemPrompt } from "../../src/commands/ask/prompts.js";
 import { buildUserPrompt, resolveReviewSystemPrompt } from "../../src/review/standard/reviewer.ts";
 import type { PullRequestReviewInput } from "../../src/review/contracts.ts";
 import { parseRepoPolicyConfig } from "../../src/issues/policy/github/workflow.ts";
@@ -40,36 +39,29 @@ test("encodePath keeps already-encoded path segments stable", () => {
   assert.equal(encodePath("nested/a%2Fb.ts"), "nested/a%2Fb.ts");
 });
 
-test("ai system prompts follow locale", () => {
+test("review system prompts follow locale", () => {
   const originalLocale = process.env.PR_AGENT_LOCALE;
 
   try {
     process.env.PR_AGENT_LOCALE = "en";
     assert.match(resolveReviewSystemPrompt(), /You are a senior code review engineer/i);
-    assert.match(resolveAskSystemPrompt(), /You are a senior code review assistant/i);
 
     process.env.PR_AGENT_LOCALE = "zh";
     assert.match(resolveReviewSystemPrompt(), /你是资深代码评审工程师/);
-    assert.match(resolveAskSystemPrompt(), /你是资深代码评审助手/);
   } finally {
     process.env.PR_AGENT_LOCALE = originalLocale;
   }
 });
 
-test("ai user prompts follow locale", () => {
+test("review user prompts follow locale", () => {
   const originalLocale = process.env.PR_AGENT_LOCALE;
 
   try {
     process.env.PR_AGENT_LOCALE = "en";
     assert.match(buildUserPrompt(promptFixture), /Output requirements:/i);
-    assert.match(
-      buildAskPrompt(promptFixture, "What changed?"),
-      /User question:/i,
-    );
 
     process.env.PR_AGENT_LOCALE = "zh";
     assert.match(buildUserPrompt(promptFixture), /输出要求/);
-    assert.match(buildAskPrompt(promptFixture, "发生了什么变化？"), /用户问题/);
   } finally {
     process.env.PR_AGENT_LOCALE = originalLocale;
   }

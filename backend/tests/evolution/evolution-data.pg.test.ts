@@ -12,12 +12,13 @@ import type { TrustedLabelSetV1 } from "../../src/evolution/feedback/contracts.j
 import { labelSetHash } from "../../src/evolution/feedback/contracts.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
-import { RuntimeMaintenanceStore } from "../../src/agent-runtime/maintenance.js";
+import { PeriodicMaintenanceStore } from "../../src/agent-runtime/retention/periodic-store.js";
 import type { RunPrincipal } from "../../src/agent-runtime/runs/control-contracts.js";
 import { RunControlError } from "../../src/agent-runtime/runs/control-contracts.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
 import { PgRunArtifactStore } from "../../src/agent-runtime/artifacts/index.js";
-import { prepareHarnessRuntimeRoles, reapplyVersionedRuntimeGrants } from "../support/harness-runtime-roles.js";
+import { createMaintenanceTestPool, prepareHarnessRuntimeRoles,
+  reapplyVersionedRuntimeGrants } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -51,7 +52,8 @@ if (!databaseUrl) {
   const oneFinding: TrustedLabelSetV1 = { ...emptyLabels, expectedFindings: [
     { path: "src/a.ts", startLine: 1, endLine: 1, severity: "high", title: "Unsafe assignment" },
   ] };
-  let appPool: Pool; let store: PgEvolutionFeedbackStore; let datasets: PgEvolutionDatasetStore;
+  let appPool: Pool; let maintenancePool: Pool;
+  let store: PgEvolutionFeedbackStore; let datasets: PgEvolutionDatasetStore;
 
   const principal = (subjectId: string, integration = integrationId): RunPrincipal => ({ subjectId, actorType: "user",
     tenantId, integrationId: integration, permissions: ["feedback:create", "annotations:create", "annotations:arbitrate"] });
@@ -60,6 +62,7 @@ if (!databaseUrl) {
     process.env.FEATURE_EVOLUTION = "on";
     await prepareHarnessRuntimeRoles(adminPool, { app: appPassword, verifier: randomUUID() });
     await migrateRuntime(adminPool);
+    maintenancePool = createMaintenanceTestPool(databaseUrl);
     const appUrl = new URL(databaseUrl); appUrl.username = "pr_agent_app"; appUrl.password = appPassword;
     appPool = new Pool({ connectionString: appUrl.toString(), max: 8 });
     const appDb = new RuntimeDatabase(appPool);
@@ -109,7 +112,7 @@ if (!databaseUrl) {
       [otherTenantId, crossTenantIntegrationId, crossTenantRunId, artifactHash, fingerprint("foreign-feedback")]);
   });
 
-  after(async () => { await appPool?.end(); await adminPool.end(); });
+  after(async () => { await maintenancePool?.end(); await appPool?.end(); await adminPool.end(); });
 
   test("feedback command keys are idempotent and reject different content with HTTP 409 semantics", async () => {
     const request = { schemaVersion: 1 as const, artifactHash, sentiment: "helpful" as const, categories: [] };
@@ -424,8 +427,9 @@ if (!databaseUrl) {
 
     await adminPool.query("UPDATE pr_agent_harness.agent_runs SET finished_at=clock_timestamp()-interval '90 days' WHERE tenant_id=$1 AND id=$2",
       [tenantId, datasetRunF]);
-    const sourceRetention = await new RuntimeMaintenanceStore(adminPool).apply({ tenantId, olderThanDays: 30, limit: 10 });
-    assert.equal(sourceRetention.applied, 0);
+    await new PeriodicMaintenanceStore(maintenancePool).run(randomUUID(), {
+      action: "apply", contentDays: 30, replayDays: 90, traceDays: 400, batchLimit: 10,
+    });
     assert.equal((await adminPool.query<{ purged: boolean }>(
       "SELECT content_purged_at IS NOT NULL AS purged FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2",
       [tenantId, datasetRunF])).rows[0]?.purged, false);

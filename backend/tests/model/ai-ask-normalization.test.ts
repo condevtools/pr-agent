@@ -1,21 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeAskResultForSchema } from "../../src/commands/ask/normalization.js";
 import { parseJsonFromModelText } from "../../src/model/providers/json.ts";
-
-test("normalizeAskResultForSchema extracts trailing JSON answer from mixed text", () => {
-  const mixed = [
-    "Preparing fix suggestions",
-    "Adjusting tool call to shell",
-    "{\"command\":[\"bash\",\"-lc\",\"ls\"],\"workdir\":\".\"}",
-    "Providing JSON-formatted fix suggestions",
-    "{\"answer\":\"可以，给你一套可落地的修复建议：先修模板，再补守卫。\"}",
-  ].join("\n");
-
-  const result = normalizeAskResultForSchema(mixed);
-  assert.equal(result.answer, "可以，给你一套可落地的修复建议：先修模板，再补守卫。");
-});
 
 test("parseJsonFromModelText extracts last JSON object from mixed thinking + tool call output", () => {
   const mixed = [

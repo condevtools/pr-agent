@@ -6,12 +6,13 @@ import { Pool } from "pg";
 
 import type { EvidenceRecord } from "../../src/review/deep/contracts.js";
 import { DeepReviewEvidenceError, DeepReviewStore } from "../../src/review/deep/persistence/store.js";
-import { RuntimeMaintenanceStore } from "../../src/agent-runtime/maintenance.js";
+import { PeriodicMaintenanceStore } from "../../src/agent-runtime/retention/periodic-store.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
 import { fingerprint } from "../../src/agent-runtime/versions.js";
 import { RepositoryReadToolRegistry } from "../../src/review/deep/tools/registry.js";
+import { createMaintenanceTestPool } from "../support/harness-runtime-roles.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -30,14 +31,16 @@ if (!databaseUrl) {
   const otherIntegrationId = randomUUID();
   const version = fingerprint("deep-version");
   let lease: RunLease;
+  let maintenancePool: Pool;
 
   before(async () => {
     await migrateRuntime(pool);
+    maintenancePool = createMaintenanceTestPool(databaseUrl);
     lease = await fixture(tenantId, integrationId, "acme/deep");
     await fixture(tenantId, sameTenantOtherIntegrationId, "acme/other-deep");
     await fixture(otherTenantId, otherIntegrationId, "other/deep");
   });
-  after(async () => pool.end());
+  after(async () => { await maintenancePool?.end(); await pool.end(); });
 
   test("evidence registration requires exact successful tool output, request, scope and live lease", async () => {
     const identity = { tenantId, integrationId, runId: lease.runId, platform: "github" as const,
@@ -112,8 +115,10 @@ if (!databaseUrl) {
     await pool.query(
       `UPDATE pr_agent_harness.job_queue SET status='completed',completed_at=clock_timestamp(),updated_at=clock_timestamp()
        WHERE tenant_id=$1 AND run_id=$2`, [tenantId, lease.runId]);
-    const applied = await new RuntimeMaintenanceStore(pool).apply({ tenantId, olderThanDays: 30 });
-    assert.equal(applied.applied, 1);
+    const applied = await new PeriodicMaintenanceStore(maintenancePool).run(randomUUID(), {
+      action: "apply", contentDays: 30, replayDays: 90, traceDays: 400, batchLimit: 100,
+    });
+    assert.equal(applied.applied.runContent, 1);
     const rows = await pool.query<{ result_json: Record<string, unknown>; content_purged_at: Date | null }>(
       "SELECT result_json,content_purged_at FROM pr_agent_harness.evidence_records WHERE tenant_id=$1 AND run_id=$2",
       [tenantId, lease.runId],

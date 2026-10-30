@@ -9,7 +9,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
 import {
-  runGitHubReview,
+  enqueueGitHubReview,
 } from "../../../review/platforms/github/workflow.js";
 import type {
   GitHubReviewContext,
@@ -261,8 +261,7 @@ async function handlePullRequestEvent(
   if (!isMerged && "enabled" in reviewBehavior && !reviewBehavior.enabled) {
     return { ok: true, message: "pull_request action ignored by review policy" };
   }
-  let queuedRunId: string | undefined;
-  await runGitHubReview({
+  const queuedRunId = await enqueueGitHubReview({
     context,
     pullNumber: payload.pull_request.number,
     mode: isMerged ? "report" : (reviewBehavior as Awaited<ReturnType<typeof resolveGitHubPullRequestAutoReviewPolicy>>).mode,
@@ -270,7 +269,6 @@ async function handlePullRequestEvent(
     publicationRuntime: durableRuntime as never,
     sourceKey: params.deliveryId ? `github:delivery:${params.deliveryId}` : undefined,
     sourceHash: params.sourceHash,
-    onQueued: (runId) => { queuedRunId = runId; },
     customRules: reviewBehavior.customRules,
     includeCiChecks: reviewBehavior.includeCiChecks,
     enableSecretScan: reviewBehavior.secretScanEnabled,
@@ -278,8 +276,7 @@ async function handlePullRequestEvent(
     enableAutoLabel: reviewBehavior.autoLabelEnabled,
     throwOnError: true,
   });
-  return { ok: true, message: queuedRunId ? "durable pull_request review queued" : "durable pull_request review triggered",
-    ...(queuedRunId ? { runId: queuedRunId } : {}) };
+  return { ok: true, message: "durable pull_request review queued", runId: queuedRunId };
 }
 
 async function handleIssuesEvent(

@@ -15,7 +15,6 @@ export interface GitHubReviewContext {
 }
 
 export interface GitHubReviewRunParams {
-  onQueued?: (runId: string) => void;
   context: GitHubReviewContext;
   pullNumber: number;
   mode: ReviewMode;

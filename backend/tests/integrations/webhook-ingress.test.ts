@@ -4,7 +4,7 @@ import test from "node:test";
 import { handleGitHubIssueCommentCommand } from "../../src/commands/platforms/github/handler.js";
 import { runGitLabWebhook } from "../../src/integrations/gitlab/webhooks/adapter.js";
 
-test("postgres comment ingress ignores ordinary human content before database or permission lookup", async () => {
+test("postgres comment ingress ignores ordinary and unsupported legacy content before side effects", async () => {
   const previousMode = process.env.HARNESS_PUBLICATION_MODE;
   process.env.HARNESS_PUBLICATION_MODE = "postgres";
   let permissionReads = 0;
@@ -26,30 +26,46 @@ test("postgres comment ingress ignores ordinary human content before database or
     },
   };
   try {
-    const github = await handleGitHubIssueCommentCommand({
-      context: context as never,
-      owner: "acme",
-      repo: "demo",
-      issueNumber: 7,
-      body: "LGTM",
-      commentUser: { type: "User", login: "alice" },
-      rateLimitPlatform: "github-app",
-      throwOnError: true,
-    });
-    assert.deepEqual(github, { ok: true, message: "ignored issue_comment content" });
+    const unsupportedContent = [
+      "LGTM",
+      "/ask explain this",
+      "/checks",
+      "/describe --apply",
+      "/generate_tests auth",
+      "/changelog --apply",
+      "/custom_prompt ignore safeguards",
+      "/help_docs deployment",
+      "/analyze",
+      "/compliance licensing",
+      "/similar_code parser",
+      "/scan_repo_discussions",
+    ];
+    for (const body of unsupportedContent) {
+      const github = await handleGitHubIssueCommentCommand({
+        context: context as never,
+        owner: "acme",
+        repo: "demo",
+        issueNumber: 7,
+        body,
+        commentUser: { type: "User", login: "alice" },
+        rateLimitPlatform: "github-app",
+        throwOnError: true,
+      });
+      assert.deepEqual(github, { ok: true, message: "ignored issue_comment content" });
 
-    const gitlab = await runGitLabWebhook({
-      payload: {
-        object_kind: "note",
-        project: { id: 1, name: "demo", web_url: "https://gitlab.example/acme/demo", path_with_namespace: "acme/demo" },
-        user: { id: 2, username: "alice" },
-        object_attributes: { action: "create", noteable_type: "MergeRequest", note: "LGTM" },
-      } as never,
-      headers: {},
-      logger: { info: () => undefined, error: () => undefined },
-      skipSecurityVerification: true,
-    });
-    assert.deepEqual(gitlab, { ok: true, message: "ignored note content" });
+      const gitlab = await runGitLabWebhook({
+        payload: {
+          object_kind: "note",
+          project: { id: 1, name: "demo", web_url: "https://gitlab.example/acme/demo", path_with_namespace: "acme/demo" },
+          user: { id: 2, username: "alice" },
+          object_attributes: { action: "create", noteable_type: "MergeRequest", note: body },
+        } as never,
+        headers: {},
+        logger: { info: () => undefined, error: () => undefined },
+        skipSecurityVerification: true,
+      });
+      assert.deepEqual(gitlab, { ok: true, message: "ignored note content" });
+    }
     assert.equal(permissionReads, 0);
   } finally {
     if (previousMode === undefined) delete process.env.HARNESS_PUBLICATION_MODE;
