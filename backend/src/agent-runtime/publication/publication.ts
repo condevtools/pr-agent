@@ -83,6 +83,8 @@ export interface PublicationRemoteResult {
 }
 
 export interface PublicationAdapter {
+  /** Maximum claim-to-resolution window for an operation that is not linked to a Run lease. */
+  reconciliationGraceMs?: number;
   /** Optional read-only work that must finish before a dispatch claim is authorized. */
   preflight?(marker: string, payload: PublicationPayload): Promise<void>;
   /** Performs exactly one platform dispatch attempt with the frozen payload. */
@@ -110,11 +112,13 @@ export interface PreparedOperationInput {
   slot: string;
   executionLease?: RunLease;
   legacyExecutionModeGeneration?: number;
+  reconciliationGraceMs?: number;
 }
 
 export type PreparedPublication =
   | { action: "dispatch"; operation: PublicationOperation }
   | { action: "reconcile"; operation: PublicationOperation }
+  | { action: "pending"; operation: PublicationOperation }
   | { action: "reuse"; operation: PublicationOperation };
 
 export interface PublicationStore {
@@ -148,11 +152,17 @@ export class PublicationService {
   constructor(private readonly store: PublicationStore) {}
 
   async publish(request: PublicationRequest, adapter: PublicationAdapter): Promise<PublicationResult> {
-    const input = buildPublicationIdentity(request);
+    const input = {
+      ...buildPublicationIdentity(request),
+      reconciliationGraceMs: adapter.reconciliationGraceMs,
+    };
     const existing = await this.store.get(input.scope.tenantId, input.businessOperationId);
     if (existing && isPossiblyDispatched(existing.status)) {
       const prepared = await this.store.prepareAndClaim(input);
       if (prepared.action !== "reconcile") {
+        if (prepared.action === "pending") {
+          throw new PendingPublicationError(prepared.operation.businessOperationId);
+        }
         throw new Error("possibly dispatched publication did not enter reconciliation");
       }
       return this.reconcile(prepared.operation, adapter);
@@ -182,6 +192,9 @@ export class PublicationService {
     }
     if (prepared.action === "reconcile") {
       return this.reconcile(prepared.operation, adapter);
+    }
+    if (prepared.action === "pending") {
+      throw new PendingPublicationError(prepared.operation.businessOperationId);
     }
 
     const payload = prepared.operation.payload;
@@ -234,9 +247,17 @@ export class PublicationService {
     adapter: PublicationAdapter,
     expectedVersion?: number,
   ): Promise<PublicationResult> {
-    const operation = this.store.getForReconciliation
-      ? await this.store.getForReconciliation(tenantId, operationId)
-      : await this.store.get(tenantId, operationId);
+    let operation: PublicationOperation | undefined;
+    try {
+      operation = this.store.getForReconciliation
+        ? await this.store.getForReconciliation(tenantId, operationId)
+        : await this.store.get(tenantId, operationId);
+    } catch (error) {
+      if (error instanceof PublicationDispatchInProgressError) {
+        throw new PendingPublicationError(operationId, { cause: error });
+      }
+      throw error;
+    }
     if (!operation) throw new PublicationOperationNotFoundError(operationId);
     if (expectedVersion !== undefined && operation.version !== expectedVersion) {
       throw new PublicationOperationVersionConflictError(
@@ -478,6 +499,16 @@ export class PgPublicationStore implements PublicationStore {
         return { action: "reuse", operation: operationBeforeClaim };
       }
       if (operationBeforeClaim.status !== "prepared" && isUnresolved(operationBeforeClaim.status)) {
+        if (operationBeforeClaim.status === "in_flight") {
+          if (await hasActiveLinkedRun(client, input.scope.tenantId, initialLinks)
+              || !await isReconciliationDue(
+                client,
+                input.scope.tenantId,
+                input.businessOperationId,
+              )) {
+            return { action: "pending", operation: operationBeforeClaim };
+          }
+        }
         return { action: "reconcile", operation: operationBeforeClaim };
       }
       if (operationBeforeClaim.status === "failed_definite"
@@ -522,11 +553,22 @@ export class PgPublicationStore implements PublicationStore {
           UPDATE pr_agent_harness.repository_operations
           SET status = 'in_flight', attempt_count = attempt_count + 1,
               version = version + 1, dispatched_at = now(), updated_at = now(),
-              last_error_code = NULL
+              last_error_code = NULL,
+              next_reconcile_at = GREATEST(
+                clock_timestamp() + ($4::double precision * interval '1 millisecond'),
+                COALESCE(
+                  (SELECT lease_expires_at
+                   FROM pr_agent_harness.agent_runs
+                   WHERE tenant_id=$1 AND id=$3::uuid),
+                  '-infinity'::timestamptz
+                )
+              )
           WHERE tenant_id = $1 AND business_operation_id = $2 AND status = 'prepared'
           RETURNING *
         `,
-        [input.scope.tenantId, input.businessOperationId],
+        [input.scope.tenantId, input.businessOperationId,
+          input.executionLease?.runId ?? null,
+          reconciliationGraceMs(input.reconciliationGraceMs)],
       );
       if (claimed.rows[0]) {
         const operation = mapOperation(claimed.rows[0]);
@@ -540,6 +582,17 @@ export class PgPublicationStore implements PublicationStore {
         return { action: "reuse", operation };
       }
       if (isUnresolved(operation.status)) {
+        const links = await linkedRunIds(client, input.scope.tenantId, input.businessOperationId);
+        if (operation.status === "in_flight") {
+          if (await hasActiveLinkedRun(client, input.scope.tenantId, links)
+              || !await isReconciliationDue(
+                client,
+                input.scope.tenantId,
+                input.businessOperationId,
+              )) {
+            return { action: "pending", operation };
+          }
+        }
         return { action: "reconcile", operation };
       }
       if (operation.status === "failed_definite" || operation.status === "cancelled") {
@@ -565,6 +618,13 @@ export class PgPublicationStore implements PublicationStore {
     return this.db.transaction(tenantId, async (client) => {
       const operation = await selectOperation(client, tenantId, businessOperationId);
       if (operation) await assertActiveIntegrationBinding(client, operation.scope);
+      if (operation?.status === "in_flight") {
+        const links = await linkedRunIds(client, tenantId, businessOperationId);
+        if (await hasActiveLinkedRun(client, tenantId, links)
+            || !await isReconciliationDue(client, tenantId, businessOperationId)) {
+          throw new PublicationDispatchInProgressError(businessOperationId);
+        }
+      }
       return operation;
     });
   }
@@ -622,6 +682,7 @@ export class PgPublicationStore implements PublicationStore {
               last_error_code = $7,
               evidence_json = COALESCE($8::jsonb, evidence_json),
               command_receipt_json = COALESCE($9::jsonb, command_receipt_json),
+              next_reconcile_at = CASE WHEN $4 = 'unknown' THEN now() ELSE NULL END,
               resolved_at = CASE WHEN $4 IN ('succeeded', 'failed_definite') THEN now() ELSE NULL END,
               version = version + 1,
               updated_at = now()
@@ -766,6 +827,13 @@ export class PendingPublicationError extends Error {
   ) {
     super("publication result is unknown and requires reconciliation", options);
     this.name = "PendingPublicationError";
+  }
+}
+
+export class PublicationDispatchInProgressError extends Error {
+  constructor(readonly businessOperationId: string) {
+    super(`publication dispatch is still protected from reconciliation: ${businessOperationId}`);
+    this.name = "PublicationDispatchInProgressError";
   }
 }
 
@@ -928,6 +996,46 @@ async function linkedRunIds(
     [tenantId, businessOperationId],
   );
   return result.rows.map(({ run_id }) => run_id);
+}
+
+async function hasActiveLinkedRun(
+  client: PoolClient,
+  tenantId: string,
+  runIds: readonly string[],
+): Promise<boolean> {
+  if (runIds.length === 0) return false;
+  const result = await client.query(
+    `SELECT 1 FROM pr_agent_harness.agent_runs
+     WHERE tenant_id=$1 AND id=ANY($2::uuid[])
+       AND status='running' AND lease_expires_at > now()
+     LIMIT 1`,
+    [tenantId, runIds],
+  );
+  return result.rowCount === 1;
+}
+
+async function isReconciliationDue(
+  client: PoolClient,
+  tenantId: string,
+  businessOperationId: string,
+): Promise<boolean> {
+  const result = await client.query<{ due: boolean }>(
+    `SELECT next_reconcile_at IS NULL OR next_reconcile_at <= now() AS due
+     FROM pr_agent_harness.repository_operations
+     WHERE tenant_id=$1 AND business_operation_id=$2`,
+    [tenantId, businessOperationId],
+  );
+  return result.rows[0]?.due === true;
+}
+
+const DEFAULT_RECONCILIATION_GRACE_MS = 120_000;
+
+function reconciliationGraceMs(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_RECONCILIATION_GRACE_MS;
+  if (!Number.isSafeInteger(value) || value < 1_000 || value > 24 * 60 * 60_000) {
+    throw new Error("publication reconciliation grace must be between 1 second and 24 hours");
+  }
+  return value;
 }
 
 function normalizeScope(scope: PublicationScope): PublicationScope {

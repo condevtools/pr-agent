@@ -266,6 +266,12 @@ if (!databaseUrl) {
       version: 0,
       state: "active" as const,
     };
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET next_reconcile_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.request.scope.tenantId, fixture.operationId],
+    );
     const claim = (await recoverySchedule.claim(binding, "recovery-worker", 1))[0]!;
     assert.equal(claim.operationVersion, before.version + 1);
     const command = {
@@ -347,6 +353,12 @@ if (!databaseUrl) {
       version: 0,
       state: "active" as const,
     };
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET next_reconcile_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.request.scope.tenantId, fixture.operationId],
+    );
     const claim = (await recoverySchedule.claim(binding, "expiring-worker", 1))[0]!;
     await adminPool.query(
       `UPDATE pr_agent_harness.repository_operations

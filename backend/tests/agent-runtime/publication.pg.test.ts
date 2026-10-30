@@ -33,6 +33,7 @@ if (!databaseUrl) {
   let pool: Pool;
   let store: PgPublicationStore;
   let controlRunStore: RunStore;
+  let nextProviderRepositoryId = 900_000;
 
   before(async () => {
     await adminPool.query("DROP SCHEMA IF EXISTS pr_agent_harness CASCADE");
@@ -40,7 +41,7 @@ if (!databaseUrl) {
     await adminPool.query(`CREATE ROLE ${roleName} LOGIN PASSWORD '${rolePassword}' NOSUPERUSER NOBYPASSRLS`);
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
-    await adminPool.query(`GRANT SELECT ON pr_agent_harness.publication_batch_operations, pr_agent_harness.run_publication_batches TO ${roleName}`);
+    await adminPool.query(`GRANT SELECT ON pr_agent_harness.publication_batch_operations, pr_agent_harness.run_publication_batches, pr_agent_harness.agent_runs TO ${roleName}`);
     await adminPool.query(`GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations, pr_agent_harness.publication_slots TO ${roleName}`);
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
     const appUrl = new URL(databaseUrl);
@@ -66,7 +67,7 @@ if (!databaseUrl) {
       Array.from({ length: 8 }, () => store.prepareAndClaim(identity)),
     );
     assert.equal(prepared.filter((item) => item.action === "dispatch").length, 1);
-    assert.equal(prepared.filter((item) => item.action === "reconcile").length, 7);
+    assert.equal(prepared.filter((item) => item.action === "pending").length, 7);
     assert.deepEqual(new Set(prepared.map((item) => item.operation.attemptCount)), new Set([1]));
     assert.deepEqual(prepared[0]?.operation.payload, request.payload);
     assert.equal(Object.isFrozen(prepared[0]?.operation.payload), true);
@@ -110,6 +111,40 @@ if (!databaseUrl) {
     });
   });
 
+  test("an unlinked in-flight dispatch is not reconciled before its provider deadline", async () => {
+    const request = await createRequest("unlinked-dispatch-grace");
+    const service = new PublicationService(store);
+    let releaseDispatch!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const released = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+    const publishing = service.publish(request, {
+      reconciliationGraceMs: 30_000,
+      dispatch: async () => {
+        markStarted();
+        await released;
+        return { id: "unlinked-dispatch-remote" };
+      },
+      find: async () => null,
+    });
+    await started;
+    let reconciliationReads = 0;
+    await assert.rejects(
+      service.publish(request, {
+        reconciliationGraceMs: 30_000,
+        dispatch: async () => ({ id: "must-not-dispatch" }),
+        find: async () => {
+          reconciliationReads += 1;
+          return null;
+        },
+      }),
+      PendingPublicationError,
+    );
+    releaseDispatch();
+    assert.equal((await publishing).remoteId, "unlinked-dispatch-remote");
+    assert.equal(reconciliationReads, 0);
+  });
+
   test("definite rejection is terminal for the same ID and releases the slot", async () => {
     const request = await createRequest("definite-rejection");
     const service = new PublicationService(store);
@@ -148,7 +183,9 @@ if (!databaseUrl) {
       [identity.businessOperationId],
     );
     await adminPool.query(
-      "UPDATE pr_agent_harness.repository_operations SET payload_json = NULL WHERE tenant_id = $1 AND business_operation_id = $2",
+      `UPDATE pr_agent_harness.repository_operations
+       SET payload_json = NULL, next_reconcile_at=now()-interval '1 second'
+       WHERE tenant_id = $1 AND business_operation_id = $2`,
       [request.scope.tenantId, identity.businessOperationId],
     );
     let dispatches = 0;
@@ -268,9 +305,7 @@ if (!databaseUrl) {
     await adminPool.query(
       `
         UPDATE pr_agent_harness.integration_bindings
-        SET provider_repository_id = '900001', provider_actor_id = '900002',
-            credential_ref = 'test-credential', publication_state = 'active',
-            publication_generation = 3, quiescence_receipt = '{"verified":true}'::jsonb
+        SET publication_generation = 3
         WHERE tenant_id = $1 AND id = $2
       `,
       [request.scope.tenantId, request.scope.integrationId],
@@ -308,6 +343,14 @@ if (!databaseUrl) {
       origin: "https://github.example.test",
       repository: `acme/${suffix}`,
     });
+    await adminPool.query(
+      `UPDATE pr_agent_harness.integration_bindings
+       SET provider_repository_id=$3, provider_actor_id='900002',
+           credential_ref='test-credential', publication_state='active',
+           publication_generation=1, quiescence_receipt='{"verified":true}'::jsonb
+       WHERE tenant_id=$1 AND id=$2`,
+      [tenantId, integrationId, String(nextProviderRepositoryId++)],
+    );
     return {
       scope: {
         tenantId,
@@ -317,6 +360,7 @@ if (!databaseUrl) {
         repository: `acme/${suffix}`,
         target: "pull:42",
         revision: "head-sha",
+        authorityGeneration: 1,
       },
       slot: "review-report",
       payload: { body: `review-${suffix}` },

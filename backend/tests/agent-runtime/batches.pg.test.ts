@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test, { after, before } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { Pool } from "pg";
 
@@ -11,6 +12,7 @@ import {
   PublicationBatchStore,
 } from "../../src/agent-runtime/publication/batches.js";
 import {
+  PendingPublicationError,
   buildPublicationIdentity,
   PgPublicationStore,
   PublicationDefiniteFailureError,
@@ -20,6 +22,7 @@ import {
   type PublicationAdapter,
   type PublicationRequest,
 } from "../../src/agent-runtime/publication/publication.js";
+import { PgPublicationRecoverySchedule } from "../../src/agent-runtime/publication/recovery.js";
 import { RuntimeDatabase } from "../../src/agent-runtime/postgres/database.js";
 import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
@@ -320,6 +323,367 @@ if (!databaseUrl) {
       [fixture.lease.tenantId, fixture.lease.runId],
     );
     assert.equal(run.rows[0]?.status, "cancelled");
+  });
+
+  test("active Run dispatch is not reconciled by concurrent batch execution", async () => {
+    const fixture = await createRunLinkedBatch("active-dispatch-direct");
+    const request = {
+      ...fixture.batch.operations[0]!.request,
+      executionLease: fixture.lease,
+    };
+    let releaseDispatch!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const released = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+    const service = new PublicationService(operationStore);
+    const publishing = service.publish(request, {
+      dispatch: async () => {
+        markStarted();
+        await released;
+        return { id: "active-dispatch-remote" };
+      },
+      find: async () => null,
+    });
+    await started;
+
+    let reconciliationReads = 0;
+    const concurrent = await new PublicationBatchCoordinator(
+      batchStore,
+      new PublicationService(operationStore),
+    ).execute(fixture.scope.tenantId, fixture.batch.id, async () => ({
+      dispatch: async () => ({ id: "must-not-dispatch" }),
+      find: async () => {
+        reconciliationReads += 1;
+        return null;
+      },
+    }));
+    assert.equal(concurrent.status, "waiting_reconciliation");
+    releaseDispatch();
+    const result = await publishing;
+    assert.equal(result.remoteId, "active-dispatch-remote");
+    assert.equal(reconciliationReads, 0);
+  });
+
+  test("Recovery cannot claim an in-flight operation owned by a live Run lease", async () => {
+    const fixture = await createRunLinkedBatch("active-dispatch-recovery");
+    const request = {
+      ...fixture.batch.operations[0]!.request,
+      executionLease: fixture.lease,
+    };
+    let releaseDispatch!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const released = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+    const service = new PublicationService(operationStore);
+    const publishing = service.publish(request, {
+      dispatch: async () => {
+        markStarted();
+        await released;
+        return { id: "recovery-fenced-remote" };
+      },
+      find: async () => null,
+    });
+    await started;
+
+    const schedule = new PgPublicationRecoverySchedule(appDb);
+    const claims = await schedule.claim({
+      id: fixture.scope.integrationId,
+      tenantId: fixture.scope.tenantId,
+      platform: fixture.scope.platform,
+      origin: fixture.scope.origin,
+      repository: fixture.scope.repository,
+      providerRepositoryId: 1,
+      providerActorId: 1,
+      credentialRef: "env:GITHUB_TOKEN",
+      generation: fixture.scope.authorityGeneration!,
+      version: 0,
+      state: "active",
+    }, "recovery-during-dispatch", 10);
+    releaseDispatch();
+    const settled = await publishing.then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (reason: unknown) => ({ status: "rejected" as const, reason }),
+    );
+    assert.equal(claims.length, 0);
+    assert.equal(settled.status, "fulfilled");
+  });
+
+  test("Recovery can claim a crashed dispatch after both the Run lease and deadline expire", async () => {
+    const fixture = await createRunLinkedBatch("expired-dispatch-recovery");
+    const operationId = fixture.batch.operations[0]!.businessOperationId;
+    const prepared = await operationStore.prepareAndClaim({
+      ...buildPublicationIdentity(fixture.batch.operations[0]!.request),
+      executionLease: fixture.lease,
+    });
+    assert.equal(prepared.action, "dispatch");
+    const schedule = new PgPublicationRecoverySchedule(appDb);
+    const binding = {
+      id: fixture.scope.integrationId,
+      tenantId: fixture.scope.tenantId,
+      platform: fixture.scope.platform,
+      origin: fixture.scope.origin,
+      repository: fixture.scope.repository,
+      providerRepositoryId: 1,
+      providerActorId: 1,
+      credentialRef: "env:GITHUB_TOKEN",
+      generation: fixture.scope.authorityGeneration!,
+      version: 0,
+      state: "active" as const,
+    };
+    assert.equal((await schedule.claim(binding, "recovery-before-expiry", 10)).length, 0);
+
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs
+       SET lease_expires_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND id=$2`,
+      [fixture.lease.tenantId, fixture.lease.runId],
+    );
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET next_reconcile_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.scope.tenantId, operationId],
+    );
+    const claims = await schedule.claim(binding, "recovery-after-expiry", 10);
+    assert.deepEqual(claims.map(({ businessOperationId }) => businessOperationId), [operationId]);
+  });
+
+  test("a stale lease snapshot cannot shorten the provider dispatch deadline", async () => {
+    const fixture = await createRunLinkedBatch("stale-lease-provider-deadline");
+    const operationId = fixture.batch.operations[0]!.businessOperationId;
+    const staleLease = {
+      ...fixture.lease,
+      leaseExpiresAt: new Date(Date.now() - 1_000).toISOString(),
+    };
+    const prepared = await operationStore.prepareAndClaim({
+      ...buildPublicationIdentity(fixture.batch.operations[0]!.request),
+      executionLease: staleLease,
+      reconciliationGraceMs: 60_000,
+    });
+    assert.equal(prepared.action, "dispatch");
+    const deadline = await adminPool.query<{ protected: boolean }>(
+      `SELECT next_reconcile_at > now()+interval '30 seconds' AS protected
+       FROM pr_agent_harness.repository_operations
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.scope.tenantId, operationId],
+    );
+    assert.equal(deadline.rows[0]?.protected, true);
+    await adminPool.query(
+      `UPDATE pr_agent_harness.agent_runs
+       SET lease_expires_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND id=$2`,
+      [fixture.lease.tenantId, fixture.lease.runId],
+    );
+
+    let reconciliationReads = 0;
+    const adapter = {
+      reconciliationGraceMs: 60_000,
+      dispatch: async () => ({ id: "must-not-dispatch" }),
+      find: async () => {
+        reconciliationReads += 1;
+        return null;
+      },
+    };
+    const service = new PublicationService(operationStore);
+    await assert.rejects(
+      service.reconcileOperation(fixture.scope.tenantId, operationId, adapter),
+      PendingPublicationError,
+    );
+    const batch = await new PublicationBatchCoordinator(batchStore, service).execute(
+      fixture.scope.tenantId,
+      fixture.batch.id,
+      async () => adapter,
+    );
+    assert.equal(batch.status, "waiting_reconciliation");
+    const schedule = new PgPublicationRecoverySchedule(appDb);
+    const claims = await schedule.claim({
+      id: fixture.scope.integrationId,
+      tenantId: fixture.scope.tenantId,
+      platform: fixture.scope.platform,
+      origin: fixture.scope.origin,
+      repository: fixture.scope.repository,
+      providerRepositoryId: 1,
+      providerActorId: 1,
+      credentialRef: "env:GITHUB_TOKEN",
+      generation: fixture.scope.authorityGeneration!,
+      version: 0,
+      state: "active",
+    }, "recovery-before-provider-deadline", 10);
+    assert.equal(claims.length, 0);
+    assert.equal(reconciliationReads, 0);
+  });
+
+  test("an exhausted recovery claim cannot manual-review an active Run dispatch", async () => {
+    const fixture = await createRunLinkedBatch("active-run-exhausted-recovery");
+    const operationId = fixture.batch.operations[0]!.businessOperationId;
+    const prepared = await operationStore.prepareAndClaim({
+      ...buildPublicationIdentity(fixture.batch.operations[0]!.request),
+      executionLease: fixture.lease,
+    });
+    assert.equal(prepared.action, "dispatch");
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET reconcile_attempt_count=5,reconcile_claim_owner='crashed-recovery',
+           reconcile_claim_expires_at=now()-interval '1 second',
+           next_reconcile_at=now()-interval '1 second'
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.scope.tenantId, operationId],
+    );
+    const schedule = new PgPublicationRecoverySchedule(appDb, { maxAttempts: 5 });
+    const claims = await schedule.claim({
+      id: fixture.scope.integrationId,
+      tenantId: fixture.scope.tenantId,
+      platform: fixture.scope.platform,
+      origin: fixture.scope.origin,
+      repository: fixture.scope.repository,
+      providerRepositoryId: 1,
+      providerActorId: 1,
+      credentialRef: "env:GITHUB_TOKEN",
+      generation: fixture.scope.authorityGeneration!,
+      version: 0,
+      state: "active",
+    }, "recovery-exhausted-live-run", 10);
+    assert.equal(claims.length, 0);
+    const operation = await operationStore.get(fixture.scope.tenantId, operationId);
+    assert.equal(operation?.status, "in_flight");
+  });
+
+  test("unknown operation remains reconcilable while its Run lease is live", async () => {
+    const fixture = await createRunLinkedBatch("active-run-unknown");
+    const operationId = fixture.batch.operations[0]!.businessOperationId;
+    await adminPool.query(
+      `UPDATE pr_agent_harness.repository_operations
+       SET status='unknown',attempt_count=1,dispatched_at=now(),
+           last_error_code='response_lost',version=version+1
+       WHERE tenant_id=$1 AND business_operation_id=$2`,
+      [fixture.scope.tenantId, operationId],
+    );
+    let reconciliationReads = 0;
+    const result = await new PublicationBatchCoordinator(
+      batchStore,
+      new PublicationService(operationStore),
+    ).execute(fixture.scope.tenantId, fixture.batch.id, async () => ({
+      dispatch: async () => ({ id: "must-not-dispatch" }),
+      find: async () => {
+        reconciliationReads += 1;
+        return { id: "active-run-reconciled" };
+      },
+    }));
+    assert.equal(result.status, "succeeded");
+    assert.equal(reconciliationReads, 1);
+  });
+
+  test("attaching a batch waits on operations before taking the batch lock", async () => {
+    const fixture = await createRunLinkedBatch("attach-lock-order");
+    const operationId = fixture.batch.operations[0]!.businessOperationId;
+    const blocker = await adminPool.connect();
+    const probe = await adminPool.connect();
+    let releaseBlocker = true;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `SELECT business_operation_id
+         FROM pr_agent_harness.repository_operations
+         WHERE tenant_id=$1 AND business_operation_id=$2
+         FOR UPDATE`,
+        [fixture.scope.tenantId, operationId],
+      );
+      const attaching = batchStore.attachExistingBatchToRun(fixture.lease, fixture.batch.id);
+      let blocked = false;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const activity = await probe.query<{ waiting: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_stat_activity
+             WHERE datname=current_database() AND wait_event_type='Lock'
+               AND query LIKE '%FOR UPDATE OF ro%'
+           ) AS waiting`,
+        );
+        if (activity.rows[0]?.waiting) {
+          blocked = true;
+          break;
+        }
+        await delay(10);
+      }
+      assert.equal(blocked, true, "attach did not reach the operation lock barrier");
+
+      await probe.query("BEGIN");
+      await probe.query(
+        `SELECT id FROM pr_agent_harness.publication_batches
+         WHERE tenant_id=$1 AND id=$2 FOR UPDATE NOWAIT`,
+        [fixture.scope.tenantId, fixture.batch.id],
+      );
+      await probe.query("ROLLBACK");
+      await blocker.query("COMMIT");
+      releaseBlocker = false;
+      assert.equal((await attaching).id, fixture.batch.id);
+    } finally {
+      if (releaseBlocker) await blocker.query("ROLLBACK").catch(() => undefined);
+      await probe.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      probe.release();
+    }
+  });
+
+  test("provider grace starts after a blocked claim acquires its final lock", async () => {
+    const { scope } = await createScope("claim-lock-wait-deadline");
+    const batch = await batchStore.freeze({
+      scope,
+      sourceKey: "webhook:claim-lock-wait-deadline",
+      sourceHash: hash("claim-lock-wait-deadline"),
+      operations: [{ slot: "summary", payload: { body: "lock-wait" } }],
+    });
+    const input = {
+      ...buildPublicationIdentity(batch.operations[0]!.request),
+      reconciliationGraceMs: 1_000,
+    };
+    const blocker = await adminPool.connect();
+    const probe = await adminPool.connect();
+    let claiming: ReturnType<PgPublicationStore["prepareAndClaim"]> | undefined;
+    let releaseBlocker = true;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `SELECT active_business_operation_id
+         FROM pr_agent_harness.publication_slots
+         WHERE tenant_id=$1 AND integration_id=$2 AND target=$3 AND publication_slot=$4
+         FOR UPDATE`,
+        [scope.tenantId, scope.integrationId, scope.target, input.slot],
+      );
+      claiming = operationStore.prepareAndClaim(input);
+      let blocked = false;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const activity = await probe.query<{ waiting: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_stat_activity
+             WHERE datname=current_database() AND wait_event_type='Lock'
+               AND query LIKE '%publication_slots%'
+           ) AS waiting`,
+        );
+        if (activity.rows[0]?.waiting) {
+          blocked = true;
+          break;
+        }
+        await delay(10);
+      }
+      assert.equal(blocked, true, "claim did not reach the publication-slot lock barrier");
+      await delay(1_200);
+      await blocker.query("COMMIT");
+      releaseBlocker = false;
+      assert.equal((await claiming).action, "dispatch");
+      const deadline = await probe.query<{ protected: boolean }>(
+        `SELECT next_reconcile_at > clock_timestamp() AS protected
+         FROM pr_agent_harness.repository_operations
+         WHERE tenant_id=$1 AND business_operation_id=$2`,
+        [scope.tenantId, input.businessOperationId],
+      );
+      assert.equal(deadline.rows[0]?.protected, true);
+      assert.equal((await operationStore.prepareAndClaim(input)).action, "pending");
+    } finally {
+      if (releaseBlocker) await blocker.query("ROLLBACK").catch(() => undefined);
+      await claiming?.catch(() => undefined);
+      blocker.release();
+      probe.release();
+    }
   });
 
   test("draining blocks a new freeze but preserves tenant-scoped load and resolution", async () => {

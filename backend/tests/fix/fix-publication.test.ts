@@ -3,7 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 
 import type { PublicationBinding } from "../../src/agent-runtime/authority/publication-authority.js";
-import type { PublicationOperation } from "../../src/agent-runtime/publication/publication.js";
+import { PublicationPreflightError, type PublicationOperation } from "../../src/agent-runtime/publication/publication.js";
 import type { FixProposal, VerificationResult } from "../../src/fix/contracts.js";
 import { createFixPublicationAdapter } from "../../src/fix/publication/provider-adapter.js";
 import { buildFixPublicationPlan } from "../../src/fix/publication/plan.js";
@@ -55,14 +55,80 @@ test("human relevance receipt can qualify technically passing suggestion-only ve
   assert.match(plan.intent.relevanceAttestationHash, /^[a-f0-9]{64}$/);
 });
 
+test("fix publication grace follows the bounded reads for each frozen change set", () => {
+  const binding = githubBinding();
+  const plan = buildFixPublicationPlan(proposal, { platform: "github", repository: proposal.repository,
+    number: 42, headBranch: "feature/math", headSha }, files, verification, verification.relevanceAttestation!);
+  const deadlines = plan.operations.map((planned) => createFixPublicationAdapter({
+    binding, token: "fixture", operation: makeOperation(binding, planned),
+    verifyCredentialIdentity: async () => ({ actorId: 77, kind: "user-token" }),
+  }).reconciliationGraceMs);
+  assert.deepEqual(deadlines, [50_000, 80_000, 120_000]);
+});
+
+test("fix dispatch requires a matching successful preflight and performs zero writes otherwise", async () => {
+  const binding = githubBinding();
+  const plan = buildFixPublicationPlan(proposal, { platform: "github", repository: proposal.repository,
+    number: 42, headBranch: "feature/math", headSha }, files, verification, verification.relevanceAttestation!);
+  const operation = makeOperation(binding, plan.operations[0]!);
+  let identityChecks = 0;
+  let writes = 0;
+  const adapter = createFixPublicationAdapter({
+    binding,
+    token: "fixture",
+    operation,
+    verifyCredentialIdentity: async () => {
+      identityChecks += 1;
+      return { actorId: 77, kind: "user-token" };
+    },
+    fetchImpl: async (_input, init) => {
+      if (init?.method) writes += 1;
+      return Response.json({
+        head: { sha: headSha, ref: "feature/math", repo: { id: 9001, full_name: proposal.repository } },
+        base: { repo: { id: 9001 } },
+      });
+    },
+  });
+  await assert.rejects(
+    adapter.dispatch(operation.marker, operation.payload!, operation),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "fix_credential_identity_not_preflighted",
+  );
+  assert.equal(writes, 0);
+
+  await adapter.preflight?.(operation.marker, operation.payload!);
+  await assert.rejects(
+    adapter.dispatch(operation.marker, { ...operation.payload!, branchName: "other" }, operation),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "fix_dispatch_preflight_mismatch",
+  );
+  assert.equal(writes, 0);
+  assert.equal(identityChecks, 1);
+
+  await assert.rejects(
+    adapter.preflight?.(operation.marker, { ...operation.payload!, repository: "acme/other" }),
+    PublicationPreflightError,
+  );
+  await assert.rejects(
+    adapter.dispatch(operation.marker, operation.payload!, operation),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "fix_credential_identity_not_preflighted",
+  );
+  assert.equal(writes, 0);
+});
+
 test("GitHub fix commit uses one GraphQL mutation with expected head and base64 additions", async () => {
   const binding = githubBinding();
   const plan = buildFixPublicationPlan(proposal, { platform: "github", repository: proposal.repository,
     number: 42, headBranch: "feature/math", headSha }, files, verification, verification.relevanceAttestation!);
   const operation = makeOperation(binding, plan.operations[1]!);
   const writes: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let identityChecks = 0;
   const adapter = createFixPublicationAdapter({ binding, token: "test-token", operation,
-    verifyCredentialIdentity: async () => ({ actorId: 77, kind: "user-token" }),
+    verifyCredentialIdentity: async () => {
+      identityChecks += 1;
+      return { actorId: 77, kind: "user-token" };
+    },
     fetchImpl: async (input, init) => {
       const url = String(input);
       if ((init?.method ?? "GET") === "GET" && url.endsWith("/repos/acme/widgets/pulls/42")) {
@@ -81,11 +147,13 @@ test("GitHub fix commit uses one GraphQL mutation with expected head and base64 
       return Response.json({ data: { createCommitOnBranch: { commit: { oid: "c".repeat(40), message: "ok" }, ref: { name: plan.branchName } } } });
     },
   });
+  await adapter.preflight?.(operation.marker, operation.payload!);
   const result = await adapter.dispatch(operation.marker, operation.payload!, operation);
   assert.equal(result.id, "c".repeat(40)); assert.equal(writes.length, 1); assert.equal(writes[0]!.url, "https://api.github.test/graphql");
   const variables = writes[0]!.body.variables as { input: { expectedHeadOid: string; branch: { refName: string }; fileChanges: { additions: unknown[] } } };
   assert.equal(variables.input.expectedHeadOid, headSha); assert.equal(variables.input.branch.refName, plan.branchName);
   assert.equal(variables.input.fileChanges.additions.length, 2);
+  assert.equal(identityChecks, 1);
 });
 
 test("GitLab publication remains suggestion-only without conditional branch creation", () => {
@@ -103,7 +171,7 @@ test("provider preflight rejects a fork before a mutation", async () => {
       if (init?.method) writes += 1;
       return Response.json({ head: { sha: headSha, ref: "feature/math", repo: { id: 123, full_name: "fork/widgets" } }, base: { repo: { id: 9001 } } });
     } });
-  await assert.rejects(adapter.dispatch(operation.marker, operation.payload!, operation), /same_repository/);
+  await assert.rejects(adapter.preflight?.(operation.marker, operation.payload!), /same_repository/);
   assert.equal(writes, 0);
 });
 
@@ -140,6 +208,7 @@ test("GitHub successful HTTP with wrong branch SHA remains indeterminate after e
       if (String(input).includes("/git/ref/")) return Response.json({ref:`refs/heads/${plan.branchName}`,object:{sha:"d".repeat(40)}});
       return Response.json({head:{sha:headSha,ref:"feature/math",repo:{id:9001,full_name:proposal.repository}},base:{repo:{id:9001}}});
     }});
+  await adapter.preflight?.(operation.marker, operation.payload!);
   await assert.rejects(adapter.dispatch(operation.marker,operation.payload!,operation),/lookup|indeterminate/);
   assert.equal(writes,1);
 });

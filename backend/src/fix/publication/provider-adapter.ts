@@ -6,6 +6,7 @@ import {
   type PublicationAdapter, type PublicationOperation, type PublicationPayload, type PublicationRemoteResult,
 } from "../../agent-runtime/publication/publication.js";
 import { assertPublicationWriteAllowed } from "../../agent-runtime/authority/write-boundary.js";
+import { canonicalJson } from "../../agent-runtime/versions.js";
 import type { GitHubCredentialIdentityVerifier } from "../../integrations/github/publication/contracts.js";
 
 interface Change { path: string; action: "create" | "update"; contentBase64: string; contentSha256: string }
@@ -13,6 +14,10 @@ interface FixTarget {
   platform: "github" | "gitlab"; repository: string; number: number; originalHeadBranch: string;
   originalHeadSha: string; branchName: string; proposalHash: string;
 }
+
+const FIX_READ_TIMEOUT_MS = 10_000;
+const FIX_WRITE_TIMEOUT_MS = 15_000;
+const FIX_DISPATCH_SAFETY_MS = 5_000;
 
 export function createFixPublicationAdapter(params: {
   binding: PublicationBinding;
@@ -24,12 +29,46 @@ export function createFixPublicationAdapter(params: {
   if ((params.operation.operationType ?? "publication") === "publication") throw new Error("fix adapter requires a fix operation");
   if (params.binding.platform === "gitlab") throw new Error("GitLab fix publication is disabled because conditional branch creation is unavailable");
   const request = params.fetchImpl ?? fetch;
+  let dispatchPreflight: { marker: string; operationId: string; payloadHash: string } | undefined;
+  const preflight = async (marker: string, payload: PublicationPayload): Promise<void> => {
+    dispatchPreflight = undefined;
+    const payloadHash = sha256(canonicalJson(payload));
+    if (!params.operation.payload
+        || marker !== params.operation.marker
+        || payloadHash !== sha256(canonicalJson(params.operation.payload))) {
+      throw new PublicationPreflightError(
+        params.operation.businessOperationId,
+        "fix_preflight_frozen_intent_mismatch",
+      );
+    }
+    await verifyPreflight(params, request, payload, true);
+    dispatchPreflight = {
+      marker,
+      operationId: params.operation.businessOperationId,
+      payloadHash,
+    };
+  };
   return {
-    preflight: (_marker, payload) => verifyPreflight(params, request, payload),
+    reconciliationGraceMs: fixReconciliationGraceMs(params.operation),
+    preflight,
     currentRevision: async () => (await readOriginal(params, request, params.operation.payload ?? {})).originalHeadSha,
     dispatch: async (marker, payload, operation) => {
+      if (!dispatchPreflight) {
+        throw new PublicationPreflightError(
+          operation.businessOperationId,
+          "fix_credential_identity_not_preflighted",
+        );
+      }
+      if (dispatchPreflight.operationId !== operation.businessOperationId
+          || dispatchPreflight.marker !== marker
+          || dispatchPreflight.payloadHash !== sha256(canonicalJson(payload))) {
+        throw new PublicationPreflightError(
+          operation.businessOperationId,
+          "fix_dispatch_preflight_mismatch",
+        );
+      }
       assertPublicationWriteAllowed(params.binding.platform);
-      await verifyPreflight(params, request, payload);
+      await verifyPreflight(params, request, payload, false);
       const result = await dispatchGitHub(params, request, marker, payload, operation);
       const verified = await findGitHub(params, request, marker, payload, operation);
       if (!verified || String(verified.id) !== String(result.id)) throw new Error("fix provider 2xx postcondition is unverified");
@@ -37,7 +76,7 @@ export function createFixPublicationAdapter(params: {
     },
     find: async (marker, payload, operation) => {
       try {
-        await verifyPreflight(params, request, payload);
+        await preflight(marker, payload);
         return await findGitHub(params, request, marker, payload, operation);
       } catch (cause) {
         if (cause instanceof PublicationLookupIndeterminateError) throw cause;
@@ -48,7 +87,12 @@ export function createFixPublicationAdapter(params: {
   };
 }
 
-async function verifyPreflight(params: Parameters<typeof createFixPublicationAdapter>[0], request: typeof fetch, payload: PublicationPayload): Promise<void> {
+async function verifyPreflight(
+  params: Parameters<typeof createFixPublicationAdapter>[0],
+  request: typeof fetch,
+  payload: PublicationPayload,
+  verifyIdentity: boolean,
+): Promise<void> {
   const target = readTarget(payload);
   const id = params.operation.businessOperationId;
   const expectedKind = `${params.binding.platform}-${params.operation.operationType?.replaceAll("_", "-")}`;
@@ -60,7 +104,7 @@ async function verifyPreflight(params: Parameters<typeof createFixPublicationAda
       || params.operation.scope.authorityGeneration !== params.binding.generation) {
     throw new PublicationPreflightError(id, "fix_binding_or_scope_mismatch");
   }
-  if (params.binding.platform === "github") {
+  if (verifyIdentity && params.binding.platform === "github") {
     const identity = await params.verifyCredentialIdentity?.();
     if (!identity || identity.actorId !== params.binding.providerActorId) throw new PublicationPreflightError(id, "github_credential_actor_mismatch");
   }
@@ -191,12 +235,12 @@ async function verifyGitHubCommit(params: Parameters<typeof createFixPublication
 }
 
 async function json(params: Parameters<typeof createFixPublicationAdapter>[0], request: typeof fetch, url: string): Promise<unknown> {
-  const response = await request(url, { headers: headers(params), redirect: "error", signal: AbortSignal.timeout(10_000) });
+  const response = await request(url, { headers: headers(params), redirect: "error", signal: AbortSignal.timeout(FIX_READ_TIMEOUT_MS) });
   if (!response.ok) throw new PublicationPreflightError(params.operation.businessOperationId, `fix_provider_read_http_${response.status}`);
   return readJson(response);
 }
 async function optionalJson(params: Parameters<typeof createFixPublicationAdapter>[0], request: typeof fetch, url: string): Promise<unknown | null> {
-  const response = await request(url, { headers: headers(params), redirect: "error", signal: AbortSignal.timeout(10_000) });
+  const response = await request(url, { headers: headers(params), redirect: "error", signal: AbortSignal.timeout(FIX_READ_TIMEOUT_MS) });
   if (response.status === 404) return null;
   if (!response.ok) throw new PublicationLookupIndeterminateError(`fix_provider_lookup_http_${response.status}`);
   return readJson(response);
@@ -204,7 +248,7 @@ async function optionalJson(params: Parameters<typeof createFixPublicationAdapte
 async function writeJson(params: Parameters<typeof createFixPublicationAdapter>[0], request: typeof fetch, url: string, method: "POST",
   body: unknown, operation: PublicationOperation): Promise<unknown> {
   assertPublicationWriteAllowed(params.binding.platform);
-  const response = await request(url, { method, headers: { ...headers(params), "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(15_000) });
+  const response = await request(url, { method, headers: { ...headers(params), "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(FIX_WRITE_TIMEOUT_MS) });
   if (!response.ok) {
     if ([400, 401, 403, 404, 409, 410, 422].includes(response.status)) throw new PublicationDefiniteFailureError(operation.businessOperationId, `fix_provider_http_${response.status}`, response.status);
     throw new Error(`fix provider write returned ${response.status}`);
@@ -248,6 +292,19 @@ function readChanges(payload: PublicationPayload): Change[] {
     const action = item.action; if (action !== "create" && action !== "update") throw new Error("invalid fix change action");
     return { path: requiredText(item.path), action, contentBase64: requiredText(item.contentBase64), contentSha256: requiredText(item.contentSha256) };
   });
+}
+function fixReconciliationGraceMs(operation: PublicationOperation): number {
+  const changeCount = operation.operationType === "fix_branch"
+    ? 0
+    : readChanges(operation.payload ?? {}).length;
+  // Includes PublicationService.currentRevision after dispatch. Draft PR verification
+  // reads every changed file both before and after its single write.
+  const readRequests = operation.operationType === "fix_branch"
+    ? 3
+    : operation.operationType === "fix_commit"
+      ? 4 + changeCount
+      : 6 + 2 * changeCount;
+  return readRequests * FIX_READ_TIMEOUT_MS + FIX_WRITE_TIMEOUT_MS + FIX_DISPATCH_SAFETY_MS;
 }
 function splitRepository(value: string): [string, string] { const parts = value.split("/"); if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error("invalid GitHub repository"); return [parts[0], parts[1]]; }
 function requiredText(value: unknown): string { if (typeof value !== "string" || !value) throw new Error("required text missing"); return value; }

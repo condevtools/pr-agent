@@ -15,6 +15,7 @@ import { gitLabApiRequest } from "../api/http-client.js";
 import type { PublicationAdapterFactory, PublicationBatchCoordinator, PublicationBatchStore } from "../../../agent-runtime/publication/batches.js";
 import type { PublicationBinding } from "../../../agent-runtime/authority/publication-authority.js";
 import { isDurablePublicationEnabled } from "../../../agent-runtime/publication/mode.js";
+import { gitLabPublicationReconciliationGraceMs } from "../../../core/http/retry-options.js";
 
 const PAGE_SIZE = 100;
 const PAGE_CAP = 20;
@@ -118,6 +119,7 @@ async function resolveTarget(runtime: GitLabPublicationRuntime, token: string, t
 
 function makeAdapter(token: string, expectedBinding?: GitLabPublicationBinding, expectedOperation?: PublicationOperation, initialPayload?: PublicationPayload): PublicationAdapter {
   return {
+    reconciliationGraceMs: gitLabPublicationReconciliationGraceMs(),
     preflight: async (_marker, payload) => {
       const target = readTarget(payload);
       if (expectedOperation && expectedOperation.scope.target !== String(target.mrId)) throw new PublicationPreflightError(expectedOperation.businessOperationId, "gitlab_operation_target_mismatch");

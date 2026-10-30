@@ -12,6 +12,8 @@ import {
 import { buildManagedCommentBody, buildManagedCommentMarker } from "../../../review/rendering/managed-comments.js";
 import { GitHubRestApiError } from "../api/http-client.js";
 import type { MinimalGitHubOctokit } from "../api/types.js";
+import { githubPublicationReconciliationGraceMs } from "../../../core/http/retry-options.js";
+import { canonicalJson } from "../../../agent-runtime/versions.js";
 
 import { isDurablePublicationEnabled } from "../../../agent-runtime/publication/mode.js";
 
@@ -124,10 +126,32 @@ function makeAdapter(
   initialPayload?: PublicationPayload,
   verifyCredentialIdentity: GitHubCredentialIdentityVerifier = missingIdentityVerifier,
 ): PublicationAdapter {
+  let dispatchPreflight: {
+    identity: GitHubCredentialIdentity;
+    marker: string;
+    operationId?: string;
+    payloadHash: string;
+  } | undefined;
   return {
-    preflight: async (_marker, payload) => {
+    reconciliationGraceMs: githubPublicationReconciliationGraceMs(),
+    preflight: async (marker, payload) => {
+      dispatchPreflight = undefined;
+      const payloadHash = digest(canonicalJson(payload));
+      if (expectedOperation?.payload && (
+        marker !== expectedOperation.marker
+        || payloadHash !== digest(canonicalJson(expectedOperation.payload))
+      )) {
+        throw new PublicationPreflightError(
+          expectedOperation.businessOperationId,
+          "github_preflight_frozen_intent_mismatch",
+        );
+      }
       const target = readTarget(payload);
-      await verifyLiveIdentity(verifyCredentialIdentity, target.providerActorId, expectedOperation?.businessOperationId);
+      const identity = await verifyLiveIdentity(
+        verifyCredentialIdentity,
+        target.providerActorId,
+        expectedOperation?.businessOperationId,
+      );
       if (expectedOperation && expectedOperation.scope.target !== String(target.pullNumber)) {
         throw new PublicationPreflightError(expectedOperation.businessOperationId, "github_operation_target_mismatch");
       }
@@ -138,19 +162,41 @@ function makeAdapter(
       )) throw new PublicationPreflightError(expectedOperation?.businessOperationId ?? "unprepared", "github_binding_payload_mismatch");
       await verifyIdentity(octokit, target, expectedOperation?.businessOperationId);
       await verifyManagedTargetFingerprint(octokit, target, payload, expectedOperation?.businessOperationId);
+      dispatchPreflight = {
+        identity,
+        marker,
+        operationId: expectedOperation?.businessOperationId,
+        payloadHash,
+      };
     },
     currentRevision: (expectedOperation?.payload ?? initialPayload) ? async () => {
       const target = readTarget(expectedOperation?.payload ?? initialPayload ?? {});
       return (await octokit.pulls.get({ owner: target.owner, repo: target.repo, pull_number: target.pullNumber })).data.head.sha;
     } : undefined,
-    dispatch: (marker, payload, operation) => dispatch(octokit, marker, payload, operation, verifyCredentialIdentity),
+    dispatch: (marker, payload, operation) => {
+      if (!dispatchPreflight) {
+        throw new PublicationPreflightError(
+          operation.businessOperationId,
+          "github_credential_identity_not_preflighted",
+        );
+      }
+      if ((dispatchPreflight.operationId !== undefined
+            && dispatchPreflight.operationId !== operation.businessOperationId)
+          || dispatchPreflight.marker !== marker
+          || dispatchPreflight.payloadHash !== digest(canonicalJson(payload))) {
+        throw new PublicationPreflightError(
+          operation.businessOperationId,
+          "github_dispatch_preflight_mismatch",
+        );
+      }
+      return dispatch(octokit, marker, payload, operation, dispatchPreflight.identity);
+    },
     find: (marker, payload, operation) => find(octokit, marker, payload, operation, verifyCredentialIdentity),
   };
 }
 
-async function dispatch(octokit: MinimalGitHubOctokit, marker: string, payload: PublicationPayload, operation: PublicationOperation, verifyCredentialIdentity: GitHubCredentialIdentityVerifier) {
+async function dispatch(octokit: MinimalGitHubOctokit, marker: string, payload: PublicationPayload, operation: PublicationOperation, credentialIdentity: GitHubCredentialIdentity) {
   const target = readTarget(payload);
-  const credentialIdentity = await verifyLiveIdentity(verifyCredentialIdentity, target.providerActorId, operation.businessOperationId);
   const kind = text(payload.kind, "github_payload_kind_missing");
   try {
     if (kind === "github-add-labels") {

@@ -239,16 +239,30 @@ export class PgPublicationRecoverySchedule {
       }>(
         `
           WITH due AS (
-            SELECT business_operation_id
-            FROM pr_agent_harness.repository_operations
-            WHERE tenant_id = $1 AND integration_id = $2
-              AND authority_generation = $3
-              AND status IN ('in_flight', 'unknown')
-              AND reconcile_attempt_count < $7
-              AND (next_reconcile_at IS NULL OR next_reconcile_at <= now())
-              AND (reconcile_claim_expires_at IS NULL OR reconcile_claim_expires_at <= now())
-            ORDER BY COALESCE(next_reconcile_at, '-infinity'::timestamptz),
-                     updated_at, business_operation_id
+            SELECT ro.business_operation_id
+            FROM pr_agent_harness.repository_operations ro
+            WHERE ro.tenant_id = $1 AND ro.integration_id = $2
+              AND ro.authority_generation = $3
+              AND ro.status IN ('in_flight', 'unknown')
+              AND ro.reconcile_attempt_count < $7
+              AND (ro.next_reconcile_at IS NULL OR ro.next_reconcile_at <= now())
+              AND (ro.reconcile_claim_expires_at IS NULL OR ro.reconcile_claim_expires_at <= now())
+              AND (
+                ro.status <> 'in_flight'
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM pr_agent_harness.publication_batch_operations pbo
+                  JOIN pr_agent_harness.run_publication_batches rpb
+                    ON rpb.tenant_id=pbo.tenant_id AND rpb.batch_id=pbo.batch_id
+                  JOIN pr_agent_harness.agent_runs r
+                    ON r.tenant_id=rpb.tenant_id AND r.id=rpb.run_id
+                  WHERE pbo.tenant_id=ro.tenant_id
+                    AND pbo.business_operation_id=ro.business_operation_id
+                    AND r.status='running' AND r.lease_expires_at > now()
+                )
+              )
+            ORDER BY COALESCE(ro.next_reconcile_at, '-infinity'::timestamptz),
+                     ro.updated_at, ro.business_operation_id
             FOR UPDATE SKIP LOCKED
             LIMIT $4
           )
@@ -653,8 +667,8 @@ async function exhaustExpiredRecoveryClaims(
   limit = 100,
 ): Promise<void> {
   const statuses = kind === "reconcile"
-    ? "status IN ('in_flight','unknown')"
-    : "status = 'prepared'";
+    ? "ro.status IN ('in_flight','unknown')"
+    : "ro.status = 'prepared'";
   const reasonCode = kind === "reconcile"
     ? "reconcile_attempts_exhausted"
     : "preflight_attempts_exhausted";
@@ -664,14 +678,31 @@ async function exhaustExpiredRecoveryClaims(
     reconcile_attempt_count: number;
   }>(
     `WITH exhausted AS (
-       SELECT business_operation_id
-       FROM pr_agent_harness.repository_operations
-       WHERE tenant_id=$1 AND integration_id=$2 AND authority_generation=$3
+       SELECT ro.business_operation_id
+       FROM pr_agent_harness.repository_operations ro
+       WHERE ro.tenant_id=$1 AND ro.integration_id=$2 AND ro.authority_generation=$3
          AND ${statuses}
-         AND reconcile_attempt_count >= $4
-         AND (reconcile_claim_expires_at IS NULL OR reconcile_claim_expires_at <= now())
-         AND ($6::text IS NULL OR business_operation_id=$6)
-       ORDER BY updated_at,business_operation_id
+         AND ro.reconcile_attempt_count >= $4
+         AND (ro.reconcile_claim_expires_at IS NULL OR ro.reconcile_claim_expires_at <= now())
+         AND ($6::text IS NULL OR ro.business_operation_id=$6)
+         AND (
+           ro.status <> 'in_flight'
+           OR (
+             (ro.next_reconcile_at IS NULL OR ro.next_reconcile_at <= now())
+             AND NOT EXISTS (
+               SELECT 1
+               FROM pr_agent_harness.publication_batch_operations pbo
+               JOIN pr_agent_harness.run_publication_batches rpb
+                 ON rpb.tenant_id=pbo.tenant_id AND rpb.batch_id=pbo.batch_id
+               JOIN pr_agent_harness.agent_runs r
+                 ON r.tenant_id=rpb.tenant_id AND r.id=rpb.run_id
+               WHERE pbo.tenant_id=ro.tenant_id
+                 AND pbo.business_operation_id=ro.business_operation_id
+                 AND r.status='running' AND r.lease_expires_at > now()
+             )
+           )
+         )
+       ORDER BY ro.updated_at,ro.business_operation_id
        FOR UPDATE SKIP LOCKED
        LIMIT $7
      )

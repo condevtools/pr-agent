@@ -38,11 +38,9 @@ export const LEGACY_PUBLICATION_TESTS = Object.freeze([
   "review/short-term-review-usability.test.ts",
 ]);
 
-// PostgreSQL prototype coverage that still creates generation-0 operations
-// outside a claimed durable write context. Phase 2/5 removes this exception.
-export const LEGACY_PUBLICATION_PG_TESTS = Object.freeze([
-  "agent-runtime/publication.pg.test.ts",
-]);
+// Kept as an explicit inventory until Phase 5 removes the compatibility split.
+// PostgreSQL publication fixtures now all exercise durable authority.
+export const LEGACY_PUBLICATION_PG_TESTS = Object.freeze([]);
 
 export async function discoverTests(root, predicate = isTestFile) {
   const absoluteRoot = resolve(root instanceof URL ? fileURLToPath(root) : root);

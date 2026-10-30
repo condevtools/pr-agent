@@ -208,6 +208,20 @@ export class PublicationBatchStore {
     return this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "update" });
       await assertResumableExecutionAuthority(client, lease);
+      // All paths that touch both resources lock operations before the batch.
+      // Sealed membership is immutable, so validating the batch after these
+      // row locks cannot change which operations belong to it.
+      await client.query(
+        `SELECT ro.business_operation_id
+         FROM pr_agent_harness.publication_batch_operations pbo
+         JOIN pr_agent_harness.repository_operations ro
+           ON ro.tenant_id=pbo.tenant_id
+          AND ro.business_operation_id=pbo.business_operation_id
+         WHERE pbo.tenant_id=$1 AND pbo.batch_id=$2
+         ORDER BY ro.business_operation_id
+         FOR UPDATE OF ro`,
+        [lease.tenantId, batchId],
+      );
       const batch = await client.query<{ operation_set_hash: string }>(
         `SELECT operation_set_hash
          FROM pr_agent_harness.publication_batches
@@ -220,17 +234,6 @@ export class PublicationBatchStore {
       if (!batch.rows[0]?.operation_set_hash) {
         throw new Error("sealed publication batch does not match the executing Run revision");
       }
-      await client.query(
-        `SELECT ro.business_operation_id
-         FROM pr_agent_harness.publication_batch_operations pbo
-         JOIN pr_agent_harness.repository_operations ro
-           ON ro.tenant_id=pbo.tenant_id
-          AND ro.business_operation_id=pbo.business_operation_id
-         WHERE pbo.tenant_id=$1 AND pbo.batch_id=$2
-         ORDER BY ro.business_operation_id
-         FOR UPDATE OF ro`,
-        [lease.tenantId, batchId],
-      );
       await checkpointFrozenBatch(client, lease, batchId);
       const attached = await selectBatch(client, lease.tenantId, batchId);
       if (!attached) throw new Error("attached publication batch disappeared");

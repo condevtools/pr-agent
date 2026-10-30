@@ -6,12 +6,17 @@ import {
   PendingPublicationError,
   PublicationDefiniteFailureError,
   PublicationLookupIndeterminateError,
+  PublicationPreflightError,
   type PublicationOperation,
 } from "../../src/agent-runtime/publication/publication.js";
 import { createGitHubPublicationAdapter } from "../../src/integrations/github/publication/adapter.js";
 import { type GitHubPublicationBinding } from "../../src/integrations/github/publication/contracts.js";
 import type { MinimalGitHubOctokit } from "../../src/integrations/github/api/types.js";
 import { runGitHubReview } from "../../src/review/platforms/github/workflow.js";
+import {
+  prepareGitHubPublicationBatch,
+  publishSecretWarningComment,
+} from "../../src/review/platforms/github/publication.js";
 import { withRunExecutionContext } from "../../src/agent-runtime/execution/run-context.js";
 
 const binding: GitHubPublicationBinding = {
@@ -99,18 +104,76 @@ test("GitHub reconciliation can confirm the frozen comment after head movement a
 test("GitHub known 422 is a definite rejection and is not retried", async () => {
   const operation = issueOperation();
   let writes = 0;
+  let identityChecks = 0;
   const octokit = octokitFixture({ comments: [] });
   octokit.issues.createComment = async () => {
     writes += 1;
     throw Object.assign(new Error("validation failed"), { status: 422 });
   };
-  const adapter = createGitHubPublicationAdapter({ binding, octokit, operation, verifyCredentialIdentity: verifiedActor });
+  const adapter = createGitHubPublicationAdapter({
+    binding,
+    octokit,
+    operation,
+    verifyCredentialIdentity: async () => {
+      identityChecks += 1;
+      return verifiedActor();
+    },
+  });
 
+  await adapter.preflight?.(operation.marker, operation.payload!);
   await assert.rejects(
     adapter.dispatch(operation.marker, operation.payload!, operation),
     (error: unknown) => error instanceof PublicationDefiniteFailureError && error.status === 422,
   );
   assert.equal(writes, 1);
+  assert.equal(identityChecks, 1, "dispatch must reuse the identity verified before its claim");
+});
+
+test("GitHub dispatch preflight is bound to its frozen operation intent", async () => {
+  const operation = issueOperation();
+  let writes = 0;
+  const octokit = octokitFixture({ comments: [] });
+  octokit.issues.createComment = async () => {
+    writes += 1;
+    return { data: { id: 99 } };
+  };
+  const adapter = createGitHubPublicationAdapter({
+    binding,
+    octokit,
+    operation,
+    verifyCredentialIdentity: verifiedActor,
+  });
+  assert.throws(
+    () => adapter.dispatch(operation.marker, operation.payload!, operation),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "github_credential_identity_not_preflighted",
+  );
+  await adapter.preflight?.(operation.marker, operation.payload!);
+  assert.throws(
+    () => adapter.dispatch(operation.marker, { ...operation.payload!, body: "different" }, operation),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "github_dispatch_preflight_mismatch",
+  );
+  assert.throws(
+    () => adapter.dispatch(operation.marker, operation.payload!, {
+      ...operation,
+      businessOperationId: "e".repeat(64),
+    }),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "github_dispatch_preflight_mismatch",
+  );
+  assert.equal(writes, 0);
+
+  await assert.rejects(
+    adapter.preflight?.(operation.marker, { ...operation.payload!, providerActorId: 999 }),
+    PublicationPreflightError,
+  );
+  assert.throws(
+    () => adapter.dispatch(operation.marker, operation.payload!, operation),
+    (error: unknown) => error instanceof PublicationPreflightError
+      && error.code === "github_credential_identity_not_preflighted",
+  );
+  assert.equal(writes, 0);
 });
 
 test("additive label reconciliation uses convergent read state without actor attribution", async () => {
@@ -204,6 +267,92 @@ test("existing frozen review batch resumes before context collection or model an
     if (previousNotifyUrl === undefined) delete process.env.NOTIFY_WEBHOOK_URL;
     else process.env.NOTIFY_WEBHOOK_URL = previousNotifyUrl;
   }
+});
+
+test("durable secret warning survives a retry before batch freeze and deduplicates its slot", async () => {
+  const scope = issueOperation().scope;
+  const frozenInputs: Array<{ operations: Array<{ slot: string; payload: Record<string, unknown> }> }> = [];
+  const runtime = {
+    service: {} as never,
+    scope: {
+      tenantId: scope.tenantId,
+      integrationId: scope.integrationId,
+      platform: "github" as const,
+      origin: binding.origin,
+      repository: binding.repository,
+      authorityGeneration: 1,
+    },
+    binding,
+    batchStore: {
+      findBySource: async () => undefined,
+      freeze: async (input: { operations: Array<{ slot: string; payload: Record<string, unknown> }> }) => {
+        frozenInputs.push(input);
+        return {
+          id: "secret-warning-batch",
+          scope,
+          sourceKey: "github:delivery:secret-warning",
+          sourceHash: "9".repeat(64),
+          status: "pending" as const,
+          operations: [],
+        };
+      },
+    },
+    batchCoordinator: {
+      execute: async () => ({
+        id: "secret-warning-batch",
+        scope,
+        sourceKey: "github:delivery:secret-warning",
+        sourceHash: "9".repeat(64),
+        status: "succeeded" as const,
+        operations: [],
+      }),
+    },
+    createAdapter: async () => ({} as never),
+  };
+  const context = {
+    repo: () => ({ owner: "acme", repo: "widgets" }),
+    octokit: {
+      pulls: { get: async () => ({ data: { id: 909_090, head: { sha: "secret-head" } } }) },
+    },
+    log: { info: () => undefined, error: () => undefined },
+  };
+  const warning = {
+    context: context as never,
+    owner: "acme",
+    repo: "widgets",
+    pullNumber: 909,
+    headSha: "secret-head",
+    findings: [{ path: "src/config.ts", line: 4, kind: "token", sample: "abcd…wxyz" }],
+  };
+
+  const failedAttempt = await prepareGitHubPublicationBatch({
+    runtime: runtime as never,
+    pullNumber: 909,
+    revision: warning.headSha,
+    sourceKey: "github:delivery:secret-warning",
+    sourceHash: "9".repeat(64),
+  });
+  await publishSecretWarningComment({ ...warning, publicationRuntime: failedAttempt.runtime });
+  // Simulate a later workflow failure before finish()/freeze().
+
+  const retry = await prepareGitHubPublicationBatch({
+    runtime: runtime as never,
+    pullNumber: 909,
+    revision: warning.headSha,
+    sourceKey: "github:delivery:secret-warning",
+    sourceHash: "9".repeat(64),
+  });
+  await publishSecretWarningComment({ ...warning, publicationRuntime: retry.runtime });
+  await publishSecretWarningComment({ ...warning, publicationRuntime: retry.runtime });
+  await retry.finish();
+
+  assert.equal(frozenInputs.length, 1);
+  assert.equal(frozenInputs[0]?.operations.length, 1);
+  assert.equal(frozenInputs[0]?.operations[0]?.slot, "secret-warning:secret-head");
+  assert.throws(() => retry.runtime?.planOperation?.({
+    slot: "secret-warning:secret-head",
+    payload: { body: "different" },
+  }), /slot.*different|conflict/i);
 });
 
 test("two-operation review replay reconciles response loss without model rerun or first redispatch", async () => {

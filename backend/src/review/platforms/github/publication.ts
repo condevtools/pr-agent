@@ -1,4 +1,5 @@
 import { assertRunActive, currentRunLease } from "../../../agent-runtime/execution/run-context.js";
+import { canonicalJson } from "../../../agent-runtime/versions.js";
 import { PendingPublicationError, PublicationDefiniteFailureError } from "../../../agent-runtime/publication/publication.js";
 import { isDuplicateRequest, localizeText, resolveUiLocale, type UiLocale } from "#core";
 import {
@@ -52,16 +53,28 @@ export async function prepareGitHubPublicationBatch(params: {
     ));
     return { runtime, resumed: true, finish: async () => undefined };
   }
-  const operations: Array<{ slot: string; payload: Record<string, unknown> }> = [];
-  const collectingRuntime = { ...runtime, planOperation: (operation: { slot: string; payload: Record<string, unknown> }) => operations.push(operation) };
+  const operations = new Map<string, { slot: string; payload: Record<string, unknown> }>();
+  const collectingRuntime = {
+    ...runtime,
+    planOperation: (operation: { slot: string; payload: Record<string, unknown> }) => {
+      const existing = operations.get(operation.slot);
+      if (existing) {
+        if (canonicalJson(existing.payload) !== canonicalJson(operation.payload)) {
+          throw new Error(`publication slot was planned with different payload: ${operation.slot}`);
+        }
+        return;
+      }
+      operations.set(operation.slot, operation);
+    },
+  };
   return {
     runtime: collectingRuntime,
     resumed: false,
     finish: async () => {
-      if (operations.length === 0) throw new Error("durable GitHub review produced no frozen publication operations");
+      if (operations.size === 0) throw new Error("durable GitHub review produced no frozen publication operations");
       const lease = currentRunLease();
       const executionModeGeneration = runtime.binding?.executionModeGeneration ?? 0;
-      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations,
+      const frozen = await runtime.batchStore!.freeze({ scope, sourceKey: params.sourceKey, sourceHash: params.sourceHash, operations: [...operations.values()],
         runLease: lease, executionModeGeneration });
       await assertRunActive();
       assertGitHubBatchSucceeded(await runtime.batchCoordinator!.execute(
@@ -185,7 +198,8 @@ export async function publishSecretWarningComment(params: {
     `${params.pullNumber}`,
     params.headSha,
   ].join(":");
-  if (isDuplicateRequest(dedupeKey, DEFAULT_DEDUPE_TTL_MS)) {
+  if (!params.publicationRuntime?.planOperation
+      && isDuplicateRequest(dedupeKey, DEFAULT_DEDUPE_TTL_MS)) {
     return;
   }
   const locale = resolveUiLocale();

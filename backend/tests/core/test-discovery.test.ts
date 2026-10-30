@@ -99,8 +99,8 @@ test("partitions only the explicit temporary legacy inventory out of durable tes
 });
 
 test("keeps new PostgreSQL tests durable unless explicitly inventoried as an old prototype", () => {
-  assert.deepEqual(LEGACY_PUBLICATION_PG_TESTS, ["agent-runtime/publication.pg.test.ts"]);
-  assert.equal(publicationModeForPostgresTest("agent-runtime/publication.pg.test.ts"), "legacy");
+  assert.deepEqual(LEGACY_PUBLICATION_PG_TESTS, []);
+  assert.equal(publicationModeForPostgresTest("agent-runtime/publication.pg.test.ts"), "postgres");
   assert.equal(publicationModeForPostgresTest("agent-runtime/recovery.pg.test.ts"), "postgres");
   assert.equal(publicationModeForPostgresTest("agent-runtime/new-behavior.pg.test.ts"), "postgres");
 });

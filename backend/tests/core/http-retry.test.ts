@@ -7,6 +7,42 @@ import {
   createHttpLifecycleRuntime,
   fetchWithRetry,
 } from "../../src/core/http/client.ts";
+import {
+  githubPublicationReconciliationGraceMs,
+  gitLabPublicationReconciliationGraceMs,
+} from "../../src/core/http/retry-options.ts";
+
+test("publication reconciliation grace follows configured provider deadlines", () => {
+  const previousGitHub = process.env.GITHUB_HTTP_TIMEOUT_MS;
+  const previousGitLab = process.env.GITLAB_HTTP_TIMEOUT_MS;
+  const previousGitHubRetries = process.env.GITHUB_HTTP_RETRIES;
+  const previousGitLabRetries = process.env.GITLAB_HTTP_RETRIES;
+  const previousGitHubBackoff = process.env.GITHUB_HTTP_RETRY_BACKOFF_MS;
+  const previousGitLabBackoff = process.env.GITLAB_HTTP_RETRY_BACKOFF_MS;
+  process.env.GITHUB_HTTP_TIMEOUT_MS = "7000";
+  process.env.GITLAB_HTTP_TIMEOUT_MS = "11000";
+  process.env.GITHUB_HTTP_RETRIES = "1";
+  process.env.GITLAB_HTTP_RETRIES = "2";
+  process.env.GITHUB_HTTP_RETRY_BACKOFF_MS = "100";
+  process.env.GITLAB_HTTP_RETRY_BACKOFF_MS = "200";
+  try {
+    assert.equal(githubPublicationReconciliationGraceMs(), 52_360);
+    assert.equal(gitLabPublicationReconciliationGraceMs(), 111_160);
+  } finally {
+    if (previousGitHub === undefined) delete process.env.GITHUB_HTTP_TIMEOUT_MS;
+    else process.env.GITHUB_HTTP_TIMEOUT_MS = previousGitHub;
+    if (previousGitLab === undefined) delete process.env.GITLAB_HTTP_TIMEOUT_MS;
+    else process.env.GITLAB_HTTP_TIMEOUT_MS = previousGitLab;
+    if (previousGitHubRetries === undefined) delete process.env.GITHUB_HTTP_RETRIES;
+    else process.env.GITHUB_HTTP_RETRIES = previousGitHubRetries;
+    if (previousGitLabRetries === undefined) delete process.env.GITLAB_HTTP_RETRIES;
+    else process.env.GITLAB_HTTP_RETRIES = previousGitLabRetries;
+    if (previousGitHubBackoff === undefined) delete process.env.GITHUB_HTTP_RETRY_BACKOFF_MS;
+    else process.env.GITHUB_HTTP_RETRY_BACKOFF_MS = previousGitHubBackoff;
+    if (previousGitLabBackoff === undefined) delete process.env.GITLAB_HTTP_RETRY_BACKOFF_MS;
+    else process.env.GITLAB_HTTP_RETRY_BACKOFF_MS = previousGitLabBackoff;
+  }
+});
 
 test("http retry delay grows exponentially by attempt", () => {
   assert.equal(computeRetryDelayMs(0, 400, 0), 400);

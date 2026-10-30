@@ -59,7 +59,8 @@ if (!databaseUrl) {
     );
     await adminPool.query(
       `GRANT SELECT ON pr_agent_harness.publication_batch_operations,
-       pr_agent_harness.run_publication_batches TO ${roleName}`,
+       pr_agent_harness.run_publication_batches,
+       pr_agent_harness.agent_runs TO ${roleName}`,
     );
     await adminPool.query(
       `GRANT SELECT, INSERT, UPDATE ON pr_agent_harness.repository_operations,
