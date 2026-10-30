@@ -1,4 +1,6 @@
-// Legacy writer regression fixtures run only inside the isolated test process.
-// Live entry points independently latch PostgreSQL authority and reject legacy.
 process.env.NODE_ENV = "test";
-process.env.HARNESS_PUBLICATION_MODE = "legacy";
+const publicationMode = process.env.PR_AGENT_TEST_PUBLICATION_MODE ?? "postgres";
+if (publicationMode !== "postgres" && publicationMode !== "legacy") {
+  throw new Error("PR_AGENT_TEST_PUBLICATION_MODE must be postgres or legacy");
+}
+process.env.HARNESS_PUBLICATION_MODE = publicationMode;

@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { discoverTests, isPostgresTestFile, selectTests } from "./test-discovery.mjs";
+import {
+  discoverTests,
+  isPostgresTestFile,
+  LEGACY_PUBLICATION_PG_TESTS,
+  publicationModeForPostgresTest,
+  selectTests,
+} from "./test-discovery.mjs";
 
 const backend = fileURLToPath(new URL("../", import.meta.url));
 const container = `pr-agent-harness-test-${randomUUID().slice(0, 12)}`;
@@ -21,6 +27,9 @@ function docker(args, options = {}) {
 
 try {
   const available = await discoverTests(new URL("../tests/", import.meta.url), isPostgresTestFile);
+  for (const test of LEGACY_PUBLICATION_PG_TESTS) {
+    if (!available.includes(test)) throw new Error(`Legacy PostgreSQL test inventory is stale: ${test}`);
+  }
   const tests = selectTests(available, process.argv.slice(2));
   if (!tests.length) throw new Error("No PostgreSQL tests found");
   docker(["info", "--format", "{{.ServerVersion}}"]);
@@ -43,15 +52,18 @@ try {
   if (!ready) throw new Error("PostgreSQL Docker container did not become ready");
   console.log(`Docker PostgreSQL: ${docker(["exec", container, "postgres", "--version"])}`);
   for (let index = 0; index < tests.length; index += 1) {
+    const publicationMode = publicationModeForPostgresTest(tests[index]);
     const database = `harness_test_${index}_${randomUUID().replaceAll("-", "")}`;
     docker(["exec", container, "createdb", "-U", "postgres", database]);
-    console.log(`Running ${tests[index]} against a fresh Docker-only database`);
+    console.log(
+      `Running ${tests[index]} against a fresh Docker-only database (${publicationMode === "legacy" ? "temporary legacy prototype" : "durable postgres"})`,
+    );
     const result = spawnSync(process.execPath, ["--import", "tsx", "--test", `tests/${tests[index]}`], {
       cwd: backend, stdio: "inherit", timeout: 120_000,
       env: {
         ...process.env,
         NODE_ENV: "test",
-        HARNESS_PUBLICATION_MODE: "legacy",
+        HARNESS_PUBLICATION_MODE: publicationMode,
         HARNESS_TEST_DATABASE_URL: `postgresql://postgres:${password}@127.0.0.1:${port}/${database}`,
       },
     });

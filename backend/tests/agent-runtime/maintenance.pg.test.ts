@@ -218,7 +218,7 @@ if (!databaseUrl) {
       );
       const applying = maintenance.apply({ tenantId, olderThanDays: 30, limit: 1 })
         .finally(() => { maintenanceSettled = true; });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitForBlockedMaintenanceQuery();
       assert.equal(maintenanceSettled, false);
       await reviveClient.query(
         `UPDATE pr_agent_harness.repository_operations
@@ -258,6 +258,23 @@ if (!databaseUrl) {
     assert.equal(after.rows[0]!.content_purged_at, null);
     assert.equal(after.rows[0]!.audit_count, 0);
   });
+
+  async function waitForBlockedMaintenanceQuery(): Promise<void> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const result = await pool.query<{ blocked: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM pg_stat_activity
+           WHERE datname=current_database()
+             AND state='active'
+             AND wait_event_type='Lock'
+             AND query LIKE '%FOR SHARE OF ro%'
+         ) AS blocked`,
+      );
+      if (result.rows[0]?.blocked) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("maintenance did not block on the revived publication operation");
+  }
 
   async function activate(tenant: string, integration: string, repository: string): Promise<void> {
     const store = new RunStore(db);
