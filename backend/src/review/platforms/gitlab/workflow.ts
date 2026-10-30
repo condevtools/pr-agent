@@ -346,9 +346,7 @@ export async function runGitLabReview(
     return { ok: true, message: "ok" };
   } catch (error) {
     const originalError = ensureError(error);
-    const reason = originalError.message;
-
-    logger.error({ error: reason }, "GitLab AI review failed");
+    logger.error({ error: originalError }, "GitLab AI review failed");
     throw originalError;
   }
 }

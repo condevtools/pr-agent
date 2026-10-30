@@ -1,4 +1,4 @@
-import { HttpException, Inject, Injectable, Logger, SetMetadata,
+import { HttpException, Inject, Injectable, SetMetadata,
   type CanActivate, type ExecutionContext, type OnModuleInit } from "@nestjs/common";
 import { METHOD_METADATA } from "@nestjs/common/constants.js";
 import { DiscoveryService, MetadataScanner, Reflector } from "@nestjs/core";
@@ -6,6 +6,7 @@ import type { Request } from "express";
 import { RUN_PERMISSIONS, RunControlError, requireRunPermission, type RunPermission } from "../../agent-runtime/runs/control-contracts.js";
 import { incrementMetricCounter } from "../system/metrics-runtime.js";
 import { RunApiContextService } from "./run-api-context.service.js";
+import { logCore } from "#core";
 
 const ROUTE_ACCESS = Symbol("route-access");
 type AccessPolicy = RunPermission | "public" | "signed-webhook" | "runs:command";
@@ -14,8 +15,6 @@ export const RouteAccess = (policy: AccessPolicy): MethodDecorator => SetMetadat
 
 @Injectable()
 export class RouteAccessGuard implements CanActivate, OnModuleInit {
-  private readonly logger = new Logger(RouteAccessGuard.name);
-
   constructor(
     @Inject(Reflector) private readonly reflector: Reflector,
     @Inject(DiscoveryService) private readonly discovery: DiscoveryService,
@@ -84,7 +83,7 @@ export class RouteAccessGuard implements CanActivate, OnModuleInit {
       controller_method: fields.controllerMethod,
       status: String(fields.status),
     });
-    this.logger.warn(fields);
+    logCore("warn", "route_access.denied", { domainCode: fields.code, ...fields });
   }
 }
 

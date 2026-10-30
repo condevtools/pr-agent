@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { databaseTimingSnapshot } from "../database-timing.js";
 import { ProcessHealthMarker } from "./process-health.js";
 
-export type DurableProcessRole = "worker" | "recovery" | "verifier";
+export type DurableProcessRole = "worker" | "recovery" | "verifier" | "maintenance";
 
 export interface ProcessHeartbeatConfiguration {
   intervalMs: number;
@@ -61,7 +61,7 @@ export class ProcessHeartbeatStore {
                  WHERE h.process_role=requested.process_role
                    AND h.heartbeat_at>clock_timestamp()-($1::double precision*interval '1 millisecond')
                  ORDER BY h.heartbeat_at DESC LIMIT 100) fresh) AS capability_reports
-       FROM unnest(ARRAY['worker','recovery','verifier']::text[]) requested(process_role)`,
+       FROM unnest(ARRAY['worker','recovery','verifier','maintenance']::text[]) requested(process_role)`,
       [staleAfterMs],
     );
     return Object.fromEntries(result.rows.map((row) => [row.process_role, {

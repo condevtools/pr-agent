@@ -1,5 +1,4 @@
-import { parseBooleanEnv, readNumberEnv } from "#core";
-import { probeModelProviderConnectivity, type ModelProviderProbeResult } from "#model";
+import { parseBooleanEnv } from "#core";
 import { incrementMetricCounter } from "./metrics-runtime.js";
 
 export interface WebhookHealthCheck {
@@ -12,7 +11,6 @@ export interface HealthStatus {
   name: string;
   mode: string;
   checks?: {
-    ai: ModelProviderProbeResult;
     webhook?: WebhookHealthCheck;
   };
 }
@@ -42,21 +40,11 @@ export async function buildHealthStatus(params: {
     return base;
   }
 
-  const ai = await probeModelProviderConnectivity({
-    timeoutMs: readNumberEnv("HEALTHCHECK_AI_TIMEOUT_MS", 5_000),
-  });
-
-  const checks: HealthStatus["checks"] = {
-    ai,
-  };
-  if (params.webhook) {
-    checks.webhook = params.webhook;
-  }
-
-  const webhookOk = params.webhook ? params.webhook.configured : true;
+  // Public diagnostics inspect local webhook configuration only. Shared runtime
+  // dependencies are checked by /ready; model credentials belong to Worker.
   return {
     ...base,
-    ok: ai.ok && webhookOk,
-    checks,
+    ok: params.webhook?.configured ?? true,
+    checks: params.webhook ? { webhook: params.webhook } : {},
   };
 }

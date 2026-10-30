@@ -6,6 +6,7 @@ import { z } from "zod";
 import { runNotFound, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 import { RunApiAuthenticator } from "./run-auth.js";
+import { logCore } from "#core";
 
 @Injectable()
 export class RunApiContextService implements OnModuleDestroy {
@@ -15,7 +16,7 @@ export class RunApiContextService implements OnModuleDestroy {
     try { this.authenticator.reload(readPrincipalConfiguration()); }
     catch {
       this.authenticator.reload(undefined);
-      process.emitWarning("Run API credential reload rejected; API credentials disabled");
+      logCore("error", "run_api.credentials_reload_rejected", { domainCode: "RUN_API_DISABLED" });
     }
   };
 

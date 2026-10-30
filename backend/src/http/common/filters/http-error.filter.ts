@@ -4,15 +4,13 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
-  Logger,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 
 import {
   BadWebhookRequestError,
   WebhookAuthError,
-  parseBooleanEnv,
-  readOptionalStringEnv,
+  logCore,
 } from "#core";
 import { incrementMetricCounter } from "../../system/metrics-runtime.js";
 
@@ -25,8 +23,6 @@ interface ResolvedError {
 
 @Catch()
 export class HttpErrorFilter implements ExceptionFilter {
-  private readonly logger = new Logger(HttpErrorFilter.name);
-
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();
     const response = http.getResponse<Response>();
@@ -48,12 +44,8 @@ export class HttpErrorFilter implements ExceptionFilter {
       details: resolved.details,
     };
 
-    this.logger.error(
-      JSON.stringify({
-        ...body,
-        exception: this.buildExceptionLog(exception),
-      }),
-    );
+    logCore("error", "http.request_failed", { domainCode: resolved.type,
+      status: resolved.status, path: body.path, method: body.method, exception });
 
     if (!response.headersSent) {
       response.status(resolved.status).json(body);
@@ -124,20 +116,5 @@ export class HttpErrorFilter implements ExceptionFilter {
     }
 
     return undefined;
-  }
-
-  private buildExceptionLog(exception: unknown): Record<string, unknown> | undefined {
-    if (!(exception instanceof Error)) {
-      return undefined;
-    }
-
-    return {
-      name: exception.name,
-      message: exception.message,
-      stack:
-        parseBooleanEnv(readOptionalStringEnv("EXPOSE_ERROR_STACK"))
-          ? exception.stack
-          : undefined,
-    };
   }
 }

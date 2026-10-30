@@ -38,7 +38,7 @@ const COPY = {
       {
         question: 'How do I debug webhook or runtime problems?',
         answer:
-          'Start with /health, /health?deep=true, /github/health, /gitlab/health, and /metrics. Scoped administrators can inspect verified events and replay them through the provided endpoints.',
+          'Use /health for liveness and /ready for database and worker readiness. Platform health routes report local webhook configuration. Metrics and event replay require scoped administrator credentials.',
       },
     ],
   },
@@ -76,7 +76,7 @@ const COPY = {
       {
         question: '如何排查 webhook 或运行时问题？',
         answer:
-          '先检查 /health、/health?deep=true、/github/health、/gitlab/health 与 /metrics；如果开启了 replay，还可以查看已存储事件并进行回放调试。',
+          '通过 /health 检查进程存活，通过 /ready 检查数据库和 Worker 就绪状态；平台健康接口检查本地 Webhook 配置。查看业务指标及回放事件需要具有对应权限的管理员凭据。',
       },
     ],
   },

@@ -46,6 +46,8 @@ try {
     await delay(500);
   }
   if (!ready) throw new Error("PostgreSQL Docker container did not become ready");
+  docker(["exec", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres",
+    "-c", "CREATE ROLE pr_agent_maintenance LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'maintenance-test-only'"]);
   console.log(`Docker PostgreSQL: ${docker(["exec", container, "postgres", "--version"])}`);
   for (let index = 0; index < tests.length; index += 1) {
     const publicationMode = publicationModeForPostgresTest(tests[index]);

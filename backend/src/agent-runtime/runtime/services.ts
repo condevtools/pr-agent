@@ -7,6 +7,7 @@ import { RuntimeDatabase } from "../postgres/database.js";
 import { PgPublicationStore, PublicationService } from "../publication/publication.js";
 import { PgBusinessStateStore } from "../state/business-state.js";
 import { agentRuntimePoolConfig, type AgentPoolRole } from "./config.js";
+import { logCore } from "#core";
 
 export interface AgentRuntimeServices {
   pool: Pool;
@@ -23,7 +24,7 @@ export interface AgentRuntimeServices {
 
 export function createAgentRuntimeServices(role: AgentPoolRole = "web"): AgentRuntimeServices {
   const pool = new Pool(agentRuntimePoolConfig(process.env, role));
-  pool.on("error", () => process.emitWarning("Harness PostgreSQL idle connection failed"));
+  pool.on("error", (error) => logCore("error", "postgres.idle_connection_failed", { error }));
   const db = new RuntimeDatabase(pool);
   const operationStore = new PgPublicationStore(db);
   const service = new PublicationService(operationStore);

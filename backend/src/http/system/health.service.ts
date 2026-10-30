@@ -1,13 +1,13 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
 import { resolveAgentProcessRole } from "../../agent-runtime/runtime/config.js";
 import { checkRuntimeReadiness, type RuntimeReadinessStatus } from "../../agent-runtime/runtime/readiness.js";
 import { resolveRuntimeCapabilities } from "../../agent-runtime/runtime/capabilities.js";
 import { buildHealthStatus, type HealthStatus } from "./health.js";
+import { logCore } from "#core";
 
 @Injectable()
 export class HealthService {
-  private readonly logger = new Logger(HealthService.name);
   private lastReadinessFailure = "";
   private lastReadinessFailureAt = 0;
 
@@ -38,7 +38,7 @@ export class HealthService {
     if (signature === this.lastReadinessFailure && now - this.lastReadinessFailureAt < 60_000) return;
     this.lastReadinessFailure = signature;
     this.lastReadinessFailureAt = now;
-    this.logger.warn(JSON.stringify({ component: "runtime-readiness",
-      code: "READINESS_CONFIGURATION_FAILED", reason }));
+    logCore("warn", "runtime_readiness.configuration_failed", {
+      domainCode: "READINESS_CONFIGURATION_FAILED", reason });
   }
 }

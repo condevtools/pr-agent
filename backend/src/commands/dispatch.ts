@@ -1,3 +1,5 @@
+import { logCore } from "#core";
+
 export interface CommandDispatchResult {
   ok: boolean;
   message: string;
@@ -32,12 +34,7 @@ export async function dispatchCommandRegistrations(
     try {
       parsed = registration.parse();
     } catch (error) {
-      if (typeof console !== "undefined") {
-        console.warn(
-          `[command-dispatch] parse() threw for command "${registration.name}":`,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+      logCore("warn", "command_dispatch.parse_failed", { command: registration.name, error });
       continue;
     }
     if (typeof parsed === "undefined") {

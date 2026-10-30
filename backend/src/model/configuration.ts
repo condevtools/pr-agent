@@ -1,4 +1,3 @@
-import { readOptionalStringEnv, readStringEnv } from "#core";
 import type { ModelProvider } from "./execution-context.js";
 
 export interface ModelConfiguration {
@@ -6,8 +5,8 @@ export interface ModelConfiguration {
   model: string;
 }
 
-export function resolveModelProvider(): ModelProvider {
-  const raw = readStringEnv("AI_PROVIDER", "openai").toLowerCase();
+export function resolveModelProvider(env: NodeJS.ProcessEnv = process.env): ModelProvider {
+  const raw = (env.AI_PROVIDER?.trim() || "openai").toLowerCase();
   if (raw === "openai") return "openai";
   if (raw === "openai-compatible" || raw === "openai_compatible" || raw === "compatible") {
     return "openai-compatible";
@@ -17,28 +16,29 @@ export function resolveModelProvider(): ModelProvider {
   throw new Error(`Unsupported AI_PROVIDER: ${raw}`);
 }
 
-export function resolveModelName(provider: ModelProvider): string {
-  const genericModel = readOptionalStringEnv("AI_MODEL");
+export function resolveModelName(provider: ModelProvider, env: NodeJS.ProcessEnv = process.env): string {
+  const genericModel = env.AI_MODEL?.trim();
   if (genericModel) return genericModel;
-  if (provider === "openai") return readStringEnv("OPENAI_MODEL", "gpt-4.1-mini");
+  if (provider === "openai") return env.OPENAI_MODEL?.trim() || "gpt-4.1-mini";
   if (provider === "openai-compatible") {
-    return readStringEnv("OPENAI_COMPATIBLE_MODEL", "gpt-4o-mini");
+    return env.OPENAI_COMPATIBLE_MODEL?.trim() || "gpt-4o-mini";
   }
   if (provider === "anthropic") {
-    return readStringEnv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest");
+    return env.ANTHROPIC_MODEL?.trim() || "claude-3-5-haiku-latest";
   }
-  return readStringEnv("GEMINI_MODEL", "gemini-2.0-flash");
+  return env.GEMINI_MODEL?.trim() || "gemini-2.0-flash";
 }
 
-export function resolveModelConfiguration(): ModelConfiguration {
-  const provider = resolveModelProvider();
-  return { provider, model: resolveModelName(provider) };
+export function resolveModelConfiguration(env: NodeJS.ProcessEnv = process.env): ModelConfiguration {
+  const provider = resolveModelProvider(env);
+  return { provider, model: resolveModelName(provider, env) };
 }
 
 export function resolveOpenAIApiKey(
   provider: "openai" | "openai-compatible",
+  env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return provider === "openai-compatible"
-    ? readOptionalStringEnv("OPENAI_COMPATIBLE_API_KEY") ?? readOptionalStringEnv("OPENAI_API_KEY")
-    : readOptionalStringEnv("OPENAI_API_KEY");
+    ? env.OPENAI_COMPATIBLE_API_KEY?.trim() || env.OPENAI_API_KEY?.trim()
+    : env.OPENAI_API_KEY?.trim();
 }

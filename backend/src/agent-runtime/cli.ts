@@ -8,12 +8,14 @@ import { agentRuntimePoolConfig, resolveAgentProcessRole } from "./runtime/confi
 import { checkRuntimeReadiness } from "./runtime/readiness.js";
 import { PublicationAuthorityStore } from "./authority/publication-authority.js";
 import { PublicationControlStore, type PublicationControlInput } from "./publication/control.js";
-import { RuntimeMaintenanceStore } from "./maintenance.js";
 import { RuntimeMetricsStore } from "./metrics.js";
 import { PgEvolutionDatasetMaintenanceStore } from "../evolution/datasets/maintenance.js";
+import { logCore, validateRuntimeEnvironment } from "#core";
 
 const [command, ...args] = process.argv.slice(2);
-const pool = new Pool(agentRuntimePoolConfig());
+const profile = command === "migrate" ? "migrate" : "admin";
+validateRuntimeEnvironment(process.env, profile);
+const pool = new Pool(agentRuntimePoolConfig(process.env, "web", profile));
 const db = new RuntimeDatabase(pool);
 const authority = new PublicationAuthorityStore(db);
 try {
@@ -29,7 +31,7 @@ try {
     if (!role.rows[0] || role.rows[0].rolsuper || role.rows[0].rolbypassrls) {
       throw new Error("Database initialization requires a dedicated NOSUPERUSER NOBYPASSRLS schema owner");
     }
-    for (const name of ["pr_agent_app", "pr_agent_verifier"]) {
+    for (const name of ["pr_agent_app", "pr_agent_verifier", "pr_agent_maintenance"]) {
       const exists = await pool.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [name]);
       if (!exists.rowCount) throw new Error(`Bootstrap PostgreSQL role ${name} before database initialization`);
     }
@@ -87,14 +89,6 @@ try {
       expectedVersion: Number(fields.get("--version")), evidence: fields.get("--evidence")!,
       actor: await administrativeActor(), actorType: "service",
     })));
-  } else if (command === "retention") {
-    const fields = parseFields(args, ["--tenant", "--action"], ["--days", "--limit"]);
-    const action = fields.get("--action");
-    if (action !== "preview" && action !== "apply") throw new Error("Retention action must be preview or apply");
-    const request = { tenantId: fields.get("--tenant")!,
-      olderThanDays: fields.has("--days") ? Number(fields.get("--days")) : undefined,
-      limit: fields.has("--limit") ? Number(fields.get("--limit")) : undefined };
-    console.log(JSON.stringify(await new RuntimeMaintenanceStore(pool)[action](request)));
   } else if (command === "dataset-retire") {
     const fields = parseFields(args, ["--tenant", "--dataset", "--version"]);
     console.log(JSON.stringify(await new PgEvolutionDatasetMaintenanceStore(pool).retire({
@@ -128,11 +122,12 @@ try {
     };
     console.log(JSON.stringify(await new PublicationControlStore(db).apply(commandInput)));
   } else {
-    throw new Error("Usage: harness ready | migrate | bind | configure | capabilities | authority | execution-drain | execution-resume | retention | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
+    throw new Error("Usage: harness ready | migrate | bind | configure | capabilities | authority | execution-drain | execution-resume | dataset-retire | dataset-purge | metrics | inspect | control (see backend/docs/agent-runtime.md)");
   }
 } catch (error) {
-  // Do not dump the Pool/driver error object, which can contain connection credentials.
-  console.error(error instanceof Error ? error.message : "Harness administration failed");
+  logCore("error", "harness_admin.failed", { error });
+  console.error(JSON.stringify({ code: "HARNESS_ADMIN_FAILED",
+    errorType: error instanceof Error ? error.name : "UnknownError" }));
   process.exitCode = 1;
 } finally {
   await pool.end();

@@ -8,6 +8,10 @@ CREATE ROLE pr_agent_app LOGIN PASSWORD :'app_password'
 CREATE ROLE pr_agent_verifier LOGIN PASSWORD :'verifier_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
 
+\getenv maintenance_password HARNESS_MAINTENANCE_PASSWORD
+CREATE ROLE pr_agent_maintenance LOGIN PASSWORD :'maintenance_password'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
 -- The bootstrap superuser stays in PostgreSQL. Application migration containers
 -- receive this schema owner credential, which has no cluster administration power.
 \getenv migration_password HARNESS_MIGRATION_PASSWORD

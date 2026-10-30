@@ -1,20 +1,17 @@
 import {
   Injectable,
-  Logger,
   OnModuleInit,
 } from "@nestjs/common";
 import { HttpAdapterHost } from "@nestjs/core";
 import type { Express, RequestHandler } from "express";
 import { createNodeMiddleware } from "probot";
-import { readOptionalStringEnv } from "#core";
+import { logCore, readOptionalStringEnv } from "#core";
 
 import { app as githubApp } from "../probot-app.js";
 import { getSharedGitHubProbot } from "../../agent-runtime/runtime/credentials.js";
 
 @Injectable()
 export class GithubAppBootstrapService implements OnModuleInit {
-  private readonly logger = new Logger(GithubAppBootstrapService.name);
-
   constructor(private readonly httpAdapterHost: HttpAdapterHost) {}
 
   onModuleInit(): void {
@@ -25,9 +22,7 @@ export class GithubAppBootstrapService implements OnModuleInit {
 
     const expressApp = httpAdapter.getInstance() as Express;
     if (!isGitHubAppEnabled()) {
-      this.logger.warn(
-        "GitHub App mode disabled (missing APP_ID/PRIVATE_KEY/WEBHOOK_SECRET). Plain webhook mode is still available.",
-      );
+      logCore("warn", "github_app.disabled", { domainCode: "GITHUB_APP_CONFIGURATION_MISSING" });
       return;
     }
 
@@ -49,7 +44,7 @@ export class GithubAppBootstrapService implements OnModuleInit {
       );
     };
     expressApp.use(expressMiddleware);
-    this.logger.log("GitHub App webhook mounted at /api/github/webhooks");
+    logCore("info", "github_app.webhook_mounted", { path: "/api/github/webhooks" });
   }
 }
 

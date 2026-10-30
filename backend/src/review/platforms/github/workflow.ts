@@ -25,7 +25,6 @@ import { type GitHubPublicationRuntime } from "../../../integrations/github/publ
 import type { GitHubPullSummary } from "../../../integrations/github/api/types.js";
 import type { GitHubReviewRunParams } from "./contracts.js";
 import { collectGitHubPullRequestContext } from "../../../integrations/github/repository/context.js";
-import { getErrorMessage } from "../../../integrations/github/error.js";
 import {
   inferPullRequestLabels,
   maybeAppendGitHubFilesTruncatedWarning,
@@ -335,11 +334,11 @@ export async function runGitHubReview(
       ttlMs: readNumberEnv("GITHUB_INCREMENTAL_STATE_TTL_MS", DEFAULT_INCREMENTAL_STATE_TTL_MS),
     });
   } catch (error) {
-    const reason = getErrorMessage(error);
+    const originalError = ensureError(error);
     context.log.error(
-      { owner, repo, pullNumber, mode, trigger, error: reason },
+      { owner, repo, pullNumber, mode, trigger, error: originalError },
       "GitHub AI review failed",
     );
-    throw ensureError(error);
+    throw originalError;
   }
 }

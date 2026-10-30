@@ -15,6 +15,7 @@ test("application Compose isolates credentials, process roles, and container pri
     migration: "sentinel-migration-only",
     app: "sentinel-app-only",
     verifier: "sentinel-verifier-only",
+    maintenance: "sentinel-maintenance-only",
   };
   const result = spawnSync("docker",
     ["compose", "--env-file", "/dev/null", "-f", "docker-compose.yml",
@@ -28,14 +29,21 @@ test("application Compose isolates credentials, process roles, and container pri
         HARNESS_MIGRATION_PASSWORD: secrets.migration,
         HARNESS_APP_PASSWORD: secrets.app,
         HARNESS_VERIFIER_PASSWORD: secrets.verifier,
+        HARNESS_MAINTENANCE_PASSWORD: secrets.maintenance,
         APP_ID: "runtime-app-id",
         PRIVATE_KEY: "runtime-inline-private-key",
         WEBHOOK_SECRET: "runtime-webhook-secret",
-        OPENAI_API_KEY: "runtime-openai-key",
+        OPENAI_API_KEY: "sentinel-openai-worker-only",
+        OPENAI_COMPATIBLE_API_KEY: "sentinel-compatible-worker-only",
+        ANTHROPIC_API_KEY: "sentinel-anthropic-worker-only",
+        GEMINI_API_KEY: "sentinel-gemini-worker-only",
+        HARNESS_API_PRINCIPALS_JSON: "sentinel-web-principals-only",
         GITHUB_TOKEN: "runtime-github-token",
         GITLAB_TOKEN: "runtime-gitlab-token",
         GITHUB_APP_PRIVATE_KEY_FILE: "/definitely/missing.pem",
         HTTP_TIMEOUT_MS: "12345",
+        HEALTHCHECK_AI_TIMEOUT_MS: "sentinel-dead-health-timeout",
+        HEALTHCHECK_AI_LIVE_PROBE: "sentinel-dead-health-probe",
         HARNESS_MODEL_PRICING_JSON: '{"version":"runtime-pricing"}',
       }),
     });
@@ -45,20 +53,23 @@ test("application Compose isolates credentials, process roles, and container pri
     user?: string; read_only?: boolean; cap_drop?: string[]; security_opt?: string[];
     volumes?: Array<{ source?: string; target?: string }>; ports?: unknown[];
     secrets?: Array<{ source?: string; target?: string; mode?: string | number }>;
+    command?: string[];
   }> };
   const services = config.services;
-  assert.deepEqual(Object.keys(services).sort(), ["database-init", "postgres", "pr-agent", "recovery", "worker"]);
+  assert.deepEqual(Object.keys(services).sort(),
+    ["database-init", "maintenance", "postgres", "pr-agent", "recovery", "worker"]);
   assert.deepEqual(servicesContaining(services, secrets.bootstrap), ["postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.migration), ["database-init", "postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.app), ["postgres", "pr-agent", "recovery", "worker"]);
   assert.deepEqual(servicesContaining(services, secrets.verifier), ["postgres"]);
+  assert.deepEqual(servicesContaining(services, secrets.maintenance), ["maintenance", "postgres"]);
 
   const app = services["pr-agent"]!.environment!;
   assert.equal(app.APP_ID, "runtime-app-id");
   assert.equal(app.PRIVATE_KEY, "runtime-inline-private-key");
   assert.equal(app.PRIVATE_KEY_PATH, "");
   assert.equal(app.WEBHOOK_SECRET, "runtime-webhook-secret");
-  assert.equal(app.OPENAI_API_KEY, "runtime-openai-key");
+  assert.equal(app.OPENAI_API_KEY, undefined);
   assert.equal(app.GITHUB_TOKEN, "runtime-github-token");
   assert.equal(app.GITLAB_TOKEN, "runtime-gitlab-token");
   assert.equal(app.HTTP_TIMEOUT_MS, "12345");
@@ -68,11 +79,30 @@ test("application Compose isolates credentials, process roles, and container pri
   assert.equal(services["pr-agent"]!.environment!.PR_AGENT_PROCESS_ROLE, "web");
   assert.equal(services.worker!.environment!.PR_AGENT_PROCESS_ROLE, "worker");
   assert.equal(services.recovery!.environment!.PR_AGENT_PROCESS_ROLE, "recovery");
+  assert.equal(services.maintenance!.environment!.PR_AGENT_PROCESS_ROLE, "maintenance");
+  assert.equal(services.maintenance!.environment!.HARNESS_PG_USER, "pr_agent_maintenance");
+  assert.equal(services.maintenance!.environment!.HARNESS_DATABASE_URL, "");
+  assert.deepEqual(services.maintenance!.command, ["node", "dist/agent-runtime/maintenance-process.js"]);
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_MODE, "preview");
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_INTERVAL_MS, "60000");
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_BATCH_LIMIT, "100");
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_CONTENT_DAYS, "30");
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_REPLAY_DAYS, "90");
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_TRACE_DAYS, "400");
+  assert.equal(services.maintenance!.environment!.HARNESS_MAINTENANCE_POOL_MAX, "4");
+  assert.deepEqual(servicesContaining(services, "sentinel-openai-worker-only"), ["worker"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-compatible-worker-only"), ["worker"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-anthropic-worker-only"), ["worker"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-gemini-worker-only"), ["worker"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-web-principals-only"), ["pr-agent"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-dead-health-timeout"), []);
+  assert.deepEqual(servicesContaining(services, "sentinel-dead-health-probe"), []);
   assert.ok((services["pr-agent"]!.ports?.length ?? 0) > 0);
   assert.equal(services.worker!.ports, undefined);
   assert.equal(services.recovery!.ports, undefined);
+  assert.equal(services.maintenance!.ports, undefined);
 
-  for (const name of ["pr-agent", "worker", "recovery", "database-init"]) {
+  for (const name of ["pr-agent", "worker", "recovery", "maintenance", "database-init"]) {
     const service = services[name]!;
     assert.equal("env_file" in service, false);
     assert.equal(service.user, "10001:10001");
@@ -83,6 +113,11 @@ test("application Compose isolates credentials, process roles, and container pri
     assert.equal(JSON.stringify(service.volumes ?? []).includes("snapshot"), false);
   }
   for (const name of ["pr-agent", "worker", "recovery"]) assert.equal(services[name]!.secrets, undefined);
+  const maintenance = JSON.stringify(services.maintenance!.environment ?? {});
+  for (const forbidden of ["APP_ID", "PRIVATE_KEY", "WEBHOOK_SECRET", "OPENAI_API_KEY", "GITHUB_TOKEN",
+    "GITLAB_TOKEN", "HARNESS_VERIFIER_PASSWORD", "FIX_POLICY_REGISTRY_JSON"]) {
+    assert.equal(maintenance.includes(forbidden), false);
+  }
 });
 
 test("optional PEM overlay clears inline key and mounts the fixed-UID-readable secret path", {
@@ -94,7 +129,8 @@ test("optional PEM overlay clears inline key and mounts the fixed-UID-readable s
     env: compactEnvironment({ PATH: process.env.PATH, HOME: process.env.HOME,
       DOCKER_CONFIG: process.env.DOCKER_CONFIG, HARNESS_BOOTSTRAP_PASSWORD: "bootstrap",
       HARNESS_MIGRATION_PASSWORD: "migration", HARNESS_APP_PASSWORD: "app",
-      HARNESS_VERIFIER_PASSWORD: "verifier", APP_ID: "overlay-app-id", PRIVATE_KEY: "must-be-cleared" }),
+      HARNESS_VERIFIER_PASSWORD: "verifier", HARNESS_MAINTENANCE_PASSWORD: "maintenance",
+      APP_ID: "overlay-app-id", PRIVATE_KEY: "must-be-cleared" }),
   });
   assert.equal(result.status, 0, result.stderr);
   const config = JSON.parse(result.stdout) as { services: Record<string, {
@@ -161,6 +197,27 @@ test("container build contracts pin non-root runtime and sandbox users", () => {
   assert.match(verifier, /apk add --no-cache docker-cli[\s\S]*USER 10001:10001/u);
   for (const excluded of [".env", ".env.*", ".git", ".codex", ".omx*", "secrets", "frontend", "backend/tests"]) {
     assert.ok(ignored.has(excluded), `Docker build context must exclude ${excluded}`);
+  }
+});
+
+test("CI is read-only, SHA-pinned, provider-secret-free, and exercises production gates", () => {
+  const workflow = readFileSync(`${repositoryRoot}/.github/workflows/ci.yml`, "utf8");
+  assert.match(workflow, /^permissions:\n  contents: read$/mu);
+  assert.doesNotMatch(workflow, /pull_request_target|\$\{\{\s*secrets\./u);
+  assert.doesNotMatch(workflow, /^\s*push:\s*true\s*$/mu);
+  const actionReferences = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gmu)]
+    .map((match) => match[1]!);
+  assert.ok(actionReferences.length > 0);
+  for (const reference of actionReferences) {
+    assert.match(reference, /^[^@\s]+@[0-9a-f]{40}$/u, `action must use a full commit SHA: ${reference}`);
+  }
+  for (const required of ["pnpm --filter backend check", "pnpm --filter backend build",
+    "pnpm --filter backend test", "pnpm --filter backend test:harness:pg",
+    "pnpm --filter frontend lint", "pnpm --filter frontend build",
+    "node scripts/compose-smoke.mjs", "FIX_VERIFIER_SANDBOX_IMAGE_DIGEST",
+    "target: [default, verifier, verifier-sandbox]",
+    "platforms: linux/amd64,linux/arm64", "outputs: type=cacheonly"]) {
+    assert.ok(workflow.includes(required), `CI must include ${required}`);
   }
 });
 

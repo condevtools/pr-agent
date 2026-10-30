@@ -8,7 +8,7 @@ import { PublicationControlStore } from "../publication/control.js";
 import { PublicationOutcomeCoordinator, PublicationOutcomeHandler } from "../publication/outcome.js";
 import { createPublicationRecoveryLoop, type PublicationRecoveryLoop } from "../publication/recovery.js";
 import { loadFixPolicyRegistry } from "../../fix/proposal/policy.js";
-import { resolveWorkerSchedulingConfiguration, roleStartsRecovery, roleStartsWorker,
+import { resolveRecoverySchedulingConfiguration, resolveWorkerSchedulingConfiguration, roleStartsRecovery, roleStartsWorker,
   type AgentProcessRole } from "./config.js";
 import { resolveRuntimeCapabilities, supportedWorkflowIds,
   supportedWorkflowIdsForBinding,
@@ -20,6 +20,7 @@ import { closeApplicationRuntimeServices, createAgentRuntimeServices, withAgentR
   type AgentRuntimeServices } from "./services.js";
 import { createWorkflowRegistry, workflowExecutor, type WorkflowExecutor } from "./workflows.js";
 import { resolveWorkerCompatibility, type WorkerCompatibility } from "./worker-compatibility.js";
+import { logCore } from "#core";
 
 export { supportedWorkflowIds } from "./capabilities.js";
 
@@ -46,7 +47,7 @@ export class AgentRuntimeComposition {
   constructor(registry = createWorkflowRegistry()) { this.execute = workflowExecutor(registry); }
 
   async start(role: AgentProcessRole): Promise<void> {
-    this.capabilities = validateCapabilityDependencies();
+    this.capabilities = roleStartsWorker(role) ? validateCapabilityDependencies() : undefined;
     resolveProcessHeartbeatConfiguration();
     if (roleStartsRecovery(role)) await this.startRecovery();
     if (roleStartsWorker(role)) await this.startWorker();
@@ -61,7 +62,7 @@ export class AgentRuntimeComposition {
     let heartbeat: ProcessHeartbeatLoop | undefined;
     try {
       await services.assertRole();
-      const scheduling = resolveWorkerSchedulingConfiguration();
+      const scheduling = resolveRecoverySchedulingConfiguration();
       const scheduler = new PgRunScheduler(
         services.pool,
         services.authority,
@@ -82,8 +83,7 @@ export class AgentRuntimeComposition {
         },
         onError: (error, context) => {
           this.recordError("recovery", error);
-          process.emitWarning(JSON.stringify({ component: "publication-recovery", ...context,
-            errorType: error instanceof Error ? error.name : "unknown" }));
+          logCore("error", "publication_recovery.failed", { ...context, error });
         },
       });
       this.recovery = { services, loop, heartbeat: activeHeartbeat };
@@ -137,8 +137,7 @@ export class AgentRuntimeComposition {
           const results = await Promise.allSettled(tasks);
           for (const result of results) if (result.status === "rejected") {
             this.recordError("worker", result.reason);
-            process.emitWarning(JSON.stringify({ component: "harness-coordinator",
-              errorType: result.reason instanceof Error ? result.reason.name : "unknown" }));
+            logCore("error", "runtime_coordinator.failed", { error: result.reason });
           }
         },
         bindings: async (queueClass = "normal", limit = scheduling.concurrency) => {
@@ -160,8 +159,7 @@ export class AgentRuntimeComposition {
         execute: (lease, binding) => withAgentRuntimeServices(services, () => this.execute(lease, binding)),
         onError: (error, runId) => {
           this.recordError("worker", error);
-          process.emitWarning(JSON.stringify({ component: "review-run-worker", runId,
-            errorType: error instanceof Error ? error.name : "unknown" }));
+          logCore("error", "run_worker.failed", { runId, error });
         },
       }, scheduling.concurrency, scheduling.specialConcurrency);
       this.worker = { services, loop, heartbeat: activeHeartbeat };

@@ -56,7 +56,7 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 - GitHub App only
 - Plain GitHub Webhook — unsupported in the current beta
 - GitLab Webhook — unsupported in the current beta
-- GitHub Actions — not supported
+- GitHub Actions integration mode — not supported (repository CI is provided separately)
 
 **Multi-Provider AI**
 - OpenAI
@@ -349,7 +349,7 @@ pr-agent/
 │   │   ├── bootstrap/               # Probot, GitHub App and shutdown lifecycle
 │   │   ├── http/                    # Routes, authentication and capability APIs
 │   │   ├── agent-runtime/           # Run execution, budgets, persistence and publication recovery
-│   │   ├── model/                   # Model contracts, providers, concurrency and health
+│   │   ├── model/                   # Model contracts, providers and concurrency control
 │   │   ├── review/                  # Standard/deep review, strategy and rendering
 │   │   ├── commands/                # Command parsing, Ask sessions and orchestration
 │   │   ├── repository/              # Repository ports, diffs and content safety
@@ -374,7 +374,6 @@ pr-agent/
 │   ├── package.json
 │   └── next.config.ts
 ├── docs/                           # Local planning material (not versioned)
-├── data/                           # Local/runtime persisted state mount
 ├── secrets/                        # Local private key mount (not committed)
 ├── Dockerfile                      # Backend container image
 ├── docker-compose.yml              # Backend deployment and local ops
@@ -391,7 +390,7 @@ pr-agent/
 
 - The repository root `.env` is shared by local backend development and Docker Compose.
 - `backend/` is the deployable review service. `frontend/` is deployed separately when using root `nixpacks.toml`.
-- Persistent backend state defaults to `/data/pr-agent/...` inside containers and `data/pr-agent/...` on the host.
+- PostgreSQL is the authoritative persistent store; Compose keeps it in the named `harness-postgres` volume.
 
 ### Backend Path Aliases
 
@@ -443,6 +442,7 @@ The backend listens on port `3000` by default (configurable via `PORT`). The fro
 
 ```bash
 curl http://localhost:3000/health
+curl 'http://localhost:3000/github/health?deep=1' # Local webhook configuration only; never calls a model
 curl http://localhost:3000/ready              # Checks enabled runtime dependencies
 curl http://localhost:3000/github/health       # GitHub config status
 ```
@@ -460,6 +460,8 @@ Copy `.env.example` and fill in the required values. The supported minimal confi
 Legacy minimal examples for plain GitHub Webhook and GitLab remain in the repository for reference only; they are not part of the supported beta deployment path.
 
 ### AI Provider
+
+`HARNESS_MODEL_PRICING_JSON` is required by the web and worker roles. Copy the complete policy from [`.env.example`](.env.example), select the entry matching `AI_PROVIDER` and the configured model, then replace every illustrative rate and tenant/run cap with the values for your provider contract and deployment budget. The example is deliberately non-zero but is not a statement of current vendor pricing; do not deploy it unchanged. OpenAI-compatible entries must also declare `openAiTokenParameter`.
 
 ```mermaid
 graph LR
@@ -526,7 +528,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `AI_MAX_QUEUE_SIZE` | `200` | Max queued AI requests before rejecting new work |
 | `AI_SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000` (15s) | Graceful shutdown drain timeout for in-flight AI tasks |
 | `AI_DEBUG_LOGS` | `false` | Log AI request/response payloads for debugging |
-| `HEALTHCHECK_AI_TIMEOUT_MS` | `5000` (5s) | Timeout for deep health check AI probe |
 | `FEATURE_DEEP_REVIEW` | `on` | Allow explicit Deep Review; PR webhooks still default to Single |
 | `FEATURE_FIX` | `off` | Enable Fix only with binding permission, policy and verifier dependencies |
 | `FEATURE_EVOLUTION` | `off` | Enable feedback and offline evaluation for authorized bindings |
@@ -590,6 +591,7 @@ graph LR
     B3 --> W[web container]
     B3 --> Q[worker container]
     B3 --> R[recovery container]
+    B3 --> M[maintenance container]
 ```
 
 **Build & Run**
@@ -605,7 +607,7 @@ docker run -d \
   pr-agent:latest
 ```
 
-The application image does not embed PostgreSQL or initialize external database roles. A standalone container therefore requires a separately provisioned PostgreSQL database, restricted schema-owner/application roles, and a completed migration run. The one-container `all` role is for local evaluation. Production deployments run separate `web`, `worker`, and `recovery` instances; use Compose below when the platform does not already manage those processes.
+The application image does not embed PostgreSQL or initialize external database roles. A standalone container therefore requires a separately provisioned PostgreSQL database, restricted schema-owner/application roles, and a completed migration run. The one-container `all` role is for local evaluation. Production deployments run separate `web`, `worker`, `recovery`, and `maintenance` instances; use Compose below when the platform does not already manage those processes.
 
 For a registry release, Buildx creates one manifest containing both supported architectures. Publish the verifier operator under a separate tag because the normal application image intentionally has no Docker CLI:
 
@@ -620,13 +622,14 @@ Verify the manifest with `docker buildx imagetools inspect`. BuildKit provenance
 
 ### Docker Compose
 
-Copy `.env.example` to `.env` and replace all placeholders. Compose requires four distinct, randomly generated PostgreSQL passwords and has no password fallbacks:
+Copy `.env.example` to `.env` and replace all placeholders. Compose requires five distinct, randomly generated PostgreSQL passwords and has no password fallbacks:
 
 ```env
 HARNESS_BOOTSTRAP_PASSWORD=...
 HARNESS_MIGRATION_PASSWORD=...
 HARNESS_APP_PASSWORD=...
 HARNESS_VERIFIER_PASSWORD=...
+HARNESS_MAINTENANCE_PASSWORD=...
 ```
 
 ```bash
@@ -634,10 +637,10 @@ HARNESS_VERIFIER_PASSWORD=...
 docker compose up -d --build
 
 # View logs
-docker compose logs -f pr-agent worker recovery
+docker compose logs -f pr-agent worker recovery maintenance
 
 # Restart
-docker compose restart pr-agent worker recovery
+docker compose restart pr-agent worker recovery maintenance
 
 # Stop
 docker compose down
@@ -648,12 +651,15 @@ The `docker-compose.yml` uses:
 - `harness-postgres` — PostgreSQL business state and migration ledger
 - `pr-agent` — the public `web` process only
 - `worker` and `recovery` — independent durable execution processes
+- `maintenance` — restricted periodic retention in safe `preview` mode by default
 - `PRIVATE_KEY` — the default inline GitHub App PEM path, suitable for Coolify and other secret environment managers
 - `docker-compose.secret-file.yml` — an optional PEM file overlay for hosts with a managed secret file
 
-On a fresh volume, PostgreSQL bootstraps restricted migrator, application, and verifier roles. The one-shot `database-init` service applies the schema before the three application roles start. Changing `.env` does not rotate passwords in an existing volume. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
+On a fresh volume, PostgreSQL bootstraps restricted migrator, application, verifier, and maintenance roles. The one-shot `database-init` service applies the schema before the four long-running roles start. Changing `.env` does not rotate passwords in an existing volume. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
 
-Compose uses `.env` only for interpolation. The application service receives an explicit runtime allowlist rather than the whole file, so bootstrap, migration, and verifier credentials are not present in the application container.
+Compose uses `.env` only for interpolation. Each service receives an explicit allowlist rather than the whole file. Web, worker, and recovery receive only the application database password; model provider keys are injected only into worker, API principal configuration only into web, and maintenance receives only its dedicated database password and retention settings.
+
+Maintenance scans bounded batches and defaults to `HARNESS_MAINTENANCE_MODE=preview`, which performs no deletion. Set `apply` explicitly only after reviewing the configured windows. The validated defaults are 30 days before content is scrubbed (including replay payloads), 90 days before scrubbed replay rows are removed, and 400 days before trace/audit rows and a strictly eligible ordinary Run's complete FK graph may be removed, with `7 <= content < replay < trace <= 3650`. A fully removed ordinary Run no longer reserves its old idempotency key. Qualified data, active holds, shared/current publication identities, and other strong references block that full-graph deletion.
 
 All application roles use fixed UID/GID `10001:10001`, a read-only root filesystem, bounded tmpfs, no Linux capabilities, and `no-new-privileges`. Base Compose accepts the PEM only through `PRIVATE_KEY` and leaves `PRIVATE_KEY_PATH` empty, so Coolify does not need a host file. To use a file, start with `docker compose -f docker-compose.yml -f docker-compose.secret-file.yml up -d`; the overlay clears the inline key and mounts only the PEM path. Local Compose warns that file-secret `uid`, `gid`, and `mode` remapping is unsupported, so Linux hosts must provision the source file for UID/GID `10001:10001` with mode `0400` (or use the deployment platform's secret-file mechanism). None of these containers mounts a Docker socket or a verifier snapshot directory.
 
@@ -687,8 +693,8 @@ graph TD
 ```
 
 1. **Use GitHub App integration mode** — this is the only supported integration in the current beta
-2. **Configure AI provider** — Set `AI_PROVIDER` and the corresponding API key / model
-3. **Initialize PostgreSQL** — For Compose, configure all four database passwords and require `database-init` to complete successfully; external PostgreSQL deployments must provision equivalent restricted roles before running the migration CLI
+2. **Configure AI provider and budget policy** — Set `AI_PROVIDER`, the corresponding API key/model, and a deployment-specific `HARNESS_MODEL_PRICING_JSON` derived from [`.env.example`](.env.example)
+3. **Initialize PostgreSQL** — For Compose, configure all five database passwords and require `database-init` to complete successfully; external PostgreSQL deployments must provision equivalent restricted roles before running the migration CLI
 4. **Deploy the container** — Docker, Docker Compose, Render, Railway, Fly.io, or K8s
 5. **Set webhook URL** to `https://<domain>/api/github/webhooks`
 6. **Verify** via health endpoints and a test `/ai-review` comment
@@ -710,7 +716,10 @@ WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
+# Copy HARNESS_MODEL_PRICING_JSON from .env.example, then replace its illustrative rates and caps.
 ```
+
+`HARNESS_MODEL_PRICING_JSON` is mandatory for the web and worker roles. Its model key must match the selected `provider:model`; use the complete [`.env.example`](.env.example) policy as a schema example, not as production pricing.
 
 **Required durable runtime configuration**
 
@@ -893,7 +902,7 @@ Prometheus-format metrics are exposed at `GET /metrics`:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | Liveness probe |
+| `GET /health` | Public liveness probe; platform `/github/health` and `/gitlab/health` routes accept `?deep=1` to check local webhook configuration |
 | `GET /ready` | Readiness for enabled capabilities and runtime dependencies |
 | `GET /github/health` | GitHub webhook config validation |
 | `GET /gitlab/health` | Legacy GitLab webhook config validation (unsupported in current beta) |
@@ -926,8 +935,8 @@ Verified success and failure envelopes are stored in PostgreSQL. Endpoints requi
 ### Resilience
 
 - **HTTP Retry**: exponential backoff (2 retries, 400ms base delay) on 408/429/5xx
-- **Deduplication**: FNV hash with 5-min window (24h for merged events)
-- **Rate Limiting**: per-scope limits to prevent API abuse
+- **Idempotency**: PostgreSQL source keys, immutable request hashes, and publication operation identities
+- **Rate Limiting**: PostgreSQL-backed per-user/per-command windows prevent process restarts from resetting limits
 - **Graceful Shutdown**: drains in-flight requests on SIGTERM/SIGINT
 
 ---
@@ -944,11 +953,22 @@ pnpm --filter backend test:coverage
 # Backend type check
 pnpm --filter backend check
 
-# Frontend production build check
+# Docker-only PostgreSQL suite (includes fresh and upgrade migration paths)
+pnpm --filter backend test:harness:pg
+
+# Frontend lint and production build
+pnpm --filter frontend lint
 pnpm --filter frontend build
+
+# Real Docker verifier fixture (requires a locally built immutable sandbox image ID)
+docker build --target verifier-sandbox -t pr-agent-verifier-sandbox:test .
+FIX_VERIFIER_SANDBOX_IMAGE_DIGEST="$(docker image inspect pr-agent-verifier-sandbox:test --format '{{.Id}}')" \
+  pnpm --filter backend test fix/fix-docker-verifier.test.ts
 ```
 
-Backend tests use the Node.js built-in test runner (`node:test`). Recommended regression coverage includes:
+Backend tests use the Node.js built-in test runner (`node:test`). `.github/workflows/ci.yml` runs backend check/build/unit/build verification, the isolated Docker PostgreSQL suite, a fresh split-runtime Compose smoke with private provider fixtures, frontend lint/build, the real hostile verifier fixture, and non-publishing `amd64/arm64` builds for the application, verifier, and sandbox targets. CI uses no external provider credentials and never deploys or pushes an image.
+
+Recommended regression coverage includes:
 - AI concurrency control
 - Cache & dedup behavior
 - Diff parsing & hunk prioritization

@@ -30,10 +30,11 @@ test("a slow seed is bounded by the whole verification deadline and never starts
   const fixture = await deadlineFixture();
   const root = await mkdtemp(join(tmpdir(), "pr-agent-fake-docker-"));
   const executable = join(root, "docker"); const log = join(root, "calls.log");
-  const script = `#!/usr/bin/env node\nconst fs=require("node:fs");const a=process.argv.slice(2);`+
-    `fs.appendFileSync(${JSON.stringify(log)},a.join(" ")+"\\n");`+
-    `const n=a[a.indexOf("--name")+1]||"";if(a[0]==="run"&&n.includes("fix-seed"))setTimeout(()=>process.exit(0),4000);`+
-    `else process.exit(0);\n`;
+  // A shell fixture avoids starting a fresh JS runtime for every mock Docker
+  // command while the complete test suite is loading modules concurrently.
+  const quotedLog = `'${log.replaceAll("'", "'\\''")}'`;
+  const script = `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quotedLog}\n`+
+    `case "$1 $*" in run*fix-seed*) exec sleep 4 ;; esac\nexit 0\n`;
   await writeFile(executable, script); await chmod(executable, 0o700);
   const started = Date.now();
   try {

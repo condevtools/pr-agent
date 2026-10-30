@@ -8,15 +8,18 @@
 \set bootstrap_password ''
 \set app_password ''
 \set verifier_password ''
+\set maintenance_password ''
 \set migration_password ''
 \getenv bootstrap_password HARNESS_BOOTSTRAP_PASSWORD
 \getenv app_password HARNESS_APP_PASSWORD
 \getenv verifier_password HARNESS_VERIFIER_PASSWORD
+\getenv maintenance_password HARNESS_MAINTENANCE_PASSWORD
 \getenv migration_password HARNESS_MIGRATION_PASSWORD
 
 SELECT 1 / CASE WHEN length(:'bootstrap_password') > 0 THEN 1 ELSE 0 END;
 SELECT 1 / CASE WHEN length(:'app_password') > 0 THEN 1 ELSE 0 END;
 SELECT 1 / CASE WHEN length(:'verifier_password') > 0 THEN 1 ELSE 0 END;
+SELECT 1 / CASE WHEN length(:'maintenance_password') > 0 THEN 1 ELSE 0 END;
 SELECT 1 / CASE WHEN length(:'migration_password') > 0 THEN 1 ELSE 0 END;
 
 BEGIN;
@@ -70,6 +73,11 @@ SELECT format('CREATE ROLE pr_agent_verifier LOGIN NOSUPERUSER NOCREATEDB NOCREA
   :'verifier_password') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='pr_agent_verifier') \gexec
 SELECT format('ALTER ROLE pr_agent_verifier LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
   :'verifier_password') \gexec
+
+SELECT format('CREATE ROLE pr_agent_maintenance LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+  :'maintenance_password') WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='pr_agent_maintenance') \gexec
+SELECT format('ALTER ROLE pr_agent_maintenance LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+  :'maintenance_password') \gexec
 
 CREATE OR REPLACE FUNCTION pr_agent_harness.is_harness_admin() RETURNS boolean
 LANGUAGE sql STABLE SET search_path=pg_catalog,pr_agent_harness AS $$

@@ -6,6 +6,7 @@ import { resolveProcessHeartbeatConfiguration, ProcessHeartbeatStore,
 import { resolveRuntimeCapabilities, type RuntimeCapabilityConfiguration } from "./capabilities.js";
 import { verifierCapabilityHash } from "../versions.js";
 import { loadFixPolicyRegistry } from "../../fix/proposal/policy.js";
+import { logCore } from "#core";
 import { resolveWorkerCompatibility, type WorkerCompatibility } from "./worker-compatibility.js";
 
 export interface RuntimeReadinessStatus {
@@ -56,7 +57,7 @@ export async function checkRuntimeReadiness(input: {
       const schema = await input.pool.query<{ schema_ready: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM pr_agent_harness.schema_migrations
-           WHERE migration_name='029_verifier_artifacts.sql'
+           WHERE migration_name='030_maintenance_retention.sql'
          ) AS schema_ready`,
       );
       checks.schema = schema.rows[0]?.schema_ready === true;
@@ -67,7 +68,7 @@ export async function checkRuntimeReadiness(input: {
       checks.heartbeats = Object.fromEntries(required.map((role) => [role, freshness[role].fresh]));
       if (checks.heartbeats.worker) {
         const workerCompatibility = input.workerCompatibility
-          ?? await resolveWorkerCompatibility(capabilities, env);
+          ?? await resolveWorkerCompatibility(capabilities, env, { requireProviderCredentials: false });
         checks.heartbeats.worker = freshness.worker.capabilityReports.some(
           (report) => workerReportMatches(report, capabilities, workerCompatibility),
         );
@@ -103,7 +104,7 @@ function emitReadinessFailure(error: unknown): void {
   if (signature === lastReadinessFailure && now - lastReadinessFailureAt < 60_000) return;
   lastReadinessFailure = signature;
   lastReadinessFailureAt = now;
-  process.emitWarning(JSON.stringify({ component: "runtime-readiness", code, reason }));
+  logCore("error", "runtime_readiness.failed", { domainCode: code, reason });
 }
 
 async function anyVerifierReportMatches(

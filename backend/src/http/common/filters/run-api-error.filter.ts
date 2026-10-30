@@ -7,6 +7,7 @@ import { RunControlError } from "../../../agent-runtime/runs/control-contracts.j
 import { RunCursorExpiredError } from "../../../agent-runtime/runs/query-store.js";
 import { ModelBudgetExceededError } from "../../../agent-runtime/budget/model-budget-store.js";
 import { RunCreateConflictError } from "../../../agent-runtime/postgres/run-store.js";
+import { logCore } from "#core";
 
 @Catch()
 export class RunApiErrorFilter implements ExceptionFilter {
@@ -30,7 +31,7 @@ export class RunApiErrorFilter implements ExceptionFilter {
     } else if (error instanceof ModelBudgetExceededError) {
       response.status(429).json({ error: { code: "BUDGET_EXCEEDED", message: "Run budget admission was refused" } });
     } else {
-      process.emitWarning(JSON.stringify({ component: "run-api", errorType: error instanceof Error ? error.name : "unknown" }));
+      logCore("error", "run_api.request_failed", { domainCode: "INTERNAL_ERROR", error });
       response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Run request could not be completed" } });
     }
   }

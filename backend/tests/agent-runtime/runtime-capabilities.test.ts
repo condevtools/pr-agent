@@ -9,7 +9,8 @@ import { requiredHeartbeatRoles, checkRuntimeReadiness,
 import { AgentRuntimeComposition, supportedWorkflowIds,
   validateCapabilityDependencies } from "../../src/agent-runtime/runtime/composition.js";
 import { providerReviewWorkflow } from "../../src/review/intake/provider-intake.js";
-import { resolveWorkerCompatibility } from "../../src/agent-runtime/runtime/worker-compatibility.js";
+import { resolveFrozenModelExecutionPolicy,
+  resolveWorkerCompatibility } from "../../src/agent-runtime/runtime/worker-compatibility.js";
 
 const workerCompatibility = { runtimeVersionHash: "a".repeat(64),
   supportedWorkflowIds: ["review.single.v1", "review.deep.v1"] };
@@ -23,6 +24,10 @@ test("capabilities default to Single plus explicit Deep while Fix and Evolution 
   assert.throws(() => resolveRuntimeCapabilities({ FEATURE_FIX: "on" }), /FIX_DEFAULT_POLICY_ID/u);
   assert.throws(() => validateCapabilityDependencies({ FEATURE_FIX: "on", FIX_DEFAULT_POLICY_ID: "missing" }),
     /FIX_POLICY_REGISTRY_JSON/u);
+  assert.throws(() => validateCapabilityDependencies({ FEATURE_FIX: "on", FIX_DEFAULT_POLICY_ID: "missing",
+    FIX_POLICY_REGISTRY_JSON: "not-json" }), /JSON/u);
+  assert.throws(() => validateCapabilityDependencies({ FEATURE_FIX: "on", FIX_DEFAULT_POLICY_ID: "missing",
+    FIX_POLICY_REGISTRY_JSON: "{}" }), /FIX_DEFAULT_POLICY_ID/u);
 });
 
 test("trusted binding defaults select Single and can explicitly select Deep", () => {
@@ -38,23 +43,21 @@ test("trusted binding defaults select Single and can explicitly select Deep", ()
 test("readiness is redacted for PostgreSQL failure and ignores disabled verifier", async () => {
   const down = { query: async () => { throw new Error("secret database URL"); } } as unknown as Pool;
   const warnings: string[] = [];
-  const originalEmitWarning = process.emitWarning;
-  process.emitWarning = ((warning: string | Error) => {
-    warnings.push(warning instanceof Error ? warning.message : warning);
-  }) as typeof process.emitWarning;
+  const originalConsoleError = console.error;
+  console.error = (message?: unknown) => { warnings.push(String(message)); };
   let unavailable;
   try {
     unavailable = await checkRuntimeReadiness({ pool: down, role: "web", env: {}, workerCompatibility });
   } finally {
-    process.emitWarning = originalEmitWarning;
+    console.error = originalConsoleError;
   }
   assert.equal(unavailable.ok, false);
   assert.deepEqual(unavailable.checks, { postgres: false, runtimeRole: false, schema: false,
     heartbeats: { worker: false, recovery: false } });
   assert.doesNotMatch(JSON.stringify(unavailable), /secret database URL/u);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0]!, /"component":"runtime-readiness"/u);
-  assert.match(warnings[0]!, /"code":"READINESS_CHECK_FAILED"/u);
+  assert.match(warnings[0]!, /"event":"runtime_readiness.failed"/u);
+  assert.match(warnings[0]!, /"domainCode":"READINESS_CHECK_FAILED"/u);
   assert.doesNotMatch(warnings[0]!, /secret database URL/u);
 
   const healthy = fakeReadinessPool({ worker: true, recovery: true, verifier: false });
@@ -144,6 +147,14 @@ test("worker compatibility fails closed on invalid local provider configuration"
   }), /OPENAI_BASE_URL/u);
 });
 
+test("web model contract rejects malformed pricing and a missing selected model", () => {
+  assert.throws(() => resolveFrozenModelExecutionPolicy({ AI_PROVIDER: "openai", AI_MODEL: "fixture",
+    HARNESS_MODEL_PRICING_JSON: "not-json" }), /JSON/u);
+  assert.throws(() => resolveFrozenModelExecutionPolicy({ AI_PROVIDER: "openai", AI_MODEL: "fixture",
+    HARNESS_MODEL_PRICING_JSON: JSON.stringify({ version: "v1", currency: "USD", models: {},
+      tenantLimits: {}, runLimits: {} }) }), /model pricing entry/u);
+});
+
 test("web-only startup validates durable heartbeat configuration", async () => {
   const previous = process.env.RUNTIME_HEARTBEAT_INTERVAL_MS;
   process.env.RUNTIME_HEARTBEAT_INTERVAL_MS = "invalid";
@@ -180,7 +191,7 @@ function fakeReadinessPool(
     if (sql.includes("migration_ledger_ready")) {
       return { rows: [{ safe_role: true, migration_ledger_ready: true }] };
     }
-    if (sql.includes("migration_name='029_verifier_artifacts.sql'")) return { rows: [{ schema_ready: true }] };
+    if (sql.includes("migration_name='030_maintenance_retention.sql'")) return { rows: [{ schema_ready: true }] };
     return { rows: (Object.entries(freshness) as Array<[keyof typeof freshness, boolean]>).map(
       ([process_role, fresh]) => ({ process_role, fresh,
         capability_reports: process_role === "worker" && fresh

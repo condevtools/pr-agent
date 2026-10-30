@@ -17,7 +17,7 @@ test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL"
   assert.throws(() => agentRuntimePoolConfig({
     HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent",
     HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "local-test", HARNESS_PG_PORT: "bad",
-  }), /Configure HARNESS/);
+  }), /HARNESS_PG_PORT/);
 });
 
 test("runtime roles freeze independent bounded pool and scheduling capacities", () => {
@@ -27,7 +27,7 @@ test("runtime roles freeze independent bounded pool and scheduling capacities", 
   assert.equal(agentRuntimePoolConfig(base, "recovery").max, 4);
   assert.equal(agentRuntimePoolConfig({ ...base, HARNESS_WORKER_POOL_MAX: "12" }, "worker").max, 12);
   assert.throws(() => agentRuntimePoolConfig({ ...base, HARNESS_WORKER_POOL_MAX: "many" }, "worker"),
-    /HARNESS_WORKER_POOL_MAX must be an integer/);
+    /HARNESS_WORKER_POOL_MAX/);
   assert.deepEqual(resolveWorkerSchedulingConfiguration({}), {
     concurrency: 4,
     perBindingConcurrency: 2,

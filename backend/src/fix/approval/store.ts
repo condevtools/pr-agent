@@ -117,6 +117,15 @@ export async function createApprovalInTransaction(client: PoolClient, input: Cre
     `SELECT id FROM pr_agent_harness.agent_runs
      WHERE tenant_id=$1 AND integration_id=$2 AND id=$3 FOR UPDATE`,
     [input.tenantId, input.integrationId, input.proposalRunId]);
+  const retentionClosed = await client.query(
+    `SELECT 1 FROM pr_agent_harness.run_artifact_holds hold
+     JOIN pr_agent_harness.run_artifact_hold_releases release
+       ON release.tenant_id=hold.tenant_id AND release.run_id=hold.run_id
+       AND release.artifact_hash=hold.artifact_hash AND release.hold_key=hold.hold_key
+     WHERE hold.tenant_id=$1 AND hold.run_id=$2 AND hold.hold_kind='fix' LIMIT 1`,
+    [input.tenantId, input.proposalRunId],
+  );
+  if (retentionClosed.rowCount) throw new FixStoreError("approval_retention_closed");
   await client.query(
     `UPDATE pr_agent_harness.fix_approval_requests SET status='expired',version=version+1
      WHERE tenant_id=$1 AND proposal_run_id=$2 AND status IN ('open','approved')

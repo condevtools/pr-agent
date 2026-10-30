@@ -56,7 +56,7 @@
 - 仅支持 GitHub App
 - 普通 GitHub Webhook — 当前 beta 不支持
 - GitLab Webhook — 当前 beta 不支持
-- GitHub Actions — 暂不支持
+- GitHub Actions 接入模式 — 暂不支持（仓库 CI 另行提供）
 
 **多模型 Provider**
 - OpenAI
@@ -349,7 +349,7 @@ pr-agent/
 │   │   ├── bootstrap/               # Probot、GitHub App 与关闭协调
 │   │   ├── http/                    # 路由、鉴权、Runs / Fixes / Evolution API
 │   │   ├── agent-runtime/           # Run 执行、预算、持久化、发布恢复
-│   │   ├── model/                   # 模型契约、配置、Provider、并发与健康检查
+│   │   ├── model/                   # 模型契约、配置、Provider 与并发控制
 │   │   ├── review/                  # 标准评审、多 Agent 深度评审、策略与渲染
 │   │   ├── commands/                # 命令解析、Ask 会话与命令编排
 │   │   ├── repository/              # 仓库读取契约、diff 与内容安全
@@ -374,7 +374,6 @@ pr-agent/
 │   ├── package.json
 │   └── next.config.ts
 ├── docs/                           # 本地规划资料（不纳入版本管理）
-├── data/                           # 本地/运行时持久化数据挂载点
 ├── secrets/                        # 本地私钥挂载目录（不提交）
 ├── Dockerfile                      # 后端容器镜像
 ├── docker-compose.yml              # 后端部署与本地运维
@@ -391,7 +390,7 @@ pr-agent/
 
 - 仓库根目录 `.env` 同时供本地后端开发和 Docker Compose 使用。
 - `backend/` 是可部署的评审服务；使用根目录 `nixpacks.toml` 时部署的是 `frontend/`，不是后端。
-- 容器内后端持久化路径默认是 `/data/pr-agent/...`，宿主机对应为 `data/pr-agent/...`。
+- PostgreSQL 是权威持久存储；Compose 使用命名卷 `harness-postgres` 保存数据。
 
 ### 后端路径别名
 
@@ -443,6 +442,7 @@ pnpm --filter backend start
 
 ```bash
 curl http://localhost:3000/health
+curl 'http://localhost:3000/github/health?deep=1' # 仅检查本地 Webhook 配置，绝不会调用模型
 curl http://localhost:3000/ready              # 检查已启用能力的运行依赖
 curl http://localhost:3000/github/health       # GitHub 配置状态
 ```
@@ -460,6 +460,8 @@ curl http://localhost:3000/github/health       # GitHub 配置状态
 普通 GitHub Webhook 和 GitLab 的最小示例文件仍保留在仓库中，仅供参考，不属于当前 beta 的受支持部署路径。
 
 ### AI Provider 配置
+
+Web 与 Worker 角色必须配置 `HARNESS_MODEL_PRICING_JSON`。请从 [`.env.example`](.env.example) 复制完整策略，选择与 `AI_PROVIDER` 和模型名匹配的条目，再按实际供应商合同价格及部署预算替换所有示例费率、租户上限和单次 Run 上限。模板使用非零数字只是为了避免误配，不代表供应商当前价格，不能原样用于生产；OpenAI 兼容条目还必须显式声明 `openAiTokenParameter`。
 
 ```mermaid
 graph LR
@@ -526,7 +528,6 @@ NOTIFY_WEBHOOK_FORMAT=slack   # wecom | slack | discord | generic
 | `AI_MAX_QUEUE_SIZE` | `200` | AI 等待队列上限（超限后拒绝新任务） |
 | `AI_SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000`（15 秒） | 进程关闭时等待进行中 AI 请求完成的超时时间 |
 | `AI_DEBUG_LOGS` | `false` | 记录 AI 请求/响应载荷用于调试 |
-| `HEALTHCHECK_AI_TIMEOUT_MS` | `5000`（5 秒） | 深度健康检查 AI 探测超时 |
 | `FEATURE_DEEP_REVIEW` | `on` | 允许显式 Deep Review；普通 PR webhook 默认仍为 Single |
 | `FEATURE_FIX` | `off` | 需同时满足绑定授权、策略和 verifier 依赖 |
 | `FEATURE_EVOLUTION` | `off` | 为已授权绑定启用反馈和离线评测 |
@@ -590,6 +591,7 @@ graph LR
     B3 --> W[web 容器]
     B3 --> Q[worker 容器]
     B3 --> R[recovery 容器]
+    B3 --> M[maintenance 容器]
 ```
 
 **构建 & 运行**
@@ -605,7 +607,7 @@ docker run -d \
   pr-agent:latest
 ```
 
-应用镜像不内置 PostgreSQL，也不会为外部数据库创建角色。单独运行容器时，部署平台必须预先提供 PostgreSQL、受限 schema owner / 应用角色，并完成迁移。单容器 `all` 角色只适合本地验证；生产部署应分别运行 `web`、`worker` 和 `recovery`，平台未托管这些进程时使用下方 Compose。
+应用镜像不内置 PostgreSQL，也不会为外部数据库创建角色。单独运行容器时，部署平台必须预先提供 PostgreSQL、受限 schema owner / 应用角色，并完成迁移。单容器 `all` 角色只适合本地验证；生产部署应分别运行 `web`、`worker`、`recovery` 和 `maintenance`，平台未托管这些进程时使用下方 Compose。
 
 发布到镜像仓库时，用 Buildx 生成同时包含两种架构的 manifest。verifier operator 需要 Docker CLI，因此使用独立 tag；普通应用镜像不会包含 Docker CLI：
 
@@ -620,13 +622,14 @@ docker buildx build --platform linux/amd64,linux/arm64 --target verifier \
 
 ### Docker Compose
 
-将 `.env.example` 复制为 `.env` 并替换全部占位值。Compose 强制要求四个互不相同的随机 PostgreSQL 密码，不提供默认回退值：
+将 `.env.example` 复制为 `.env` 并替换全部占位值。Compose 强制要求五个互不相同的随机 PostgreSQL 密码，不提供默认回退值：
 
 ```env
 HARNESS_BOOTSTRAP_PASSWORD=...
 HARNESS_MIGRATION_PASSWORD=...
 HARNESS_APP_PASSWORD=...
 HARNESS_VERIFIER_PASSWORD=...
+HARNESS_MAINTENANCE_PASSWORD=...
 ```
 
 ```bash
@@ -634,10 +637,10 @@ HARNESS_VERIFIER_PASSWORD=...
 docker compose up -d --build
 
 # 查看日志
-docker compose logs -f pr-agent worker recovery
+docker compose logs -f pr-agent worker recovery maintenance
 
 # 重启
-docker compose restart pr-agent worker recovery
+docker compose restart pr-agent worker recovery maintenance
 
 # 停止
 docker compose down
@@ -648,12 +651,15 @@ docker compose down
 - `harness-postgres` — PostgreSQL 业务状态与迁移账本
 - `pr-agent` — 只承载公网 `web` 进程
 - `worker` 与 `recovery` — 独立的持久执行进程
+- `maintenance` — 受限的周期保留进程，默认为安全的 `preview` 模式
 - `PRIVATE_KEY` — 默认以内联方式提供 GitHub App PEM，适合 Coolify 等密钥环境变量管理器
 - `docker-compose.secret-file.yml` — 可选的 PEM 文件 overlay，供已管理 secret 文件的主机使用
 
-全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用和 verifier 角色；一次性 `database-init` 服务在三个应用角色启动前应用 schema。修改 `.env` 不会轮换已有 volume 中的密码。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
+全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用、verifier 和 maintenance 角色；一次性 `database-init` 服务在四个常驻角色启动前应用 schema。修改 `.env` 不会轮换已有 volume 中的密码。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
 
-Compose 只把 `.env` 用于插值。应用服务通过显式运行配置白名单接收变量，不会整体加载该文件，因此应用容器中不存在 bootstrap、迁移或 verifier 凭据。
+Compose 只把 `.env` 用于插值。每个服务通过显式白名单接收变量；web、worker 和 recovery 只拿应用数据库密码，模型 provider key 只注入 worker，API principal 配置只注入 web，maintenance 只拿它的专用数据库密码和保留配置。
+
+Maintenance 只扫描有界批次，默认 `HARNESS_MAINTENANCE_MODE=preview`，不执行删除。只有在审阅保留策略后才显式设为 `apply`。默认为 30 天后清除内容（包括 replay payload）、90 天后删除已清内容的 replay 行、400 天后才允许删除 trace/audit 行及严格符合条件的普通 Run 完整 FK 图，并验证 `7 <= content < replay < trace <= 3650`。普通 Run 完整删除后，其旧幂等键不再被占用。已资格认定数据、活动 hold、共享/当前 publication identity 及其他强引用会阻止这种整图删除。
 
 所有应用角色都使用固定 UID/GID `10001:10001`、只读根文件系统、有上限的 tmpfs、`cap-drop ALL` 和 `no-new-privileges`。基础 Compose 只接收内联 `PRIVATE_KEY`，并让 `PRIVATE_KEY_PATH` 保持为空，因此 Coolify 不需要宿主 PEM 文件。需要文件时使用 `docker compose -f docker-compose.yml -f docker-compose.secret-file.yml up -d`；overlay 会清空内联 key，只挂 PEM 路径。本地 Compose 不保证 file secret 的 `uid/gid/mode` 重映射，因此 Linux 宿主必须把源文件设置为 UID/GID `10001:10001`、权限 `0400`，或使用平台原生 secret-file。应用容器均不挂 Docker socket 或 verifier 快照目录。
 
@@ -687,8 +693,8 @@ graph TD
 ```
 
 1. **使用 GitHub App 接入模式** — 这是当前 beta 唯一受支持的接入方式
-2. **配置 AI Provider** — 设置 `AI_PROVIDER` 及对应的 API Key / 模型名称
-3. **初始化 PostgreSQL** — Compose 必须配置四个数据库密码并确认 `database-init` 成功；外部 PostgreSQL 则必须先建立等价的受限角色，再运行迁移 CLI
+2. **配置 AI Provider 与预算策略** — 设置 `AI_PROVIDER`、对应的 API Key/模型名称，并基于 [`.env.example`](.env.example) 配置部署专用的 `HARNESS_MODEL_PRICING_JSON`
+3. **初始化 PostgreSQL** — Compose 必须配置五个数据库密码并确认 `database-init` 成功；外部 PostgreSQL 则必须先建立等价的受限角色，再运行迁移 CLI
 4. **部署容器** — Docker、Docker Compose、Render、Railway、Fly.io 或 K8s
 5. **配置 Webhook URL** 为 `https://<域名>/api/github/webhooks`
 6. **验证** — 访问健康检查端点，并在 PR 中测试 `/ai-review` 命令
@@ -710,7 +716,10 @@ WEBHOOK_SECRET=replace-with-webhook-secret
 AI_PROVIDER=openai
 OPENAI_API_KEY=replace-with-openai-key
 OPENAI_MODEL=gpt-4.1-mini
+# 从 .env.example 复制 HARNESS_MODEL_PRICING_JSON，再替换其中的示例费率和上限。
 ```
+
+Web 与 Worker 角色必须设置 `HARNESS_MODEL_PRICING_JSON`，其中的模型键必须与所选 `provider:model` 一致。完整 [`.env.example`](.env.example) 仅作为结构示例，不能视为生产定价。
 
 **必需的持久化运行配置**
 
@@ -893,7 +902,7 @@ Prometheus 格式指标通过 `GET /metrics` 暴露：
 
 | 端点 | 用途 |
 |---|---|
-| `GET /health` | 存活探针 |
+| `GET /health` | 公开存活探针；`/github/health` 和 `/gitlab/health` 支持 `?deep=1` 检查本地 Webhook 配置 |
 | `GET /ready` | 检查已启用能力及运行时依赖是否就绪 |
 | `GET /github/health` | GitHub Webhook 配置校验 |
 | `GET /gitlab/health` | GitLab Webhook 遗留配置校验（当前 beta 不支持） |
@@ -926,8 +935,8 @@ Webhook 错误返回结构化 JSON。已知 Webhook 错误（如 `BadWebhookRequ
 ### 韧性机制
 
 - **HTTP 重试**：指数退避（2 次重试，400ms 基础延迟），针对 408/429/5xx 状态码
-- **请求去重**：FNV 哈希，5 分钟窗口（合并事件 24 小时）
-- **限流**：按作用域限制，防止 API 滥用
+- **幂等**：PostgreSQL source key、不可变 request hash 和 publication operation identity
+- **限流**：PostgreSQL 持久的用户/命令窗口，进程重启不会清空限流状态
 - **优雅关停**：收到 SIGTERM/SIGINT 后排空进行中的请求
 
 ---
@@ -944,11 +953,22 @@ pnpm --filter backend test:coverage
 # 后端类型检查
 pnpm --filter backend check
 
-# 前端生产构建回归检查
+# Docker-only PostgreSQL 套件（含 fresh 和 upgrade 迁移路径）
+pnpm --filter backend test:harness:pg
+
+# 前端 lint 与生产构建
+pnpm --filter frontend lint
 pnpm --filter frontend build
+
+# 真实 Docker verifier fixture（需要本地构建的不可变 sandbox image ID）
+docker build --target verifier-sandbox -t pr-agent-verifier-sandbox:test .
+FIX_VERIFIER_SANDBOX_IMAGE_DIGEST="$(docker image inspect pr-agent-verifier-sandbox:test --format '{{.Id}}')" \
+  pnpm --filter backend test fix/fix-docker-verifier.test.ts
 ```
 
-后端测试使用 Node.js 内置测试运行器（`node:test`）。建议的回归检查覆盖：
+后端测试使用 Node.js 内置测试运行器（`node:test`）。`.github/workflows/ci.yml` 执行后端 check/build/unit/构建验证、隔离 Docker PostgreSQL 套件、使用私有 provider fixture 的全新拆分进程 Compose smoke、前端 lint/build、真实 hostile verifier fixture，以及应用、verifier 和 sandbox 三个目标的非发布 `amd64/arm64` 构建。CI 不使用外部 provider 凭据，也不执行部署或镜像推送。
+
+建议的回归检查覆盖：
 - AI 并发控制
 - 缓存与去重行为
 - Diff 解析与 Hunk 优先级

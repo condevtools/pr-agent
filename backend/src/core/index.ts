@@ -11,6 +11,8 @@ export {
   readOptionalStringEnv,
   readStringEnv,
 } from "./config/env.js";
+export { validateRuntimeEnvironment, type RuntimeEnvironmentConfiguration,
+  type RuntimeEnvironmentProfile } from "./config/runtime-environment.js";
 export { BadWebhookRequestError, ensureError, WebhookAuthError } from "./errors/errors.js";
 export { fnv1a32Hex } from "./hashing/fnv.js";
 export {
@@ -22,7 +24,7 @@ export {
   type FetchRetryOptions,
 } from "./http/client.js";
 export { detectTextLocale, localizeText, resolveUiLocale, type UiLocale } from "./i18n/locale.js";
-export { logCore } from "./logging/logger.js";
+export { logCore, sanitizeLogMetadata } from "./logging/logger.js";
 export { encodePath } from "./paths/encode-path.js";
 export {
   deleteRefetchableCacheValue,

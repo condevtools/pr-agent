@@ -1,25 +1,33 @@
 import "dotenv/config";
 import "reflect-metadata";
 
-import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { json, urlencoded } from "express";
-import { readOptionalStringEnv } from "#core";
+import { logCore, validateRuntimeEnvironment } from "#core";
 import type { RawBodyRequest } from "./http/common/types/raw-body-request.js";
 import { requireOnlinePublicationAuthority } from "./agent-runtime/publication/mode.js";
-import { resolveAgentProcessRole, roleStartsWeb } from "./agent-runtime/runtime/config.js";
-import { runtimeComposition } from "./agent-runtime/runtime/composition.js";
+import { resolveAgentProcessRole, roleStartsWeb, roleStartsWorker } from "./agent-runtime/runtime/config.js";
+import { runtimeComposition, validateCapabilityDependencies } from "./agent-runtime/runtime/composition.js";
+import { resolveFrozenModelExecutionPolicy } from "./agent-runtime/runtime/worker-compatibility.js";
+import { evolutionReleasePolicy } from "./evolution/releases/policy.js";
 import { beginModelShutdown, drainModelRequests } from "#model";
 import { beginHttpShutdown } from "#core";
 
 async function bootstrap(): Promise<void> {
   requireOnlinePublicationAuthority();
   const role = resolveAgentProcessRole();
+  const profiles = role === "all" ? ["web", "worker", "recovery"] as const : [role];
+  const configurations = profiles.map((profile) => validateRuntimeEnvironment(process.env, profile));
+  if (roleStartsWeb(role) || roleStartsWorker(role)) {
+    const capabilities = validateCapabilityDependencies(process.env);
+    if (roleStartsWeb(role)) resolveFrozenModelExecutionPolicy(process.env);
+    if (capabilities.evolution) evolutionReleasePolicy(process.env);
+  }
   const runtime = runtimeComposition();
   await runtime.start(role);
 
   if (!roleStartsWeb(role)) {
-    Logger.log(`PR Agent ${role} process started`, "Bootstrap");
+    logCore("info", "application.started", { role });
     await waitForRuntimeShutdown(role, runtime.close.bind(runtime));
     return;
   }
@@ -29,7 +37,8 @@ async function bootstrap(): Promise<void> {
     bodyParser: false,
     rawBody: true,
   });
-  const bodyLimit = resolveWebhookBodyLimit(readOptionalStringEnv("WEBHOOK_BODY_LIMIT"));
+  const webConfiguration = configurations.find((configuration) => configuration.profile === "web")!;
+  const bodyLimit = webConfiguration.http!.bodyLimit;
   app.use(
     json({
       limit: bodyLimit,
@@ -45,10 +54,10 @@ async function bootstrap(): Promise<void> {
   );
   app.enableShutdownHooks();
 
-  const port = resolvePort(readOptionalStringEnv("PORT"));
+  const port = webConfiguration.http!.port;
   await app.listen(port);
 
-  Logger.log(`PR Agent ${role} listening on port ${port}`, "Bootstrap");
+  logCore("info", "application.listening", { role, port });
 }
 
 async function waitForRuntimeShutdown(
@@ -65,7 +74,7 @@ async function waitForRuntimeShutdown(
         await closeRuntime();
         beginModelShutdown();
         await drainModelRequests();
-        Logger.log(`PR Agent ${role} stopped (${signal})`, "Bootstrap");
+        logCore("info", "application.stopped", { role, signal });
         resolve();
       } catch (error) {
         reject(error);
@@ -76,15 +85,6 @@ async function waitForRuntimeShutdown(
   });
 }
 
-function resolvePort(rawPort: string | undefined): number {
-  const parsed = Number(rawPort);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
-    return 3000;
-  }
-
-  return Math.floor(parsed);
-}
-
 function captureRawBody(
   request: RawBodyRequest,
   _response: unknown,
@@ -93,21 +93,8 @@ function captureRawBody(
   request.rawBody = buffer;
 }
 
-function resolveWebhookBodyLimit(rawLimit: string | undefined): string {
-  const value = rawLimit?.trim();
-  if (!value) {
-    return "1mb";
-  }
-
-  return value;
-}
-
 bootstrap().catch(async (error) => {
   await runtimeComposition().close().catch(() => undefined);
-  Logger.error(
-    `Failed to bootstrap application: ${error instanceof Error ? error.message : String(error)}`,
-    "",
-    "Bootstrap",
-  );
+  logCore("error", "application.bootstrap_failed", { error });
   process.exitCode = 1;
 });

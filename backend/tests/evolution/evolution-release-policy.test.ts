@@ -12,7 +12,8 @@ const qualificationId = "22222222-2222-4222-8222-222222222222";
 
 test("release activation is disabled unless the server configuration is exactly true", () => {
   assert.equal(evolutionReleasePolicy({}).activationEnabled, false);
-  assert.equal(evolutionReleasePolicy({ EVOLUTION_RELEASE_ACTIVATION_ENABLED: "TRUE" }).activationEnabled, false);
+  assert.throws(() => evolutionReleasePolicy({ EVOLUTION_RELEASE_ACTIVATION_ENABLED: "TRUE" }),
+    /EVOLUTION_RELEASE_ACTIVATION_ENABLED/u);
   assert.equal(evolutionReleasePolicy({ EVOLUTION_RELEASE_ACTIVATION_ENABLED: "true" }).activationEnabled, true);
 });
 

@@ -1,15 +1,15 @@
 export function readNumberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
-  if (!raw) {
+  if (raw === undefined || !raw.trim()) {
     return fallback;
   }
 
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) {
-    return fallback;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
   }
 
-  return Math.floor(value);
+  return value;
 }
 
 export function readStringEnv(

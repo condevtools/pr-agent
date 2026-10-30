@@ -1,11 +1,10 @@
 import {
   Injectable,
-  Logger,
   type BeforeApplicationShutdown,
   type OnApplicationShutdown,
 } from "@nestjs/common";
 
-import { beginHttpShutdown } from "#core";
+import { beginHttpShutdown, logCore } from "#core";
 import { beginModelShutdown, drainModelRequests } from "#model";
 import {
   closeAgentRuntimeApplicationResources,
@@ -47,7 +46,6 @@ export class ApplicationShutdownSequence {
 
 @Injectable()
 export class ShutdownCoordinatorService implements BeforeApplicationShutdown, OnApplicationShutdown {
-  private readonly logger = new Logger(ShutdownCoordinatorService.name);
   private readonly sequence = new ApplicationShutdownSequence({
     beginHttpShutdown,
     quiesceRuntime: quiesceAgentRuntime,
@@ -58,22 +56,16 @@ export class ShutdownCoordinatorService implements BeforeApplicationShutdown, On
 
   async beforeApplicationShutdown(signal?: string): Promise<void> {
     await this.sequence.beforeApplicationShutdown();
-    this.logger.log(
-      `Application shutdown (${signal ?? "unknown"}): background claimers drained`,
-    );
+    logCore("info", "application.shutdown_claimers_drained", { signal: signal ?? "unknown" });
   }
 
   async onApplicationShutdown(signal?: string): Promise<void> {
     const drained = await this.sequence.onApplicationShutdown();
     if (!drained) {
-      this.logger.warn(
-        `Application shutdown (${signal ?? "unknown"}): timed out while draining AI requests`,
-      );
+      logCore("warn", "application.shutdown_model_drain_timeout", { signal: signal ?? "unknown" });
       return;
     }
 
-    this.logger.log(
-      `Application shutdown (${signal ?? "unknown"}): AI requests drained`,
-    );
+    logCore("info", "application.shutdown_model_requests_drained", { signal: signal ?? "unknown" });
   }
 }

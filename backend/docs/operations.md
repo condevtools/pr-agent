@@ -1,6 +1,6 @@
 # Harness 运行、恢复与验证
 
-数据库仍由根目录 `docker-compose.yml` 提供。API、Run worker 和 publication recovery 分别运行在 `pr-agent`、`worker` 和 `recovery` 容器中；PostgreSQL 是任务、执行权、事件、预算和外部写入事实的权威。当前没有跨服务消息投递需求，因此没有再引入 Redis、Kafka 或第二套任务队列。每个 API 实例都能从持久事件游标恢复 SSE；内存只负责本实例的连接分发。
+数据库仍由根目录 `docker-compose.yml` 提供。API、Run worker、publication recovery 和周期保留分别运行在 `pr-agent`、`worker`、`recovery` 和 `maintenance` 容器中；PostgreSQL 是任务、执行权、事件、预算和外部写入事实的权威。当前没有跨服务消息投递需求，因此没有再引入 Redis、Kafka 或第二套任务队列。每个 API 实例都能从持久事件游标恢复 SSE；内存只负责本实例的连接分发。
 
 ## 按仓库暂停与恢复
 
@@ -45,34 +45,39 @@ docker compose run --rm database-init node dist/agent-runtime/cli.js metrics \
 
 ## 内容保留
 
-保留操作使用管理数据库角色，默认选择 30 天前终结的 Run，最小 7 天，单批最多 1,000 个。先查看候选，再由管理员按既定数据策略执行：
+保留操作使用专用 `pr_agent_maintenance` 数据库角色。常驻进程默认每 60 秒执行一次有界扫描，每批默认 100、可配置范围 1–1,000；`preview` 是安全默认，不删除内容。只有显式设置 `HARNESS_MAINTENANCE_MODE=apply` 才执行保留删除。默认 30 天后清除 Run 内容和 replay payload，90 天后删除已清内容的 replay 行，400 天后才允许删除 trace/audit 行和严格符合条件的普通 Run 完整 FK 图；启动时强制 `7 <= content < replay < trace <= 3650`。
+
+手动调查和执行使用同一个专用维护进程、受限数据库角色、全局有界策略与原子 cycle receipt；不存在按 tenant 绕过这些保护的管理员删除入口。未指定 `--action` 时一次性运行固定为安全的 `preview`：
 
 ```sh
-docker compose run --rm database-init node dist/agent-runtime/cli.js retention \
-  --tenant <tenant-uuid> --action preview --days 30 --limit 100
+docker compose run --rm maintenance node dist/agent-runtime/maintenance-process.js --once
 
-docker compose run --rm database-init node dist/agent-runtime/cli.js retention \
-  --tenant <tenant-uuid> --action apply --days 30 --limit 100
+docker compose run --rm maintenance node dist/agent-runtime/maintenance-process.js \
+  --once --action apply --cycle-id <uuid>
 ```
 
 Apply 会删除候选的旧事件前缀，清除 Run 输入、Step 内联输出、checkpoint、模型响应与工具结果引用；它是实际数据删除操作。非终态、外部效果未决、费用未决或仍有未释放 artifact hold 的 Run 被排除。Run 和关联 operation 加锁后再次检查；新 hold 也遵守 Run → artifact 的锁顺序，不能在内容清理完成后补建引用。
 
-身份、版本、哈希、用量数值、命令回执和 publication 账继续保留。公开 snapshot 的 `contentPurgedAt` 标明 Run 的内联内容已清理，rerun 返回 410，必须从源 PR 创建新的 review。压缩 artifact 按独立保留期清理：默认 30 天，hold 释放后继续保留 30 天，因此该字段不代表压缩存储已经即时擦除。原创建键仍按不可变 request hash 去重，不因清除内容而产生新 Run。事件 floor 与审计同事务推进。
+在内容窗口与 trace 窗口之间，Run 身份、版本、哈希、用量数值、命令回执和 publication 账仍用于去重与审计。公开 snapshot 的 `contentPurgedAt` 标明 Run 的内联内容已清理，rerun 返回 410，必须从源 PR 创建新的 review。压缩 artifact 按独立保留期清理：默认 30 天，hold 释放后继续保留 30 天，因此该字段不代表压缩存储已经即时擦除。事件 floor 与审计同事务推进。
+
+超过 trace 窗口后，只有不存在子 Run、artifact/hold、未结算费用、活动或共享 publication identity、资格/Fix/Evolution 等强引用的普通 Run，才能连同完整 FK 图删除。这之后原幂等键不再被保留，同键新请求可创建新 Run。有资格证据、活动 hold 或当前 publication slot 的图不会被这一路径删除。
 
 已退休且没有提案、评测或发布引用的数据集在 purge 事务内释放自己的 `dataset-case` holds。其他 Fix、Evolution、资格认定和法律保留引用必须先由对应生命周期显式解除，不能为了释放磁盘空间跳过引用检查。
 
-此策略不删除 publication 的冻结 payload、外部平台评论或数据库备份，也不是全仓库数据擦除接口。它没有配置自动定时删除；备份保存期、磁盘加密、外部效果审计与平台内容删除需要部署方分别管理。
+Fix artifact hold 只会在提案 Run 结束并超过 content 窗口后自动释放，因此该窗口也是创建首次人工审批的最短保留期；仍有效的审批、未结束的发布子 Run 或未决发布操作会继续阻止释放。hold 一旦释放，系统会拒绝再为该提案创建新的审批。
+
+此策略不删除 publication 的冻结 payload、外部平台评论或数据库备份，也不是“扫描全表并删除所有旧行”的全库擦除接口。它只领取到期且无 hold 的有界批次；备份保存期、磁盘加密、外部效果审计与平台内容删除需要部署方分别管理。
 
 ## 备份、恢复和前滚
 
 ### 旧 volume 角色升级
 
-本节只适用于旧版以 `POSTGRES_USER=pr_agent_migrator` 首次创建、且数据库名为 `pr_agent` 的 volume。脚本不会自动运行。执行前必须完成数据库备份、验证可恢复性，并停止 `pr-agent`、`worker`、`recovery`、隔离 verifier operator 和其他 writer。旧 schema 及其中对象必须仍由 `pr_agent_migrator` 拥有；如果不是，脚本会中止，不能用 `REASSIGN OWNED` 绕过人工复核。
+本节只适用于旧版以 `POSTGRES_USER=pr_agent_migrator` 首次创建、且数据库名为 `pr_agent` 的 volume。脚本不会自动运行。执行前必须完成数据库备份、验证可恢复性，并停止 `pr-agent`、`worker`、`recovery`、`maintenance`、隔离 verifier operator 和其他 writer。旧 schema 及其中对象必须仍由 `pr_agent_migrator` 拥有；如果不是，脚本会中止，不能用 `REASSIGN OWNED` 绕过人工复核。
 
-先把 `.env.example` 中四个数据库密码替换为互不相同的随机值。然后从终端安全读取旧 migrator 密码；下列命令只把密码作为环境变量传入容器，不放在命令参数或 SQL 文件中：
+先把 `.env.example` 中五个数据库密码替换为互不相同的随机值。然后从终端安全读取旧 migrator 密码；下列命令只把密码作为环境变量传入容器，不放在命令参数或 SQL 文件中：
 
 ```sh
-docker compose stop pr-agent worker recovery
+docker compose stop pr-agent worker recovery maintenance
 # 在 verifier 专用主机上另行执行：
 docker compose -f docker-compose.verifier-operator.yml stop verifier-operator
 docker compose up -d --no-deps postgres
@@ -87,10 +92,10 @@ docker compose exec -T -e PGPASSWORD postgres \
 unset PGPASSWORD
 
 docker compose run --rm database-init node dist/agent-runtime/cli.js migrate
-docker compose up -d pr-agent worker recovery
+docker compose up -d pr-agent worker recovery maintenance
 ```
 
-脚本先创建或轮换受密码保护的 `postgres` bootstrap 管理角色、`pr_agent_app` 和 `pr_agent_verifier`，再为所有已有 FORCE RLS 表安装 schema-owner maintenance policy；最后在 `SET ROLE postgres` 后把 `pr_agent_migrator` 降为 `NOSUPERUSER NOBYPASSRLS NOCREATEROLE`。这样迁移 021 的数据回填发生在降权后，但仍受明确 owner policy 授权。脚本限定数据库名和 namespace owner，保留现有数据与对象所有权，可安全重复执行；任何前置条件不符都必须停止并调查。
+脚本先创建或轮换受密码保护的 `postgres` bootstrap 管理角色、`pr_agent_app`、`pr_agent_verifier` 和 `pr_agent_maintenance`，再为所有已有 FORCE RLS 表安装 schema-owner maintenance policy；最后在 `SET ROLE postgres` 后把 `pr_agent_migrator` 降为 `NOSUPERUSER NOBYPASSRLS NOCREATEROLE`。这样迁移 021 的数据回填发生在降权后，但仍受明确 owner policy 授权。脚本限定数据库名和 namespace owner，保留现有数据与对象所有权，可安全重复执行；任何前置条件不符都必须停止并调查。
 
 迁移成功后检查 `docker compose ps`、`docker compose logs database-init` 和 `/ready`。不要删除 volume 来“修复”角色或迁移失败，也不要把 bootstrap 密码交给应用服务。
 

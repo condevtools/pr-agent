@@ -30,7 +30,7 @@ GitLab FixRun 可生成建议，但发布明确禁用。其 [Commit API](https:/
 
 ## Docker 配置
 
-PostgreSQL 已在根 `docker-compose.yml`。一次性 `database-init` 使用受限的 `pr_agent_migrator` 管理迁移和版本化最小授权；四个数据库角色密码都必须显式配置。旧 volume 不能由迁移 CLI 自动改变角色，必须先按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 执行显式 bootstrap。普通 web、worker、recovery 部署没有 Docker socket，也不部署 verifier。
+PostgreSQL 已在根 `docker-compose.yml`。一次性 `database-init` 使用受限的 `pr_agent_migrator` 管理迁移和版本化最小授权；五个数据库角色密码都必须显式配置。旧 volume 不能由迁移 CLI 自动改变角色，必须先按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 执行显式 bootstrap。普通 web、worker、recovery、maintenance 部署没有 Docker socket，也不部署 verifier。
 
 构建 sandbox：`docker build --target verifier-sandbox -t pr-agent-fix-sandbox .`。通过 `docker image inspect pr-agent-fix-sandbox --format '{{.Id}}'` 获取不可变 image ID，在服务端 policy 使用该 SHA-256。镜像必须预先存在，运行时 `--pull never`。另行构建 operator：`docker build --target verifier -t pr-agent-verifier:local .`。
 

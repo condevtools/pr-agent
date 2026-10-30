@@ -15,14 +15,16 @@ docker compose up -d --build
 - `pr-agent`：只运行 `web`，等待数据库健康和迁移成功，以 `pr_agent_app` 连接。
 - `worker`：独立领取和执行 Run；不监听 HTTP 端口。
 - `recovery`：独立对账未知发布结果；不监听 HTTP 端口。
+- `maintenance`：以专用 `pr_agent_maintenance` 角色周期执行有界保留扫描；默认只 `preview`，不监听 HTTP 端口。
 
-保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥文件要求。部署前必须在 `.env` 设置四个互不相同的随机密码：`HARNESS_BOOTSTRAP_PASSWORD`、`HARNESS_MIGRATION_PASSWORD`、`HARNESS_APP_PASSWORD`、`HARNESS_VERIFIER_PASSWORD`；Compose 不提供默认值。`.env` 只用于 Compose 插值，`pr-agent` 不会整体加载该文件，而是通过 `docker-compose.yml` 的显式白名单接收运行配置，因此拿不到 bootstrap、migrator 或 verifier 密码。初始化 SQL 只在首次创建空数据卷时执行，创建受限的 migrator、app、verifier 角色；修改环境变量不会轮换已有数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
+保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥配置。部署前必须在 `.env` 设置五个互不相同的随机密码：`HARNESS_BOOTSTRAP_PASSWORD`、`HARNESS_MIGRATION_PASSWORD`、`HARNESS_APP_PASSWORD`、`HARNESS_VERIFIER_PASSWORD`、`HARNESS_MAINTENANCE_PASSWORD`；Compose 不提供默认值。`.env` 只用于 Compose 插值，各容器只通过显式白名单接收自己所需配置。初始化 SQL 只在首次创建空数据卷时执行，创建受限的 migrator、app、verifier、maintenance 角色；修改环境变量不会轮换已有数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
+模型 provider key 只注入 worker，API principal 配置只注入 web，recovery 不获得模型 key；三者仍可按自己的入口、执行或发布职责获得必要的平台凭据。
 
-全新部署复制 `.env.example`、替换四个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 必须成功退出，web、worker 和 recovery 才会启动。三者都使用 UID/GID `10001:10001`、只读根文件系统、tmpfs、`cap-drop ALL` 和 `no-new-privileges`，且没有 Docker socket。可用 `docker compose ps` 和 `docker compose logs database-init` 核对结果。不要把 bootstrap 密码配置给应用或 verifier。
+全新部署复制 `.env.example`、替换五个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 必须成功退出，web、worker、recovery 和 maintenance 才会启动。四者都使用 UID/GID `10001:10001`、只读根文件系统、tmpfs、`cap-drop ALL` 和 `no-new-privileges`，且没有 Docker socket。可用 `docker compose ps` 和 `docker compose logs database-init` 核对结果。不要在 maintenance 中配置平台、模型或 verifier 凭据。
 
 基础 Compose 通过内联 `PRIVATE_KEY` 提供 GitHub App PEM，`PRIVATE_KEY_PATH` 默认留空，因此 Coolify 等平台不需要宿主文件。使用文件时叠加 `docker-compose.secret-file.yml`；它会清空内联 key 并为 web、worker、recovery 挂载同一只读路径。本地 Compose 不保证 secret `uid/gid/mode` 重映射生效，Linux 部署应把源文件交给 UID/GID `10001:10001` 并设置 `0400`，或使用平台原生 secret-file。不能为了绕过权限问题把应用改回 root。
 
-镜像健康检查验证当前容器自己的进程：web 检查本地 `/health`，worker/recovery 检查各自成功写入 PostgreSQL 心跳后生成的本地新鲜 marker。管理 CLI 的 `ready --role` 仍是集群依赖检查，不能替代单容器健康检查。
+镜像健康检查验证当前容器自己的进程：web 检查本地 `/health`，worker/recovery/maintenance 检查各自成功写入 PostgreSQL 心跳后生成的本地新鲜 marker。管理 CLI 的 `ready --role` 仍是集群依赖检查，不能替代单容器健康检查。
 
 如果现有 volume 来自旧版 `POSTGRES_USER=pr_agent_migrator`（该角色仍为超级用户），不能直接启动新 `database-init`，也不能删除 volume。先备份并停止所有 writer，再按 [旧 volume 角色升级](operations.md#旧-volume-角色升级) 显式执行 `docker/postgres/upgrade-runtime-roles.sql`；脚本在迁移 021 之前安装 FORCE RLS owner policy，随后才降权 migrator。所有权或目标数据库不符合预期时脚本会中止，要求人工复核。
 
@@ -73,7 +75,7 @@ GitHub/GitLab review 先生成完整输出，再在一个事务内冻结有序 b
 
 提供方读取与写入不是一个原子事务，最后一次检查后仍可能发生外部并发修改。这里保证本系统稳定的操作身份、unknown 不盲重发和可对账；不承诺任意网络时序下的全局 exactly-once，也不能用数据库锁消除提供方不支持的远端 CAS 竞争。
 
-当前已接入 summary、managed comment、inline comment 和 labels。labels 按目标状态收敛，不伪称能证明具体作者。尚未接入操作账的命令、策略写入、`/implement` 和外部通知在 durable 路径被阻止或抑制；部分“命令未启用/限流”回复因此只记录错误，不另发绕过账本的评论。不要用 legacy 模式恢复这些写入。
+当前已接入 summary、managed comment、inline comment 和 labels。labels 按目标状态收敛，不伪称能证明具体作者。评论入口先识别受支持的评审命令，再检查作者权限和 PostgreSQL 限流，最后入队。普通评论、未绑定仓库和不受支持的命令安静忽略，不查权限、不调用模型，也不发布绕过操作账的提示评论。
 
 ## 人工处理不确定结果
 

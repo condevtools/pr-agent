@@ -35,7 +35,7 @@ test("central guard rejects forgotten routes during initialization", async () =>
   finally { await app.close(); }
 });
 
-test("global guard authorizes by capability before an endpoint executes", async () => {
+test("global guard authorizes by capability before an endpoint executes", async (t) => {
   const old = process.env.HARNESS_API_PRINCIPALS_JSON;
   const tenantId = randomUUID();
   const integrationId = randomUUID();
@@ -47,11 +47,12 @@ test("global guard authorizes by capability before an endpoint executes", async 
       expiresAt: "2020-01-01T00:00:00.000Z", permissions: ["runs:read"] },
   ]);
   clearMetricState();
-  const warnings: unknown[] = [];
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (message: string) => { warnings.push(message); });
   const logger: LoggerService = {
     log: () => undefined,
     error: () => undefined,
-    warn: (message) => { warnings.push(message); },
+    warn: () => undefined,
   };
   const app = await NestFactory.create(FixtureModule, { logger, abortOnError: false });
   try {
@@ -66,8 +67,9 @@ test("global guard authorizes by capability before an endpoint executes", async 
     assert.equal((await fetch(`${base}/fixture/read`, { headers })).status, 200);
     assert.equal((await fetch(`${base}/fixture/write?body_secret=never-log-body`, { headers })).status, 403);
 
-    const denials = warnings.filter((entry): entry is Record<string, unknown> =>
-      Boolean(entry && typeof entry === "object" && "code" in entry));
+    const denials = warnings.map((entry) => JSON.parse(entry) as Record<string, unknown>)
+      .filter((entry) => entry.event === "route_access.denied")
+      .map(({ code, policy, controllerMethod, status }) => ({ code, policy, controllerMethod, status }));
     assert.deepEqual(denials, [
       { code: "UNAUTHORIZED", policy: "runs:read", controllerMethod: "ProtectedFixture.read", status: 401 },
       { code: "UNAUTHORIZED", policy: "runs:read", controllerMethod: "ProtectedFixture.read", status: 401 },

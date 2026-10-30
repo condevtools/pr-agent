@@ -55,15 +55,3 @@ export function safeJsonStringify(value: unknown, fallback = "null"): string {
     return fallback;
   }
 }
-
-export function formatLogMessage(message: string, metadata: unknown): string {
-  if (!metadata) {
-    return message;
-  }
-
-  try {
-    return `${message} ${JSON.stringify(metadata)}`;
-  } catch {
-    return message;
-  }
-}

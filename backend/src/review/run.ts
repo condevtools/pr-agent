@@ -11,6 +11,7 @@ import type { PublicationBinding } from "../agent-runtime/authority/publication-
 import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import { reviewRunInputSchema } from "./intake/run-input.js";
 import { publicationRuntimeForBinding } from "../agent-runtime/runtime/publication.js";
+import { logCore } from "#core";
 
 /** The production worker reuses the same collectors, analyzer, renderers and publisher. */
 export async function executeReviewRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
@@ -26,7 +27,7 @@ export async function executeReviewRun(lease: RunLease, binding: PublicationBind
   const logger = {
     info: (_metadata: unknown, _message: string) => undefined,
     error: (_metadata: unknown, _message: string) => {
-      process.emitWarning(`Durable review provider operation failed for Run ${lease.runId}`);
+      logCore("error", "review_provider.operation_failed", { runId: lease.runId });
     },
   };
   if (input.platform === "github") {

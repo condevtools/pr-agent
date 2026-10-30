@@ -13,8 +13,8 @@
     "docker:build": "docker compose build",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
-    "docker:restart": "docker compose restart pr-agent worker recovery",
-    "docker:logs": "docker compose logs -f pr-agent worker recovery",
+    "docker:restart": "docker compose restart pr-agent worker recovery maintenance",
+    "docker:logs": "docker compose logs -f pr-agent worker recovery maintenance",
     "docker:ps": "docker compose ps"
   },
   "devDependencies": {

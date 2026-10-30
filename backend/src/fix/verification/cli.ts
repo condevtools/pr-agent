@@ -8,8 +8,10 @@ import { VerifierWorker } from "./worker.js";
 import { agentRuntimePoolConfig } from "../../agent-runtime/runtime/config.js";
 import { verifierCapabilityHash } from "../../agent-runtime/versions.js";
 import { ProcessHeartbeatLoop, ProcessHeartbeatStore } from "../../agent-runtime/runtime/heartbeat.js";
+import { validateRuntimeEnvironment } from "#core";
 
-const pool = new Pool(agentRuntimePoolConfig());
+validateRuntimeEnvironment(process.env, "verifier");
+const pool = new Pool(agentRuntimePoolConfig(process.env, "web", "verifier"));
 pool.on("error", (error) => process.stderr.write(`verifier database connection error: ${error.name}\n`));
 const role = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean; current_user: string }>(
   "SELECT rolsuper,rolbypassrls,current_user FROM pg_roles WHERE rolname=current_user",

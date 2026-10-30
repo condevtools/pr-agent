@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export type LocalProcessRole = "worker" | "recovery" | "verifier";
+export type LocalProcessRole = "worker" | "recovery" | "verifier" | "maintenance";
 interface ProcessHealthRecord {
   schemaVersion: 1;
   role: LocalProcessRole;
@@ -67,7 +67,7 @@ async function readRecord(path: string): Promise<ProcessHealthRecord> {
   const record: unknown = JSON.parse(await readFile(path, "utf8"));
   if (!record || typeof record !== "object") throw new Error("Invalid process health marker");
   const row = record as Record<string, unknown>;
-  if (row.schemaVersion !== 1 || !["worker", "recovery", "verifier"].includes(String(row.role))
+  if (row.schemaVersion !== 1 || !["worker", "recovery", "verifier", "maintenance"].includes(String(row.role))
       || typeof row.instanceId !== "string" || !/^[a-f0-9-]{36}$/u.test(row.instanceId)
       || !Number.isSafeInteger(row.pid) || Number(row.pid) < 1
       || !Number.isSafeInteger(row.heartbeatAt) || Number(row.heartbeatAt) < 1) {

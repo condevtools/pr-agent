@@ -1,25 +1,22 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 
-import { BadWebhookRequestError, parseBooleanEnv, readOptionalStringEnv } from "#core";
+import { BadWebhookRequestError, logCore, parseBooleanEnv, readOptionalStringEnv } from "#core";
 import { type LoggerLike } from "../../../review/platforms/github/contracts.js";
 import { handlePlainGitHubWebhook, verifyWebhookSignature } from "#integrations/github";
 import { runVerifiedGitHubIntake } from "./verified-github-intake.js";
 import {
-  formatLogMessage,
   normalizeHeaderRecord,
   readRawBody,
 } from "../../common/webhook-utils.js";
 
 @Injectable()
 export class GithubWebhookService {
-  private readonly logger = new Logger(GithubWebhookService.name);
-
   private readonly serviceLogger: LoggerLike = {
-    info: (metadata, message) => {
-      this.logger.log(formatLogMessage(message, metadata));
+    info: (metadata, _message) => {
+      logCore("debug", "github_webhook.event", { metadata });
     },
-    error: (metadata, message) => {
-      this.logger.error(formatLogMessage(message, metadata));
+    error: (metadata, _message) => {
+      logCore("error", "github_webhook.failed", { metadata });
     },
   };
 

@@ -22,6 +22,7 @@ if (!testUrl || !container) {
     const bootstrapPassword = randomUUID();
     const appPassword = randomUUID();
     const verifierPassword = randomUUID();
+    const maintenancePassword = randomUUID();
     const migrationPassword = randomUUID();
     const tenantId = randomUUID();
     const integrationId = randomUUID();
@@ -38,7 +39,7 @@ if (!testUrl || !container) {
     // suites may already have grants to the shared runtime role identities.
     const existingRoles = new Set((await admin.query<{ rolname: string }>(
       "SELECT rolname FROM pg_roles WHERE rolname=ANY($1::text[])",
-      [["pr_agent_app", "pr_agent_verifier", "pr_agent_migrator"]],
+      [["pr_agent_app", "pr_agent_verifier", "pr_agent_maintenance", "pr_agent_migrator"]],
     )).rows.map((row) => row.rolname));
     try {
       await admin.query(`CREATE ROLE pr_agent_migrator LOGIN PASSWORD '${legacyPassword}'
@@ -63,6 +64,7 @@ if (!testUrl || !container) {
         HARNESS_BOOTSTRAP_PASSWORD: bootstrapPassword,
         HARNESS_APP_PASSWORD: appPassword,
         HARNESS_VERIFIER_PASSWORD: verifierPassword,
+        HARNESS_MAINTENANCE_PASSWORD: maintenancePassword,
         HARNESS_MIGRATION_PASSWORD: migrationPassword,
       };
       const rejected = invokeOperatorScript("pr_agent_migrator", legacyPassword, upgradeSql, upgradeSecrets);
@@ -121,6 +123,7 @@ if (!testUrl || !container) {
         HARNESS_BOOTSTRAP_PASSWORD: bootstrapPassword,
         HARNESS_APP_PASSWORD: appPassword,
         HARNESS_VERIFIER_PASSWORD: verifierPassword,
+        HARNESS_MAINTENANCE_PASSWORD: maintenancePassword,
         HARNESS_MIGRATION_PASSWORD: migrationPassword,
       });
       const repeated = spawnSync(process.execPath,
@@ -153,7 +156,7 @@ if (!testUrl || !container) {
         await legacy?.end();
         await admin.query(`ALTER ROLE postgres PASSWORD '${originalPostgresPassword}'`);
         await admin.query("DROP DATABASE IF EXISTS pr_agent WITH (FORCE)");
-        for (const role of ["pr_agent_app", "pr_agent_verifier", "pr_agent_migrator"]) {
+        for (const role of ["pr_agent_app", "pr_agent_verifier", "pr_agent_maintenance", "pr_agent_migrator"]) {
           if (!existingRoles.has(role)) await admin.query(`DROP ROLE IF EXISTS ${role}`);
         }
       } finally { await admin.end(); }
@@ -169,7 +172,8 @@ if (!testUrl || !container) {
   function invokeOperatorScript(user: string, password: string, sql: string, secrets: Record<string, string>) {
     return spawnSync("docker", ["exec", "-i", "-e", "PGPASSWORD",
       "-e", "HARNESS_BOOTSTRAP_PASSWORD", "-e", "HARNESS_APP_PASSWORD",
-      "-e", "HARNESS_VERIFIER_PASSWORD", "-e", "HARNESS_MIGRATION_PASSWORD",
+      "-e", "HARNESS_VERIFIER_PASSWORD", "-e", "HARNESS_MAINTENANCE_PASSWORD",
+      "-e", "HARNESS_MIGRATION_PASSWORD",
       container, "psql", "-X", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", "pr_agent"], {
       input: sql, encoding: "utf8", timeout: 120_000,
       env: { ...process.env, PGPASSWORD: password, ...secrets },

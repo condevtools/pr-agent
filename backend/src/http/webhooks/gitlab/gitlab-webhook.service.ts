@@ -1,12 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { z } from "zod";
 
-import { BadWebhookRequestError } from "#core";
+import { BadWebhookRequestError, logCore } from "#core";
 import { runGitLabWebhook } from "../../../integrations/gitlab/webhooks/adapter.js";
 import { verifyGitLabWebhookBodySize, verifyGitLabWebhookToken, shouldRequireGitLabWebhookSecret } from "#integrations/gitlab";
 import { type GitLabWebhookBody } from "../../../integrations/gitlab/webhooks/contracts.js";
 import {
-  formatLogMessage,
   normalizeHeaderRecord,
   readRawBody,
 } from "../../common/webhook-utils.js";
@@ -33,17 +32,15 @@ const gitlabWebhookPayloadSchema = z.object({
 
 @Injectable()
 export class GitlabWebhookService {
-  private readonly logger = new Logger(GitlabWebhookService.name);
-
   private readonly serviceLogger = {
-    info: (metadata: unknown, message: string) => {
-      this.logger.log(formatLogMessage(message, metadata));
+    info: (metadata: unknown, _message: string) => {
+      logCore("debug", "gitlab_webhook.event", { metadata });
     },
-    error: (metadata: unknown, message: string) => {
-      this.logger.error(formatLogMessage(message, metadata));
+    error: (metadata: unknown, _message: string) => {
+      logCore("error", "gitlab_webhook.failed", { metadata });
     },
-    warn: (message: string) => {
-      this.logger.warn(formatLogMessage(message, {}));
+    warn: (_message: string) => {
+      logCore("warn", "gitlab_webhook.warning");
     },
   };
 

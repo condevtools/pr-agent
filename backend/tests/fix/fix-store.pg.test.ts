@@ -411,6 +411,17 @@ if (!databaseUrl) {
       { id: expiredApprovalId, status: "expired", generation: 1 },
       { id: receipt.approvalId, status: "open", generation: 2 },
     ]);
+    await pool.query(
+      `UPDATE pr_agent_harness.agent_runs
+       SET finished_at=clock_timestamp()-interval '31 days',updated_at=clock_timestamp()-interval '31 days'
+       WHERE tenant_id=$1 AND id=$2`, [tenantId, fixRunId],
+    );
+    const retentionEligible = await pool.query<{ eligible: boolean }>(
+      "SELECT pr_agent_harness.fix_hold_releasable($1,$2,30) eligible",
+      [tenantId, fixRunId],
+    );
+    assert.equal(retentionEligible.rows[0]!.eligible, false,
+      "an unexpired human approval blocks release after the content window");
     const createPublishRun = async (transaction: Parameters<typeof createRunInTransaction>[0], exact: {
       proposalRunId: string; approvalId: string; intentHash: string;
     }) => (await createRunInTransaction(transaction, {
@@ -460,6 +471,35 @@ if (!databaseUrl) {
         operations: [{ slot: "preview", payload: { body: "frozen" } }] } as never),
       /active Run lease/,
     );
+    const retention = await pool.connect();
+    let approvalSettled = false;
+    try {
+      await retention.query("BEGIN");
+      await retention.query(
+        "SELECT 1 FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+        [tenantId, fixRunId],
+      );
+      await retention.query(
+        `INSERT INTO pr_agent_harness.run_artifact_hold_releases
+           (tenant_id,integration_id,run_id,artifact_hash,hold_key)
+         SELECT tenant_id,integration_id,run_id,artifact_hash,hold_key
+         FROM pr_agent_harness.run_artifact_holds
+         WHERE tenant_id=$1 AND run_id=$2 AND artifact_hash=$3 AND hold_key=$4`,
+        [tenantId, fixRunId, sourceBundleHash, `fix-source:${fixRunId}`],
+      );
+      const lateApproval = db.transaction(tenantId, (client) => createApprovalInTransaction(client, {
+        tenantId, integrationId, proposalRunId: fixRunId, proposalId, intent,
+        commandKey: "preview-after-retention-closed",
+        maker: { type: "user", id: "maker" }, ttlSeconds: 3_600,
+      })).finally(() => { approvalSettled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(approvalSettled, false, "approval creation waits for the proposal Run retention lock");
+      await retention.query("COMMIT");
+      await assert.rejects(lateApproval, /approval_retention_closed/);
+    } catch (error) {
+      await retention.query("ROLLBACK");
+      throw error;
+    } finally { retention.release(); }
   });
 
   async function insertRun(id: string, runType: string, status: "running" | "succeeded"): Promise<void> {
