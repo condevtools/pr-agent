@@ -28,6 +28,11 @@ export interface PullRequestPolicySectionConfig extends PolicySectionConfig {
   requireLinkedIssue: boolean;
 }
 
+export interface IssuePolicySectionConfig extends PolicySectionConfig {
+  triageEnabled: boolean;
+  autoLabelEnabled: boolean;
+}
+
 export interface ReviewPolicyConfig {
   enabled: boolean;
   mode: ReviewMode;
@@ -46,7 +51,7 @@ export interface ReviewPolicyConfig {
 
 export interface RepoPolicyConfig {
   mode: PolicyMode;
-  issue: PolicySectionConfig;
+  issue: IssuePolicySectionConfig;
   pullRequest: PullRequestPolicySectionConfig;
   review: ReviewPolicyConfig;
 }
@@ -63,6 +68,8 @@ export const defaultPolicyConfig: RepoPolicyConfig = {
   mode: "remind",
   issue: {
     enabled: true,
+    triageEnabled: true,
+    autoLabelEnabled: true,
     minBodyLength: 20,
     requiredSections: [],
   },
@@ -272,6 +279,8 @@ function normalizeRepoPolicyConfig(raw: Partial<RepoPolicyConfig>): RepoPolicyCo
     mode,
     issue: {
       enabled: issue.enabled !== false,
+      triageEnabled: issue.triageEnabled !== false,
+      autoLabelEnabled: issue.autoLabelEnabled !== false,
       minBodyLength: Math.max(1, issue.minBodyLength ?? defaultPolicyConfig.issue.minBodyLength),
       requiredSections: normalizeStringList(issue.requiredSections),
     },

@@ -70,7 +70,7 @@ export async function checkRuntimeReadiness(input: {
       const schema = await input.pool.query<{ schema_ready: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM pr_agent_harness.schema_migrations
-           WHERE migration_name='032_github_installation_sync.sql'
+           WHERE migration_name='033_issue_triage.sql'
          ) AS schema_ready`,
       );
       checks.schema = schema.rows[0]?.schema_ready === true;
@@ -185,6 +185,7 @@ export function workerReportMatches(
     && expectedWorkflows.every((workflow) => workflows.includes(workflow))
     && actual.reviewSingle === true
     && actual.reviewDeep === expected.reviewDeep
+    && (actual.issueTriage !== false) === (expected.issueTriage !== false)
     && actual.fix === expected.fix
     && actual.evolution === expected.evolution;
 }

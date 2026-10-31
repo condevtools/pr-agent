@@ -220,7 +220,7 @@ export class RunWorker {
     const assertActive = async () => {
       if (!active || controller.signal.aborted) throw new RunLeaseLostError(lease.runId);
       await store.withLease(lease, async (client) => {
-        if (lease.input.workflow === "review.deep.v1" || lease.input.workflow === "eval.replay.v1"
+        if (lease.input.workflow === "review.deep.v1" || lease.input.workflow === "issue.triage.v1" || lease.input.workflow === "eval.replay.v1"
             || lease.input.workflow === "evolution.propose.v1" || String(lease.input.workflow).startsWith("fix.")) {
           const authority = await client.query<{ allowed: boolean }>(
             "SELECT pr_agent_harness.lock_resumable_review_execution_authority($1,$2,$3,$4) AS allowed",
@@ -322,7 +322,8 @@ export class RunWorker {
         ? "deep_review_artifact_completed" : lease.input.workflow === "fix.propose.v1"
           ? "fix_proposal_completed" : lease.input.workflow === "fix.publish.v1" ? "fix_publication_completed"
             : lease.input.workflow === "evolution.propose.v1" ? "evolution_proposal_completed"
-              : lease.input.workflow === "eval.replay.v1" ? "evaluation_replay_completed" : "review_completed" },
+              : lease.input.workflow === "eval.replay.v1" ? "evaluation_replay_completed"
+                : lease.input.workflow === "issue.triage.v1" ? "issue_triage_completed" : "review_completed" },
       lease.input.workflow === "fix.publish.v1" ? undefined
         : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
     } catch (error) {

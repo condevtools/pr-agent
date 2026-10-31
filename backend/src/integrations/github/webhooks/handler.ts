@@ -32,6 +32,11 @@ import { handleGitHubProviderFeedback } from "../../../evolution/feedback/provid
 import { handleGitHubOnboardingLifecycle } from "../onboarding/lifecycle.js";
 import { deferGitHubPullRequest } from "../onboarding/deferred-pull-request.js";
 import { getGitHubInstallationSyncStore } from "../../../agent-runtime/runtime/github-onboarding.js";
+import { bindingAllowsCapability, resolveRuntimeCapabilities } from "../../../agent-runtime/runtime/capabilities.js";
+import { enqueueIssueTriage, IssueTriageRateLimitError } from "../../../issues/triage/intake.js";
+import { loadIssueTriagePolicy } from "../../../issues/triage/policy.js";
+import { parseGitHubIssue, parseGitHubIssueSubject } from "../issues/identity.js";
+import { incrementMetricCounter } from "../../../http/system/metrics-runtime.js";
 export { createRestBackedOctokit } from "../api/http-client.js";
 export {
   handleGitHubIssueCommentCommand,
@@ -77,17 +82,22 @@ const pullRequestWebhookPayloadSchema = z.object({
 
 const issuesWebhookPayloadSchema = z.object({
   action: z.string().optional(),
+  changes: z.record(z.unknown()).optional(),
+  sender: z.object({ type: z.string().optional(), login: z.string().optional() }).optional(),
   repository: repositoryInfoPayloadSchema,
   issue: z.object({
+    id: z.number().int().positive().safe().optional(),
     number: z.number().int().positive(),
     title: z.string().optional(),
-    body: z.string().optional(),
+    body: z.string().nullable().optional(),
+    state: z.string().optional(),
     pull_request: z.unknown().optional(),
     user: z
       .object({
         login: z.string().optional(),
+        type: z.string().optional(),
       })
-      .optional(),
+      .nullish(),
   }),
 });
 
@@ -239,6 +249,10 @@ export async function handleGitHubWebhookEvent(params: {
     });
   } catch (error) {
     if (error instanceof PublicationBindingNotFoundError || error instanceof PublicationBindingBlockedError) {
+      if (params.eventName === "issues") {
+        incrementMetricCounter("pr_agent_issue_triage_intake_total", { outcome: "unmanaged" });
+        return { ok: true, message: "ignored issue: repository not active or not yet enrolled" };
+      }
       const deferred = await deferGitHubPullRequest({ ...params, sourceHash }, getGitHubInstallationSyncStore);
       if (deferred) return deferred;
     }
@@ -330,14 +344,56 @@ async function handleIssuesEvent(
   if (payload.issue.pull_request) {
     return { ok: true, message: "ignored issue converted from pull request" };
   }
+  if (action === "edited" && !Object.hasOwn(payload.changes ?? {}, "title")
+      && !Object.hasOwn(payload.changes ?? {}, "body")) {
+    return { ok: true, message: "ignored issue edit without title or body changes" };
+  }
+  const isBot = (user?: { type?: string; login?: string }) => user?.type?.toLowerCase() === "bot"
+    || user?.login?.toLowerCase().endsWith("[bot]") === true;
+  if (payload.issue.user === null) return { ok: true, message: "ignored issue without a stable author identity" };
+  if (isBot(payload.sender) || isBot(payload.issue.user) || payload.issue.state === "closed") {
+    return { ok: true, message: "ignored bot or closed issue" };
+  }
+  if (!resolveRuntimeCapabilities().issueTriage) return ignoredIssueTriage("disabled");
 
   const owner = resolveOwner(payload.repository);
   const repo = payload.repository.name;
-  if (!owner || !repo || !payload.issue.number) {
+  if (!owner || !repo || !payload.issue.number || !payload.issue.id || !payload.repository.id) {
     throw new BadWebhookRequestError("invalid issues payload");
   }
 
-  return { ok: true, message: "ignored issues event" };
+  const runtime = await resolvePublicationRuntime({ platform: "github",
+    origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL, repository: `${owner}/${repo}` });
+  if (runtime.binding.providerRepositoryId !== payload.repository.id) {
+    throw new BadWebhookRequestError("Issue repository identity does not match its binding");
+  }
+  if (!bindingAllowsCapability(runtime.binding, "issue.triage")
+      || runtime.binding.reviewExecutionState !== "active") return ignoredIssueTriage("disabled");
+  const context = createReviewContext(owner, repo, params.octokit, params.logger);
+  const policy = await loadIssueTriagePolicy(context);
+  if (!policy.enabled) return ignoredIssueTriage("disabled");
+  if (!params.octokit.issues.get) throw new Error("GitHub Issue read API is unavailable");
+  const current = (await params.octokit.issues.get({ owner, repo, issue_number: payload.issue.number })).data;
+  const subject = parseGitHubIssueSubject(current);
+  if (subject.id !== payload.issue.id || subject.number !== payload.issue.number) {
+    throw new BadWebhookRequestError("Issue immutable identity changed before intake");
+  }
+  if (current.user == null) return { ok: true, message: "ignored issue without a stable author identity" };
+  const issue = parseGitHubIssue(current);
+  if (issue.state !== "open" || isBot(issue.user)) return { ok: true, message: "ignored bot or closed issue" };
+  try {
+    const run = await enqueueIssueTriage(runtime.binding, issue, policy.autoLabels);
+    incrementMetricCounter("pr_agent_issue_triage_intake_total", { outcome: run.created ? "admitted" : "duplicate" });
+    return { ok: true, message: run.created ? "durable Issue triage queued" : "Issue content already queued or analyzed" };
+  } catch (error) {
+    if (error instanceof IssueTriageRateLimitError) return ignoredIssueTriage("rate_limited");
+    throw error;
+  }
+}
+
+function ignoredIssueTriage(outcome: "disabled" | "rate_limited") {
+  incrementMetricCounter("pr_agent_issue_triage_intake_total", { outcome });
+  return { ok: true, message: `ignored Issue triage: ${outcome}` };
 }
 
 async function handlePullRequestReviewThreadEvent(

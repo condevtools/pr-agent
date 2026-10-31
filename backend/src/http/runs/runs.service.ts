@@ -81,6 +81,10 @@ export class RunsService implements BeforeApplicationShutdown {
       `SELECT run_type FROM pr_agent_harness.agent_runs WHERE tenant_id=$1 AND integration_id=$2 AND id=$3`,
       [principal.tenantId, principal.integrationId, id]));
     if (!type.rows[0]) throw runNotFound();
+    if (type.rows[0].run_type === "issue.triage.v1") {
+      throw new RunControlError("ARTIFACT_NOT_AVAILABLE", 404,
+        "Issue triage results are delivered as Issue comments; Run trace contains execution metadata");
+    }
     return type.rows[0].run_type === "fix.propose.v1"
       ? new PgFixStore(services.db).readArtifact(principal, id, { raw: includeRaw })
       : new DeepReviewStore(services.db).readArtifact(principal, id, { raw: includeRaw });
@@ -97,7 +101,12 @@ export class RunsService implements BeforeApplicationShutdown {
     if (command.kind !== "rerun") return store.apply(principal, runId, command);
     const previous = await store.lookupReceipt(principal, runId, command);
     if (previous) return previous;
-    const original = reviewRunInputSchema.parse(await (await this.queries()).originalInput(principal, runId));
+    const originalInput = await (await this.queries()).originalInput(principal, runId);
+    if (originalInput.workflow === "issue.triage.v1") {
+      throw new RunControlError("RERUN_NOT_SUPPORTED", 409,
+        "Issue triage is content-addressed; edit the Issue to submit new content");
+    }
+    const original = reviewRunInputSchema.parse(originalInput);
     const binding = await this.context.binding(principal);
     if (original.workflow === "review.deep.v1" && !bindingAllowsCapability(binding, "review.deep")) {
       throw runConflict("Deep review is not enabled for this integration");

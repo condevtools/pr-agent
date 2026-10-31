@@ -94,6 +94,8 @@ The default process limits are 1,024 concurrent streams, 64 per tenant/subject, 
 
 Trace exposes step/call/receipt metadata and hashes. It does not return raw prompts, provider responses, checkpoints, authorization headers or private event payloads. Trace cursors are opaque and retain database timestamp precision.
 
+`issue.triage.v1` Runs are created by eligible GitHub Issue webhooks, not `POST /runs`. Their user-facing result is the Issue comment; their structured result remains in the durable step output. Trace exposes execution metadata only. Issue Run artifact reads return 404 and explicit rerun returns 409; editing the Issue supplies a new content identity. See [Issue Triage](issue-triage.md).
+
 ## Validation
 
 Run `npm test`, `npm run check`, `npm run build`, and `npm run test:harness:pg` from `backend`. The PostgreSQL runner creates a disposable PostgreSQL 17 Docker container and fresh database per suite, then removes only its own container. API tests use a real Nest HTTP server, a restricted database role and a local provider fixture. No live provider writes are needed.

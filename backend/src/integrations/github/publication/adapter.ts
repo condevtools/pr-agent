@@ -14,6 +14,7 @@ import { GitHubRestApiError } from "../api/http-client.js";
 import type { MinimalGitHubOctokit } from "../api/types.js";
 import { githubPublicationReconciliationGraceMs } from "../../../core/http/retry-options.js";
 import { canonicalJson } from "../../../agent-runtime/versions.js";
+import { githubIssueRevision, parseGitHubIssueSubject } from "../issues/identity.js";
 
 const PAGE_SIZE = 100;
 const PAGE_CAP = 20;
@@ -25,6 +26,8 @@ interface Target {
   targetId: number;
   providerRepositoryId: number;
   providerActorId: number;
+  targetKind?: "issue";
+  revision?: string;
 }
 
 export function createGitHubPublicationAdapter(params: {
@@ -39,6 +42,7 @@ export function createGitHubPublicationAdapter(params: {
 export async function publishGitHubIssueCommentDurably(params: {
   runtime: GitHubPublicationRuntime; context: GitHubPublicationContext; owner: string; repo: string;
   pullNumber: number; revision: string; slot: string; body: string; managedMarkerKey?: string;
+  targetKind?: "issue";
 }): Promise<PublicationResult> {
   const target = await resolveTarget(params);
   const managedTarget = params.managedMarkerKey
@@ -73,6 +77,7 @@ export async function publishGitHubInlineCommentDurably(params: {
 export async function publishGitHubLabelsDurably(params: {
   runtime: GitHubPublicationRuntime; context: GitHubPublicationContext; owner: string; repo: string;
   pullNumber: number; revision: string; slot: string; labels: string[];
+  targetKind?: "issue";
 }): Promise<PublicationResult> {
   const payload = {
     kind: "github-add-labels",
@@ -100,9 +105,32 @@ function buildRequest(
 
 async function resolveTarget(params: {
   runtime: GitHubPublicationRuntime; context: GitHubPublicationContext; owner: string; repo: string; pullNumber: number;
+  revision: string; targetKind?: "issue";
 }): Promise<Target> {
   const binding = params.runtime.binding;
   if (!binding) throw new PublicationPreflightError("unprepared", "github_binding_metadata_missing");
+  if (params.targetKind === "issue") {
+    const response = await requiredMethod(params.context.octokit.issues.get,
+      "github_issue_lookup_unavailable")({ owner: params.owner, repo: params.repo, issue_number: params.pullNumber });
+    const issue = parseOrdinaryIssueSubject(response.data, "unprepared");
+    if (issue.number !== params.pullNumber) {
+      throw new PublicationPreflightError("unprepared", "github_issue_number_mismatch");
+    }
+    if (issue.state !== "open") throw new PublicationPreflightError("unprepared", "github_issue_not_open");
+    if (githubIssueRevision(issue) !== params.revision) {
+      throw new PublicationPreflightError("unprepared", "github_issue_revision_mismatch");
+    }
+    return {
+      owner: params.owner,
+      repo: params.repo,
+      pullNumber: params.pullNumber,
+      targetId: issue.id,
+      providerRepositoryId: binding.providerRepositoryId,
+      providerActorId: binding.providerActorId,
+      targetKind: "issue",
+      revision: params.revision,
+    };
+  }
   const pull = await params.context.octokit.pulls.get({ owner: params.owner, repo: params.repo, pull_number: params.pullNumber });
   return {
     owner: params.owner,
@@ -142,6 +170,7 @@ function makeAdapter(
         );
       }
       const target = readTarget(payload);
+      validateTargetKind(target, payload, expectedOperation?.businessOperationId);
       const identity = await verifyLiveIdentity(
         verifyCredentialIdentity,
         target.providerActorId,
@@ -155,7 +184,7 @@ function makeAdapter(
         target.providerActorId !== expectedBinding.providerActorId ||
         `${target.owner}/${target.repo}`.toLowerCase() !== expectedBinding.repository.toLowerCase()
       )) throw new PublicationPreflightError(expectedOperation?.businessOperationId ?? "unprepared", "github_binding_payload_mismatch");
-      await verifyIdentity(octokit, target, expectedOperation?.businessOperationId);
+      await verifyIdentity(octokit, target, expectedOperation?.businessOperationId, true);
       await verifyManagedTargetFingerprint(octokit, target, payload, expectedOperation?.businessOperationId);
       dispatchPreflight = {
         identity,
@@ -166,6 +195,9 @@ function makeAdapter(
     },
     currentRevision: (expectedOperation?.payload ?? initialPayload) ? async () => {
       const target = readTarget(expectedOperation?.payload ?? initialPayload ?? {});
+      if (target.targetKind === "issue") {
+        return githubIssueRevision(await readIssueSubject(octokit, target, "unprepared"));
+      }
       return (await octokit.pulls.get({ owner: target.owner, repo: target.repo, pull_number: target.pullNumber })).data.head.sha;
     } : undefined,
     dispatch: (marker, payload, operation) => {
@@ -193,6 +225,7 @@ function makeAdapter(
 async function dispatch(octokit: MinimalGitHubOctokit, marker: string, payload: PublicationPayload, operation: PublicationOperation, credentialIdentity: GitHubCredentialIdentity) {
   const target = readTarget(payload);
   const kind = text(payload.kind, "github_payload_kind_missing");
+  validateTargetKind(target, payload, operation.businessOperationId);
   try {
     if (kind === "github-add-labels") {
       const labels = stringArray(payload.labels);
@@ -228,12 +261,13 @@ async function find(octokit: MinimalGitHubOctokit, marker: string, payload: Publ
   const target = readTarget(payload);
   const credentialIdentity = await verifyLiveIdentity(verifyCredentialIdentity, target.providerActorId, operation.businessOperationId, true);
   try {
-    await verifyIdentity(octokit, target, operation.businessOperationId);
+    await verifyIdentity(octokit, target, operation.businessOperationId, false);
   } catch (cause) {
     if (cause instanceof PublicationPreflightError) throw new PublicationLookupIndeterminateError(cause.code, { cause });
     throw cause;
   }
   const kind = text(payload.kind, "github_payload_kind_missing");
+  validateTargetKind(target, payload, operation.businessOperationId);
   if (kind === "github-add-labels") {
     const result = await requiredMethod(octokit.issues.get, "github_issue_lookup_unavailable")({ owner: target.owner, repo: target.repo, issue_number: target.pullNumber });
     const actual = new Set((result.data.labels ?? []).map((label) => typeof label === "string" ? label : label.name).filter((label): label is string => Boolean(label)));
@@ -315,13 +349,50 @@ async function verifyManagedTargetFingerprint(
   }
 }
 
-async function verifyIdentity(octokit: MinimalGitHubOctokit, target: Target, operationId = "unprepared"): Promise<void> {
-  const [repository, pull] = await Promise.all([
-    requiredMethod(octokit.repos.get, "github_repository_lookup_unavailable")({ owner: target.owner, repo: target.repo }),
-    octokit.pulls.get({ owner: target.owner, repo: target.repo, pull_number: target.pullNumber }),
-  ]);
+async function verifyIdentity(
+  octokit: MinimalGitHubOctokit,
+  target: Target,
+  operationId = "unprepared",
+  requireCurrent = true,
+): Promise<void> {
+  const repository = await requiredMethod(octokit.repos.get,
+    "github_repository_lookup_unavailable")({ owner: target.owner, repo: target.repo });
   if (repository.data.id !== target.providerRepositoryId) throw new PublicationPreflightError(operationId, "github_repository_identity_mismatch");
+  if (target.targetKind === "issue") {
+    const issue = await readIssueSubject(octokit, target, operationId);
+    if (issue.id !== target.targetId || issue.number !== target.pullNumber) {
+      throw new PublicationPreflightError(operationId, "github_issue_identity_mismatch");
+    }
+    if (requireCurrent && issue.state !== "open") {
+      throw new PublicationPreflightError(operationId, "github_issue_not_open");
+    }
+    if (requireCurrent && githubIssueRevision(issue) !== target.revision) {
+      throw new PublicationPreflightError(operationId, "github_issue_revision_mismatch");
+    }
+    return;
+  }
+  const pull = await octokit.pulls.get({ owner: target.owner, repo: target.repo, pull_number: target.pullNumber });
   if (pull.data.id !== target.targetId || pull.data.number !== target.pullNumber) throw new PublicationPreflightError(operationId, "github_pull_identity_mismatch");
+}
+
+async function readIssueSubject(octokit: MinimalGitHubOctokit, target: Target, operationId: string) {
+  const response = await requiredMethod(octokit.issues.get,
+    "github_issue_lookup_unavailable")({ owner: target.owner, repo: target.repo, issue_number: target.pullNumber });
+  return parseOrdinaryIssueSubject(response.data, operationId);
+}
+
+function parseOrdinaryIssueSubject(value: unknown, operationId: string) {
+  try {
+    return parseGitHubIssueSubject(value);
+  } catch (cause) {
+    throw new PublicationPreflightError(operationId, "github_issue_identity_invalid", { cause });
+  }
+}
+
+function validateTargetKind(target: Target, payload: PublicationPayload, operationId = "unprepared"): void {
+  if (target.targetKind === "issue" && payload.kind === "github-inline-comment") {
+    throw new PublicationPreflightError(operationId, "github_issue_inline_comment_forbidden");
+  }
 }
 
 function renderedBody(payload: PublicationPayload, marker: string): string {
@@ -343,6 +414,10 @@ function classifyWrite(id: string, error: unknown): unknown {
 }
 
 function readTarget(payload: PublicationPayload): Target {
+  const rawTargetKind = payload.targetKind;
+  if (rawTargetKind !== undefined && rawTargetKind !== "issue") {
+    throw new Error("github_target_kind_invalid");
+  }
   return {
     owner: text(payload.owner, "github_owner_missing"),
     repo: text(payload.repo, "github_repo_missing"),
@@ -350,6 +425,10 @@ function readTarget(payload: PublicationPayload): Target {
     targetId: positiveInteger(payload.targetId, "github_target_id_missing"),
     providerRepositoryId: positiveInteger(payload.providerRepositoryId, "github_repository_id_missing"),
     providerActorId: positiveInteger(payload.providerActorId, "github_actor_id_missing"),
+    ...(rawTargetKind === "issue" ? {
+      targetKind: "issue" as const,
+      revision: text(payload.revision, "github_issue_revision_missing"),
+    } : {}),
   };
 }
 

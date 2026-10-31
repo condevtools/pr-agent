@@ -73,7 +73,7 @@ AI-powered code review service built with TypeScript + NestJS. This repository i
 | GitLab MR event | comment / report, according to repository policy |
 | Authorized `/ai-review` command | report by default; explicit report / comment accepted |
 
-Duplicate deliveries reuse a durable PostgreSQL source identity and Run. Ordinary Issue events and unsupported commands are ignored; there is no local TTL deduplication window.
+Duplicate deliveries reuse a durable PostgreSQL source identity and Run; there is no local TTL deduplication window. On enrolled active GitHub repositories, ordinary Issue creation and title/body edits run the [Issue Triage Agent](backend/docs/issue-triage.md): feasibility, risks, recommended actions, similar Issues and suggested labels. It publishes one comment per content revision and adds suggested labels already defined in the repository. `FEATURE_ISSUE_TRIAGE=off` or repository `issue.triageEnabled: false` disables new triage work. Unsupported commands remain ignored.
 
 Manual review commands require repository write access on GitHub or Developer access on GitLab. The GitHub App needs Metadata read permission to check the commenter. GitLab uses the server's API token to check project membership; its webhook secret is a separate required credential. Ordinary comments and unsupported commands are ignored without calling the model.
 
@@ -626,6 +626,7 @@ server {
    - **Metadata**: Read-only
 2. Subscribe to events:
    - `Pull request` (`opened` / `edited` / `synchronize` / `closed`)
+   - `Issues` (`opened` / title or body `edited`, for Issue Triage)
    - `Issue comment`
    - `Pull request review thread` (`resolved` / `unresolved`, for feedback learning)
 3. Set webhook URL to `https://<domain>/api/github/webhooks`
