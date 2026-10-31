@@ -70,6 +70,10 @@ if (!databaseUrl) {
        pr_agent_harness.publication_slots TO ${roleName}`,
     );
     await adminPool.query(`GRANT INSERT ON pr_agent_harness.audit_logs TO ${roleName}`);
+    await adminPool.query(
+      `GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_dispatchable_publication_authority(
+        uuid,uuid,text,text,text,bigint) TO ${roleName}`,
+    );
 
     const appUrl = new URL(databaseUrl);
     appUrl.username = roleName;

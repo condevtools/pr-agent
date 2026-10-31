@@ -12,6 +12,7 @@ import type { RunLease } from "../agent-runtime/runs/contracts.js";
 import { reviewRunInputSchema } from "./intake/run-input.js";
 import { publicationRuntimeForBinding } from "../agent-runtime/runtime/publication.js";
 import { logCore } from "#core";
+import { assertGitHubBindingAccess } from "../integrations/github/onboarding/provider.js";
 
 /** The production worker reuses the same collectors, analyzer, renderers and publisher. */
 export async function executeReviewRun(lease: RunLease, binding: PublicationBinding): Promise<void> {
@@ -24,6 +25,7 @@ export async function executeReviewRun(lease: RunLease, binding: PublicationBind
     throw new Error("Durable review binding or revision mismatch");
   }
   const runtime = await publicationRuntimeForBinding(binding);
+  await assertGitHubBindingAccess(binding);
   const logger = {
     info: (_metadata: unknown, _message: string) => undefined,
     error: (_metadata: unknown, _message: string) => {

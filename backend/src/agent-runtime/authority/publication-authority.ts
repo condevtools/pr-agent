@@ -20,9 +20,14 @@ export interface PublicationBinding {
   executionModeGeneration?: number;
   reviewExecutionState?: "active" | "draining";
   capabilities: BindingCapabilities;
+  providerAccessState?: "verified" | "revoked" | "unknown";
+  providerAccessVersion?: number;
+  providerAccessReason?: string;
+  githubAppId?: number;
+  githubAccountId?: number;
 }
 
-interface BindingRow {
+export interface PublicationBindingRow {
   id: string; tenant_id: string; platform: IntegrationPlatform; origin: string; repository: string;
   provider_repository_id: string | null; provider_actor_id: string | null; credential_ref: string | null;
   publication_generation: string; authority_version: string; publication_state: PublicationBinding["state"];
@@ -33,6 +38,11 @@ interface BindingRow {
   fix_enabled?: boolean;
   evolution_enabled?: boolean;
   default_review_workflow?: string;
+  provider_access_state?: "verified" | "revoked" | "unknown";
+  provider_access_version?: string;
+  provider_access_reason?: string | null;
+  github_app_id?: string | null;
+  github_account_id?: string | null;
 }
 
 export class PublicationBindingNotFoundError extends Error {
@@ -55,12 +65,12 @@ export class PublicationAuthorityStore {
 
   async get(tenantId: string, integrationId: string): Promise<PublicationBinding> {
     return this.db.transaction(tenantId, async (client) => {
-      const result = await client.query<BindingRow>(
+      const result = await client.query<PublicationBindingRow>(
         "SELECT * FROM pr_agent_harness.integration_bindings WHERE tenant_id=$1 AND id=$2 AND active",
         [tenantId, integrationId],
       );
       if (!result.rows[0]) throw new Error("Trusted publication binding not found");
-      return mapBinding(result.rows[0]);
+      return mapPublicationBinding(result.rows[0]);
     });
   }
 
@@ -102,7 +112,7 @@ export class PublicationAuthorityStore {
   }): Promise<PublicationBinding> {
     if (!input.actor.trim()) throw new Error("An administrative actor is required");
     return this.db.transaction(input.tenantId, async (client) => {
-      const selected = await client.query<BindingRow>(
+      const selected = await client.query<PublicationBindingRow>(
         "SELECT * FROM pr_agent_harness.integration_bindings WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE",
         [input.tenantId, input.integrationId],
       );
@@ -137,7 +147,7 @@ export class PublicationAuthorityStore {
       const receipt = input.action === "activate"
         ? JSON.stringify({ actor: input.actor, evidence: input.quiescenceEvidence, protocol: "ledger_v1" })
         : null;
-      const updated = await client.query<BindingRow>(
+      const updated = await client.query<PublicationBindingRow>(
         `UPDATE pr_agent_harness.integration_bindings
          SET publication_state=$3, publication_generation=publication_generation+$4,
              authority_version=authority_version+1,
@@ -152,7 +162,7 @@ export class PublicationAuthorityStore {
         [input.tenantId, input.actor, `publication.authority.${input.action}`, input.integrationId,
           JSON.stringify({ from: row.publication_state, to: next, priorVersion: input.expectedVersion }), input.actorType ?? "user"],
       );
-      return mapBinding(updated.rows[0]!);
+      return mapPublicationBinding(updated.rows[0]!);
     });
   }
 
@@ -172,7 +182,7 @@ export class PublicationAuthorityStore {
       throw new Error("Deep review cannot be the default when its binding capability is disabled");
     }
     return this.db.transaction(input.tenantId, async (client) => {
-      const updated = await client.query<BindingRow>(
+      const updated = await client.query<PublicationBindingRow>(
         `UPDATE pr_agent_harness.integration_bindings
          SET review_deep_enabled=$3,fix_enabled=$4,evolution_enabled=$5,
              default_review_workflow=$6,authority_version=authority_version+1,
@@ -193,7 +203,7 @@ export class PublicationAuthorityStore {
             evolution: input.evolution, defaultReviewWorkflow: input.defaultReviewWorkflow,
             priorVersion: input.expectedVersion })],
       );
-      return mapBinding(updated.rows[0]);
+      return mapPublicationBinding(updated.rows[0]);
     });
   }
 
@@ -203,7 +213,7 @@ export class PublicationAuthorityStore {
   }): Promise<PublicationBinding> {
     requiredAdministrativeEvidence(input.actor, input.evidence);
     return this.db.transaction(input.tenantId, async (client) => {
-      const selected = await client.query<BindingRow>(
+      const selected = await client.query<PublicationBindingRow>(
         `SELECT * FROM pr_agent_harness.integration_bindings
          WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE`,
         [input.tenantId, input.integrationId],
@@ -221,7 +231,7 @@ export class PublicationAuthorityStore {
         fromMode: requireAsyncExecutionMode(row.review_execution_mode),
         generation: Number(row.execution_mode_generation ?? 0),
       };
-      const updated = await client.query<BindingRow>(
+      const updated = await client.query<PublicationBindingRow>(
         `UPDATE pr_agent_harness.integration_bindings
          SET review_execution_state='draining',execution_drain_receipt=$3::jsonb,
              authority_version=authority_version+1,updated_at=clock_timestamp()
@@ -232,7 +242,7 @@ export class PublicationAuthorityStore {
         mode: receipt.fromMode, generation: receipt.generation,
         priorVersion: input.expectedVersion,
       });
-      return mapBinding(updated.rows[0]!);
+      return mapPublicationBinding(updated.rows[0]!);
     });
   }
 
@@ -242,7 +252,7 @@ export class PublicationAuthorityStore {
   }): Promise<PublicationBinding> {
     requiredAdministrativeEvidence(input.actor, input.evidence);
     return this.db.transaction(input.tenantId, async (client) => {
-      const selected = await client.query<BindingRow>(
+      const selected = await client.query<PublicationBindingRow>(
         `SELECT * FROM pr_agent_harness.integration_bindings
          WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE`,
         [input.tenantId, input.integrationId],
@@ -257,7 +267,7 @@ export class PublicationAuthorityStore {
       const mode = requireAsyncExecutionMode(row.review_execution_mode);
       const generation = Number(row.execution_mode_generation ?? 0);
       const receipt = { actor: input.actor, evidence: input.evidence, mode, generation };
-      const updated = await client.query<BindingRow>(
+      const updated = await client.query<PublicationBindingRow>(
         `UPDATE pr_agent_harness.integration_bindings
          SET review_execution_state='active',execution_resume_receipt=$3::jsonb,
              authority_version=authority_version+1,updated_at=clock_timestamp()
@@ -267,31 +277,48 @@ export class PublicationAuthorityStore {
       await appendExecutionAudit(client, input, "execution.resume", {
         mode, generation, priorVersion: input.expectedVersion,
       });
-      return mapBinding(updated.rows[0]!);
+      return mapPublicationBinding(updated.rows[0]!);
     });
   }
 
   async resolve(platform: IntegrationPlatform, origin: string, repository: string): Promise<PublicationBinding> {
     const normalized = normalizeIntegrationTarget(platform, origin, repository);
     return this.db.trustedTransaction(async (client) => {
-      const result = await client.query<BindingRow>(
+      const result = await client.query<PublicationBindingRow>(
         `SELECT * FROM pr_agent_harness.integration_bindings
          WHERE platform=$1 AND origin=$2 AND repository=$3 AND active`,
         [platform, normalized.origin, normalized.repository],
       );
       if (!result.rows[0]) throw new PublicationBindingNotFoundError(platform, normalized.repository);
-      const binding = mapBinding(result.rows[0]);
+      const binding = mapPublicationBinding(result.rows[0]);
+      if (binding.providerAccessState !== "verified") throw new PublicationBindingBlockedError(platform, normalized.repository);
       if (binding.state === "blocked") throw new PublicationBindingBlockedError(platform, normalized.repository);
       return binding;
     });
   }
 
+  /** Resolve deferred events by immutable provider identity, including operator-disabled bindings. */
+  async findByProviderRepository(platform: IntegrationPlatform, origin: string, repositoryId: number):
+  Promise<{ binding: PublicationBinding; active: boolean } | undefined> {
+    positiveId(repositoryId);
+    return this.db.trustedTransaction(async (client) => {
+      const result = await client.query<PublicationBindingRow & { active: boolean }>(
+        `SELECT * FROM pr_agent_harness.integration_bindings
+         WHERE platform=$1 AND origin=$2 AND provider_repository_id=$3`,
+        [platform, origin, repositoryId],
+      );
+      if (result.rows.length > 1) throw new Error("Ambiguous provider repository binding");
+      const row = result.rows[0];
+      return row ? { binding: mapPublicationBinding(row), active: row.active } : undefined;
+    });
+  }
+
   async listRecoverable(): Promise<PublicationBinding[]> {
     return this.db.trustedTransaction(async (client) => {
-      const result = await client.query<BindingRow>(
+      const result = await client.query<PublicationBindingRow>(
         "SELECT * FROM pr_agent_harness.integration_bindings WHERE active AND publication_state IN ('active','draining') ORDER BY tenant_id,id LIMIT 1000",
       );
-      return result.rows.map(mapBinding);
+      return result.rows.map(mapPublicationBinding);
     });
   }
 }
@@ -307,7 +334,7 @@ function positiveId(value: number): void {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Provider identity must be a positive safe integer");
 }
 
-function mapBinding(row: BindingRow): PublicationBinding {
+export function mapPublicationBinding(row: PublicationBindingRow): PublicationBinding {
   const providerRepositoryId = Number(row.provider_repository_id);
   const providerActorId = Number(row.provider_actor_id);
   if (row.publication_state !== "blocked") {
@@ -321,6 +348,11 @@ function mapBinding(row: BindingRow): PublicationBinding {
     reviewExecutionMode: requireAsyncExecutionMode(row.review_execution_mode),
     executionModeGeneration: Number(row.execution_mode_generation ?? 0),
     reviewExecutionState: row.review_execution_state ?? "active",
+    providerAccessState: row.provider_access_state ?? "verified",
+    providerAccessVersion: Number(row.provider_access_version ?? 0),
+    ...(row.provider_access_reason ? { providerAccessReason: row.provider_access_reason } : {}),
+    ...(row.github_app_id ? { githubAppId: Number(row.github_app_id) } : {}),
+    ...(row.github_account_id ? { githubAccountId: Number(row.github_account_id) } : {}),
     capabilities: {
       reviewSingle: true,
       reviewDeep: row.review_deep_enabled ?? true,

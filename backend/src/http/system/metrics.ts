@@ -20,6 +20,24 @@ export interface MetricStoreOptions {
 const DEFAULT_MAX_METRIC_COUNTER_RECORDS = 5_000;
 
 const metricDefinitions: Record<string, MetricDefinition> = {
+  pr_agent_github_onboarding_requests_total: {
+    help: "GitHub installation synchronization requests and coalesced deliveries.", type: "counter",
+  },
+  pr_agent_github_onboarding_restrictions_total: {
+    help: "GitHub App restrictive lifecycle outcomes.", type: "counter",
+  },
+  pr_agent_github_onboarding_activity_total: {
+    help: "GitHub installation coordinator activity by bounded outcome.", type: "counter",
+  },
+  pr_agent_github_onboarding_errors_total: {
+    help: "GitHub installation coordinator errors by stable operation and code.", type: "counter",
+  },
+  pr_agent_github_deferred_admissions_total: {
+    help: "GitHub deferred PR admission outcomes.", type: "counter",
+  },
+  pr_agent_github_deferred_outcomes_total: {
+    help: "GitHub deferred PR drain, retry, skip, conflict and expiry outcomes.", type: "counter",
+  },
   pr_agent_webhook_requests_total: {
     help: "Total number of received webhook trigger requests.",
     type: "counter",

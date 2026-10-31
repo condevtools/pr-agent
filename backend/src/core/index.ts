@@ -11,6 +11,14 @@ export {
   readOptionalStringEnv,
   readStringEnv,
 } from "./config/env.js";
+export {
+  githubAppModeConfigured,
+  githubOnboardingEnabled,
+  githubOnboardingMode,
+  githubOnboardingRestrictionsEnabled,
+  resolveGitHubOnboardingOrigin,
+  type GitHubOnboardingMode,
+} from "./config/github-onboarding.js";
 export { validateRuntimeEnvironment, type RuntimeEnvironmentConfiguration,
   type RuntimeEnvironmentProfile } from "./config/runtime-environment.js";
 export { BadWebhookRequestError, ensureError, WebhookAuthError } from "./errors/errors.js";

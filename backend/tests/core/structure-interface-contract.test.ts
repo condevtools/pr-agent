@@ -55,6 +55,13 @@ const EXPECTED_HTTP_ROUTES = [
 ] as const;
 
 const EXPECTED_GITHUB_APP_EVENTS = [
+  "installation.created",
+  "installation.deleted",
+  "installation.new_permissions_accepted",
+  "installation.suspend",
+  "installation.unsuspend",
+  "installation_repositories.added",
+  "installation_repositories.removed",
   "issue_comment.created",
   "issues.edited",
   "issues.opened",

@@ -89,6 +89,32 @@ jobs:
       - name: Reject tracked workspace mutations
         run: git diff --exit-code
 
+  github-onboarding-rollback:
+    name: GitHub App prior-image rollback smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source and rollback history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install pinned pnpm
+        run: |
+          corepack enable
+          corepack install --global pnpm@${PNPM_VERSION}
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify prior image with the current schema
+        run: pnpm test:github:onboarding:rollback
+      - name: Reject tracked workspace mutations
+        run: git diff --exit-code
+
   frontend:
     name: Frontend lint and build
     runs-on: ubuntu-latest

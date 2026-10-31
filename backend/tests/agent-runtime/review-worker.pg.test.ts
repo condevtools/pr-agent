@@ -119,6 +119,8 @@ if (!databaseUrl) {
       GRANT SELECT ON pr_agent_harness.review_feedback_signals TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(
         uuid, uuid, text, text, text, bigint) TO ${roleName};
+      GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_dispatchable_publication_authority(
+        uuid, uuid, text, text, text, bigint) TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${roleName};
       GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
         pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint),

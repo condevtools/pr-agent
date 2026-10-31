@@ -1,6 +1,7 @@
 import {
   BadWebhookRequestError,
   WebhookAuthError,
+  githubOnboardingRestrictionsEnabled,
   parseBooleanEnv,
   readNumberEnv,
   readOptionalStringEnv,
@@ -25,8 +26,12 @@ import {
 } from "../../../commands/platforms/github/handler.js";
 import { CommandAuthorizationError } from "../../../commands/authorization.js";
 import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
-import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
+import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
+import { PublicationBindingNotFoundError, PublicationBindingBlockedError } from "../../../agent-runtime/authority/publication-authority.js";
 import { handleGitHubProviderFeedback } from "../../../evolution/feedback/provider-bridge.js";
+import { handleGitHubOnboardingLifecycle } from "../onboarding/lifecycle.js";
+import { deferGitHubPullRequest } from "../onboarding/deferred-pull-request.js";
+import { getGitHubInstallationSyncStore } from "../../../agent-runtime/runtime/github-onboarding.js";
 export { createRestBackedOctokit } from "../api/http-client.js";
 export {
   handleGitHubIssueCommentCommand,
@@ -128,6 +133,7 @@ export async function handlePlainGitHubWebhook(params: {
   headers: Record<string, string | undefined>;
   logger: LoggerLike;
   skipSignatureVerification?: boolean;
+  allowLifecycleMutation?: boolean;
   sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
   verifyGitHubWebhookBodySize(params.rawBody);
@@ -136,9 +142,21 @@ export async function handlePlainGitHubWebhook(params: {
     throw new BadWebhookRequestError("missing x-github-event header");
   }
 
+  const isLifecycleEvent = eventName === "installation" || eventName === "installation_repositories";
   if (!params.skipSignatureVerification) {
     verifyWebhookSignature(params.rawBody, params.headers);
   }
+
+  if (isLifecycleEvent && params.skipSignatureVerification && params.allowLifecycleMutation !== true) {
+    return { ok: true, message: "ignored GitHub App lifecycle event during replay" };
+  }
+  if (isLifecycleEvent) verifyGitHubAppWebhookSignature(params.rawBody, params.headers);
+  const lifecycleResult = await handleGitHubOnboardingLifecycle({
+    eventName,
+    payload: params.payload,
+    deliveryId: params.headers["x-github-delivery"],
+  });
+  if (lifecycleResult) return lifecycleResult;
 
   const token =
     readOptionalStringEnv("GITHUB_WEBHOOK_TOKEN") ??
@@ -198,11 +216,18 @@ export async function handleGitHubWebhookEvent(params: {
   deliveryId?: string;
   sourceHash?: string;
 }): Promise<{ ok: boolean; message: string }> {
+  const lifecycleResult = await handleGitHubOnboardingLifecycle({
+    eventName: params.eventName,
+    payload: params.payload,
+    deliveryId: params.deliveryId,
+  });
+  if (lifecycleResult) return lifecycleResult;
   const handler = plainGitHubWebhookEventHandlers[params.eventName];
   if (!handler) {
     return { ok: true, message: `ignored event ${params.eventName}` };
   }
 
+  const sourceHash = params.sourceHash ?? createHash("sha256").update(JSON.stringify(params.payload)).digest("hex");
   try {
     return await handler({
       payload: params.payload,
@@ -210,9 +235,13 @@ export async function handleGitHubWebhookEvent(params: {
       logger: params.logger,
       runtimeMode: params.runtimeMode,
       deliveryId: params.deliveryId,
-      sourceHash: params.sourceHash ?? createHash("sha256").update(JSON.stringify(params.payload)).digest("hex"),
+      sourceHash,
     });
   } catch (error) {
+    if (error instanceof PublicationBindingNotFoundError || error instanceof PublicationBindingBlockedError) {
+      const deferred = await deferGitHubPullRequest({ ...params, sourceHash }, getGitHubInstallationSyncStore);
+      if (deferred) return deferred;
+    }
     if (error instanceof PublicationBindingNotFoundError) {
       params.logger.info({ reason: "publication_binding_not_found" }, "ignored unmanaged GitHub repository");
       return { ok: true, message: "ignored unmanaged repository" };
@@ -245,11 +274,22 @@ async function handlePullRequestEvent(
   if (action !== "opened" && action !== "edited" && action !== "synchronize" && !isMerged) {
     return { ok: true, message: "ignored pull_request action" };
   }
-  const durableRuntime = await resolvePublicationRuntime({
+  const publicationTarget = {
     platform: "github",
     origin: readOptionalStringEnv("GITHUB_API_URL") ?? DEFAULT_GITHUB_API_URL,
     repository: `${owner}/${repo}`,
-  });
+  } as const;
+  const admissionBinding = await (await getAgentRuntimeServices()).authority.resolve(
+    publicationTarget.platform, publicationTarget.origin, publicationTarget.repository,
+  );
+  if (admissionBinding.state !== "active" || admissionBinding.reviewExecutionState !== "active") {
+    throw new PublicationBindingBlockedError("github", `${owner}/${repo}`);
+  }
+  const durableRuntime = await resolvePublicationRuntime(publicationTarget);
+  if (durableRuntime.binding.state !== "active"
+      || durableRuntime.binding.reviewExecutionState !== "active") {
+    throw new PublicationBindingBlockedError("github", `${owner}/${repo}`);
+  }
   const baseRef = payload.pull_request.base?.ref ?? payload.repository.default_branch;
   const reviewBehavior = isMerged
     ? await resolveGitHubReviewBehaviorPolicy({ context, baseRef })
@@ -410,10 +450,17 @@ function parsePayload<T>(
   );
 }
 
+export type GitHubWebhookSignatureKind = "app" | "plain";
+
 export function verifyWebhookSignature(
   rawBody: string,
   headers: Record<string, string | undefined>,
-): void {
+): GitHubWebhookSignatureKind {
+  const eventName = headers["x-github-event"]?.toLowerCase();
+  if (eventName === "installation" || eventName === "installation_repositories") {
+    verifyGitHubAppWebhookSignature(rawBody, headers);
+    return "app";
+  }
   const skipSignature = parseBooleanEnv(
     readOptionalStringEnv("GITHUB_WEBHOOK_SKIP_SIGNATURE"),
   );
@@ -424,26 +471,38 @@ export function verifyWebhookSignature(
         403,
       );
     }
-    return;
+    return "plain";
   }
-
-  const secret =
-    readOptionalStringEnv("GITHUB_WEBHOOK_SECRET") ??
-    readOptionalStringEnv("WEBHOOK_SECRET");
-  if (!secret) {
+  const received = headers["x-hub-signature-256"] ?? "";
+  const appSecret = readOptionalStringEnv("WEBHOOK_SECRET");
+  const plainSecret = readOptionalStringEnv("GITHUB_WEBHOOK_SECRET");
+  const appMode = githubOnboardingRestrictionsEnabled();
+  if (appMode && appSecret
+      && signatureMatches(rawBody, appSecret, received)) return "app";
+  if (plainSecret && signatureMatches(rawBody, plainSecret, received)) return "plain";
+  // Preserve the legacy single-secret plain webhook deployment when App mode is incomplete.
+  if (!appMode && appSecret
+      && signatureMatches(rawBody, appSecret, received)) return "plain";
+  if (!plainSecret && !appSecret) {
     throw new WebhookAuthError(
       "Missing GITHUB_WEBHOOK_SECRET (or WEBHOOK_SECRET) for plain webhook mode",
     );
   }
+  throw new WebhookAuthError("invalid webhook signature", 403);
+}
 
-  const signatureHeader = headers["x-hub-signature-256"] ?? "";
-  const expected = `sha256=${createHmac("sha256", secret)
-    .update(rawBody)
-    .digest("hex")}`;
-
-  if (!isWebhookSignatureValid(expected, signatureHeader)) {
-    throw new WebhookAuthError("invalid webhook signature", 403);
+/** Plain repository credentials never authorize App installation control-plane events. */
+export function verifyGitHubAppWebhookSignature(rawBody: string, headers: Record<string, string | undefined>): void {
+  const secret = readOptionalStringEnv("WEBHOOK_SECRET");
+  if (!secret) throw new WebhookAuthError("GitHub App lifecycle events require WEBHOOK_SECRET", 403);
+  if (!signatureMatches(rawBody, secret, headers["x-hub-signature-256"] ?? "")) {
+    throw new WebhookAuthError("invalid GitHub App lifecycle signature", 403);
   }
+}
+
+function signatureMatches(rawBody: string, secret: string, received: string): boolean {
+  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  return isWebhookSignatureValid(expected, received);
 }
 
 export function isWebhookSignatureValid(expected: string, received: string): boolean {

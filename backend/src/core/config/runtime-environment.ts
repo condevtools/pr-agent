@@ -1,5 +1,7 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { githubAppModeConfigured, githubOnboardingMode,
+  githubOnboardingRestrictionsEnabled, resolveGitHubOnboardingOrigin } from "./github-onboarding.js";
 
 export type RuntimeEnvironmentProfile =
   "web" | "worker" | "recovery" | "verifier" | "maintenance" | "admin" | "migrate" | "health";
@@ -33,6 +35,7 @@ const criticalEnvironmentSchema = z.object({
   FEATURE_DEEP_REVIEW: value, FEATURE_FIX: value, FEATURE_EVOLUTION: value,
   FIX_DEFAULT_POLICY_ID: value, FIX_POLICY_REGISTRY_JSON: value,
   APP_ID: value, PRIVATE_KEY: value, PRIVATE_KEY_PATH: value, WEBHOOK_SECRET: value,
+  FEATURE_GITHUB_ONBOARDING: value, HARNESS_ONBOARDING_PG_PASSWORD: value,
   GITHUB_WEBHOOK_SECRET: value, GITHUB_WEBHOOK_TOKEN: value, GITHUB_WEBHOOK_SKIP_SIGNATURE: value,
   GITHUB_TOKEN: value, GITHUB_API_URL: value, GITLAB_WEBHOOK_SECRET: value,
   GITLAB_TOKEN: value, GITLAB_BASE_URL: value, HARNESS_API_PRINCIPALS_JSON: value,
@@ -117,11 +120,13 @@ function assertProfileEnvironment(env: Record<string, string>, profile: RuntimeE
     invalid("PR_AGENT_HEALTH_DIRECTORY");
   }
   if (options.requireRoleDependencies !== false) {
+    if (["web", "worker", "recovery"].includes(profile)) validatePublicationCredentialSources(env);
     if (profile === "web") validateWeb(env);
     if (profile === "worker") validateWorker(env, options.requireProviderCredentials !== false);
     if (profile === "verifier") validateVerifier(env);
   }
-  if (["web", "worker", "recovery"].includes(profile)) validatePublicationCredentialSources(env);
+  if (options.requireRoleDependencies === false
+      && ["web", "worker", "recovery"].includes(profile)) validatePublicationCredentialSources(env);
   validateTuning(env, profile);
   if (profile === "web") { integer(env, "PORT", 3_000, 1, 65_535); bodyLimit(env); }
   if (profile === "maintenance") maintenanceConfiguration(env);
@@ -134,6 +139,22 @@ function validateWeb(env: Record<string, string>): void {
   const principals = optional(env, "HARNESS_API_PRINCIPALS_FILE");
   if (principals && !isAbsolute(principals)) invalid("HARNESS_API_PRINCIPALS_FILE");
   boolean(env, "EXPOSE_ERROR_STACK", false);
+  const onboardingMode = githubOnboardingMode(env);
+  const appMode = githubAppModeConfigured(env);
+  if (onboardingMode === "on" && !appMode) {
+    invalid("APP_ID/PRIVATE_KEY/WEBHOOK_SECRET with FEATURE_GITHUB_ONBOARDING");
+  }
+  if (githubOnboardingRestrictionsEnabled(env)) {
+    if (!optional(env, "HARNESS_ONBOARDING_PG_PASSWORD")) invalid("HARNESS_ONBOARDING_PG_PASSWORD");
+    if (optional(env, "HARNESS_DATABASE_URL")) invalid("HARNESS_DATABASE_URL with FEATURE_GITHUB_ONBOARDING");
+    if (!optional(env, "APP_ID") || !(optional(env, "PRIVATE_KEY") || optional(env, "PRIVATE_KEY_PATH"))
+        || !optional(env, "WEBHOOK_SECRET")) {
+      invalid("APP_ID/PRIVATE_KEY/WEBHOOK_SECRET with FEATURE_GITHUB_ONBOARDING");
+    }
+    integer(env, "APP_ID", 0, 1, Number.MAX_SAFE_INTEGER);
+    try { resolveGitHubOnboardingOrigin(env); }
+    catch { invalid("GITHUB_API_URL with FEATURE_GITHUB_ONBOARDING"); }
+  }
   const skipGitHubSignature = boolean(env, "GITHUB_WEBHOOK_SKIP_SIGNATURE", false);
   if (skipGitHubSignature && optional(env, "NODE_ENV")?.toLowerCase() === "production") {
     invalid("GITHUB_WEBHOOK_SKIP_SIGNATURE");

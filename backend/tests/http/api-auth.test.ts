@@ -29,6 +29,14 @@ test("authenticate returns only the configured tenant, integration, and permissi
   assert.equal(principal.permissions.includes("runs:cancel"), false);
 });
 
+test("onboarding-only repository administrator principals are rejected", () => {
+  assert.throws(() => new RunApiAuthenticator(JSON.stringify([{
+    principalType: "repository_admin", subjectId: "repository-admin", actorType: "user",
+    tokenSha256: createHash("sha256").update("obsolete-admin-token").digest("hex"),
+    tenantId, githubAccountIds: [1234], permissions: ["repositories:manage"],
+  }])), /strict scoped principals/);
+});
+
 test("authenticate rejects malformed, oversized, and incorrect bearer credentials", () => {
   const authenticator = new RunApiAuthenticator(JSON.stringify([record()]));
   for (const authorization of [undefined, "bearer lower", "Basic abc", "Bearer bad token", `Bearer ${"x".repeat(4090)}`, "Bearer incorrect"]) {

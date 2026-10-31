@@ -57,6 +57,7 @@ if (!databaseUrl) {
     await adminPool.query(`GRANT USAGE ON SCHEMA pr_agent_harness TO ${roleName}`);
     await adminPool.query(`GRANT SELECT ON pr_agent_harness.integration_bindings TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_publication_authority(uuid, uuid, text, text, text, bigint) TO ${roleName}`);
+    await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_dispatchable_publication_authority(uuid,uuid,text,text,text,bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${roleName}`);
     await adminPool.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.skip_failed_batch_successors(uuid, uuid) TO ${roleName}`);

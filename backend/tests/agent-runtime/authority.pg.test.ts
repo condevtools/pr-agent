@@ -42,6 +42,11 @@ if (!url) {
     await admin.query(`GRANT EXECUTE ON FUNCTION pr_agent_harness.lock_active_review_execution_authority(uuid,uuid,bigint,bigint),
       pr_agent_harness.lock_current_binding_capability(uuid,uuid,text),
       pr_agent_harness.lock_resumable_review_execution_authority(uuid,uuid,bigint,bigint) TO ${role}`);
+    await admin.query(`GRANT EXECUTE ON FUNCTION
+      pr_agent_harness.github_delivery_handoff_lock(uuid,uuid,text,text),
+      pr_agent_harness.github_deferred_pull_request_lock_for_handoff(uuid,text,text,bigint,uuid),
+      pr_agent_harness.github_deferred_pull_request_finish_handoff(uuid,text,text,bigint,uuid,uuid)
+      TO ${role}`);
     const appUrl = new URL(url); appUrl.username = role; appUrl.password = password;
     app = new Pool({ connectionString: appUrl.toString(), max: 4 });
     batches = new PublicationBatchStore(new RuntimeDatabase(app));

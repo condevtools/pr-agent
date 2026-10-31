@@ -12,6 +12,16 @@ CREATE ROLE pr_agent_verifier LOGIN PASSWORD :'verifier_password'
 CREATE ROLE pr_agent_maintenance LOGIN PASSWORD :'maintenance_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
+-- Sixth least-privilege control-plane identity. Non-App deployments may leave
+-- the password unset; Compose also bootstraps/rotates it after migrations so
+-- existing volumes receive the same role without per-repository actions.
+\set onboarding_password ''
+\getenv onboarding_password HARNESS_ONBOARDING_PASSWORD
+SELECT format(
+  'CREATE ROLE pr_agent_onboarding LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+  :'onboarding_password'
+) WHERE length(:'onboarding_password') > 0 \gexec
+
 -- The bootstrap superuser stays in PostgreSQL. Application migration containers
 -- receive this schema owner credential, which has no cluster administration power.
 \getenv migration_password HARNESS_MIGRATION_PASSWORD

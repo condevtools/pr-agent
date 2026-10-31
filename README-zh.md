@@ -460,6 +460,7 @@ HARNESS_MIGRATION_PASSWORD=...
 HARNESS_APP_PASSWORD=...
 HARNESS_VERIFIER_PASSWORD=...
 HARNESS_MAINTENANCE_PASSWORD=...
+HARNESS_ONBOARDING_PASSWORD=...
 ```
 
 ```bash
@@ -485,7 +486,7 @@ docker compose down
 - `PRIVATE_KEY` — 默认以内联方式提供 GitHub App PEM，适合 Coolify 等密钥环境变量管理器
 - `docker-compose.secret-file.yml` — 可选的 PEM 文件 overlay，供已管理 secret 文件的主机使用
 
-全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用、verifier 和 maintenance 角色；一次性 `database-init` 服务在四个常驻角色启动前应用 schema。修改 `.env` 不会轮换已有 volume 中的密码。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
+全新 volume 首次启动时，PostgreSQL 会创建受限的 migrator、应用、verifier、maintenance 和 GitHub onboarding 角色；`database-init` 应用 schema 后，一次性 `onboarding-role-init` 会为全新及已有 volume 幂等创建或轮换最小权限 onboarding 角色。修改其他 `.env` 密码不会轮换已有角色。由旧版超级用户 `pr_agent_migrator` 创建的 volume 必须先备份，再按 [旧 volume 角色升级](backend/docs/operations.md#旧-volume-角色升级) 显式处理；不要删除 volume，也不要先运行新版迁移容器。
 
 Compose 只把 `.env` 用于插值。每个服务通过显式白名单接收变量；web、worker 和 recovery 只拿应用数据库密码，模型 provider key 只注入 worker，API principal 配置只注入 web，maintenance 只拿它的专用数据库密码和保留配置。
 
@@ -524,7 +525,7 @@ graph TD
 
 1. **配置平台凭据与 Webhook 验签** — GitHub App、普通 GitHub 或 GitLab
 2. **配置 AI Provider 与预算策略** — 设置 `AI_PROVIDER`、对应的 API Key/模型名称，并基于 [`.env.example`](.env.example) 配置部署专用的 `HARNESS_MODEL_PRICING_JSON`
-3. **初始化 PostgreSQL** — Compose 必须配置五个数据库密码并确认 `database-init` 成功；外部 PostgreSQL 则必须先建立等价的受限角色，再运行迁移 CLI
+3. **初始化 PostgreSQL** — GitHub App Compose 必须配置六个不同数据库密码并确认 `database-init` 与 `onboarding-role-init` 成功；外部 PostgreSQL 必须建立等价受限角色
 4. **部署容器** — Docker、Docker Compose、Render、Railway、Fly.io 或 K8s
 5. **配置 Webhook URL** — HTTPS 域名后使用 GitHub App 的 `/api/github/webhooks`、普通 GitHub 的 `/github/trigger` 或 GitLab 的 `/gitlab/trigger`
 6. **验证** — 访问健康检查端点，并在 PR 中测试 `/ai-review` 命令
@@ -635,9 +636,14 @@ APP_ID=123456
 PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
 # PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
+HARNESS_ONBOARDING_PASSWORD=replace-with-a-distinct-onboarding-password
+# FEATURE_GITHUB_ONBOARDING=auto  # 默认值，安装即用
 ```
 
 - GitHub App 启用条件（见 `backend/src/bootstrap/github-app/github-app-bootstrap.service.ts`）：`APP_ID` +（`PRIVATE_KEY` 或 `PRIVATE_KEY_PATH`）+ `WEBHOOK_SECRET`。
+- 凭据完整时默认 `auto`：在 GitHub 安装 App 并选择仓库即可；启动与周期发现也会同步已有 installation。没有 onboarding 管理页或逐仓库 token 步骤。`off` 只停止正向自动化，仍要求限制性 onboarding 角色可用。
+- 已有安装采用、冲突、观测和精确 `701c6b97abe005b95c64e192e403d142e96f8696` 回滚契约见 [GitHub App 安装即用运维](backend/docs/github-onboarding.md)。文档说明支持流程，不表示任何环境已经部署。
+- 回滚到该精确旧镜像必须设置 `FEATURE_GITHUB_ONBOARDING=on`；旧解析器拒绝 `auto`，变量未设置会关闭限制性 lifecycle 处理。不得降级数据库。
 - 基础 `docker-compose.yml` 使用内联 `PRIVATE_KEY`，不要求宿主 PEM 文件，这也是 Coolify 兼容路径。可选 `docker-compose.secret-file.yml` overlay 从 `./secrets/github-app.private-key.pem` 创建文件 secret；Linux 上必须先把它设置为 UID/GID `10001:10001`、权限 `0400`。
 - 仅在使用可选文件 overlay 时创建受管秘钥目录：`mkdir -p secrets`。
 

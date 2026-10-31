@@ -3,24 +3,30 @@ import { z } from "zod";
 
 import { RUN_PERMISSIONS, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 
-const principalSchema = z.object({
+const credentialFields = {
   subjectId: z.string().min(1).max(200), actorType: z.enum(["user", "service"]),
   tokenSha256: z.string().regex(/^[a-f0-9]{64}$/),
   keyId: z.string().min(1).max(100).optional(),
   expiresAt: z.string().datetime({ offset: true }).optional(),
   notBefore: z.string().datetime({ offset: true }).optional(),
   disabled: z.boolean().optional(),
+};
+const runPrincipalSchema = z.object({
+  ...credentialFields,
   tenantId: z.string().uuid(), integrationId: z.string().uuid(),
   permissions: z.array(z.enum(RUN_PERMISSIONS)).min(1).max(RUN_PERMISSIONS.length)
     .refine((items) => new Set(items).size === items.length, "Duplicate permissions"),
 }).strict();
+const principalSchema = runPrincipalSchema;
+
+type StoredPrincipal = RunPrincipal & { digest: Buffer; keyId?: string;
+  expiresAt?: string; notBefore?: string; disabled?: boolean };
 
 /** Reloadable hashed credentials; invalid replacement configuration fails closed. */
 export class RunApiAuthenticator {
   private generation = 0;
-  private readonly issued = new WeakMap<RunPrincipal, { generation: number; expiresAt?: number }>();
-  private principals: Array<RunPrincipal & { digest: Buffer; keyId?: string;
-    expiresAt?: string; notBefore?: string; disabled?: boolean }> = [];
+  private readonly issued = new WeakMap<object, { generation: number; expiresAt?: number }>();
+  private principals: StoredPrincipal[] = [];
 
   constructor(configuration: string | undefined = process.env.HARNESS_API_PRINCIPALS_JSON) {
     this.reload(configuration);
@@ -47,6 +53,10 @@ export class RunApiAuthenticator {
   }
 
   authenticate(authorization: unknown): RunPrincipal {
+    return this.authenticateAny(authorization);
+  }
+
+  private authenticateAny(authorization: unknown): RunPrincipal {
     if (this.principals.length === 0) throw new RunControlError("RUN_API_DISABLED", 503, "Run API authentication is not configured");
     if (typeof authorization !== "string" || authorization.length > 4096 || !/^Bearer [A-Za-z0-9._~+/-]+=*$/.test(authorization)) {
       throw new RunControlError("UNAUTHORIZED", 401, "A bearer credential is required");

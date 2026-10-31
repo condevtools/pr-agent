@@ -460,6 +460,7 @@ HARNESS_MIGRATION_PASSWORD=...
 HARNESS_APP_PASSWORD=...
 HARNESS_VERIFIER_PASSWORD=...
 HARNESS_MAINTENANCE_PASSWORD=...
+HARNESS_ONBOARDING_PASSWORD=...
 ```
 
 ```bash
@@ -485,7 +486,7 @@ The `docker-compose.yml` uses:
 - `PRIVATE_KEY` — the default inline GitHub App PEM path, suitable for Coolify and other secret environment managers
 - `docker-compose.secret-file.yml` — an optional PEM file overlay for hosts with a managed secret file
 
-On a fresh volume, PostgreSQL bootstraps restricted migrator, application, verifier, and maintenance roles. The one-shot `database-init` service applies the schema before the four long-running roles start. Changing `.env` does not rotate passwords in an existing volume. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
+On a fresh volume, PostgreSQL bootstraps restricted migrator, application, verifier, maintenance, and GitHub onboarding roles. After `database-init` applies the schema, the one-shot `onboarding-role-init` service creates or rotates the least-privilege onboarding role for both fresh and existing volumes. Changing other `.env` passwords does not rotate existing roles. Volumes created by the former superuser `pr_agent_migrator` layout require the explicit, backed-up upgrade procedure in [backend/docs/operations.md](backend/docs/operations.md#旧-volume-角色升级); do not delete the volume or run the new migrator first.
 
 Compose uses `.env` only for interpolation. Each service receives an explicit allowlist rather than the whole file. Web, worker, and recovery receive only the application database password; model provider keys are injected only into worker, API principal configuration only into web, and maintenance receives only its dedicated database password and retention settings.
 
@@ -524,7 +525,7 @@ graph TD
 
 1. **Configure platform credentials and webhook verification** — GitHub App, plain GitHub or GitLab
 2. **Configure AI provider and budget policy** — Set `AI_PROVIDER`, the corresponding API key/model, and a deployment-specific `HARNESS_MODEL_PRICING_JSON` derived from [`.env.example`](.env.example)
-3. **Initialize PostgreSQL** — For Compose, configure all five database passwords and require `database-init` to complete successfully; external PostgreSQL deployments must provision equivalent restricted roles before running the migration CLI
+3. **Initialize PostgreSQL** — For GitHub App Compose, configure all six distinct database passwords and require `database-init` plus `onboarding-role-init` to complete successfully; external PostgreSQL deployments must provision equivalent restricted roles
 4. **Deploy the container** — Docker, Docker Compose, Render, Railway, Fly.io, or K8s
 5. **Set webhook URL** — append `/api/github/webhooks` for GitHub App, `/github/trigger` for plain GitHub, or `/gitlab/trigger` for GitLab to your HTTPS domain
 6. **Verify** via health endpoints and a test `/ai-review` comment
@@ -635,9 +636,14 @@ APP_ID=123456
 PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
 # PRIVATE_KEY_PATH=/run/secrets/github-app-private-key.pem
 WEBHOOK_SECRET=your-webhook-secret
+HARNESS_ONBOARDING_PASSWORD=replace-with-a-distinct-onboarding-password
+# FEATURE_GITHUB_ONBOARDING=auto  # default; install-and-use
 ```
 
 - GitHub App enablement condition (see `backend/src/bootstrap/github-app/github-app-bootstrap.service.ts`): `APP_ID` + (`PRIVATE_KEY` or `PRIVATE_KEY_PATH`) + `WEBHOOK_SECRET`.
+- With complete credentials, `auto` is the default: install the App and select repositories in GitHub; startup and periodic discovery also synchronize existing installations. There is no onboarding admin page or per-repository token step. `off` stops positive automation only and still requires the restrictive onboarding role.
+- See [GitHub App install-and-use operations](backend/docs/github-onboarding.md) for existing-install adoption, conflicts, observability, and the exact `701c6b97abe005b95c64e192e403d142e96f8696` rollback contract. The documentation describes a supported procedure; it does not claim a deployment occurred.
+- That exact old-image rollback requires `FEATURE_GITHUB_ONBOARDING=on`; the old parser rejects `auto`, and leaving the variable unset would disable restrictive lifecycle processing. Never down-migrate the database.
 - Base `docker-compose.yml` uses inline `PRIVATE_KEY` and does not require a host PEM, which is the Coolify-compatible path. The optional `docker-compose.secret-file.yml` overlay creates the file secret from `./secrets/github-app.private-key.pem`; on Linux, provision it for UID/GID `10001:10001` with mode `0400` before starting the overlay.
 - For the optional file overlay, create only the managed secret directory: `mkdir -p secrets`.
 

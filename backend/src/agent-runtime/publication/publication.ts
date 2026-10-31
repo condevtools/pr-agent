@@ -143,6 +143,14 @@ export interface PublicationStore {
       commandReceiptJson?: Record<string, unknown>;
     },
   ): Promise<PublicationOperation | undefined>;
+  /** Reverts only the matching claim when a pre-dispatch check proves no provider call occurred. */
+  deferUndispatched?(
+    tenantId: string,
+    businessOperationId: string,
+    expectedVersion: number,
+    retryAfterMs: number,
+    errorCode: string,
+  ): Promise<PublicationOperation | undefined>;
 }
 
 export class PublicationService {
@@ -208,6 +216,10 @@ export class PublicationService {
       remote = await withPublicationWriteAuthority(prepared.operation, () =>
         adapter.dispatch(prepared.operation.marker, payload, prepared.operation));
     } catch (error) {
+      if (error instanceof PublicationAccessCheckError) {
+        await this.deferUndispatched(prepared.operation, error);
+        throw error;
+      }
       if (error instanceof PublicationDefiniteFailureError) {
         await this.resolveDefiniteFailure(prepared.operation, error);
         throw error;
@@ -431,6 +443,27 @@ export class PublicationService {
     }
   }
 
+  private async deferUndispatched(
+    operation: PublicationOperation,
+    error: PublicationAccessCheckError,
+  ): Promise<void> {
+    try {
+      const deferred = await this.store.deferUndispatched?.(
+        operation.scope.tenantId,
+        operation.businessOperationId,
+        operation.version,
+        error.retryAfterMs,
+        error.code,
+      );
+      if (deferred?.status === "prepared") return;
+    } catch (cause) {
+      await this.bestEffortUnknown(operation, "access_check_defer_failed");
+      throw new PendingPublicationError(operation.businessOperationId, { cause });
+    }
+    await this.bestEffortUnknown(operation, "access_check_defer_unavailable");
+    throw new PendingPublicationError(operation.businessOperationId, { cause: error });
+  }
+
   private async readRequired(operation: PublicationOperation): Promise<PublicationOperation> {
     let current: PublicationOperation | undefined;
     try {
@@ -508,6 +541,13 @@ export class PgPublicationStore implements PublicationStore {
           operationBeforeClaim.status,
         );
       }
+      if (!await isReconciliationDue(
+        client,
+        input.scope.tenantId,
+        input.businessOperationId,
+      )) {
+        return { action: "pending", operation: operationBeforeClaim };
+      }
       const finalLinks = await linkedRunIds(client, input.scope.tenantId, input.businessOperationId);
       if (finalLinks.length > 0) {
         assertLeaseMatchesLinkedRun(input, finalLinks);
@@ -518,6 +558,14 @@ export class PgPublicationStore implements PublicationStore {
       if (runLeaseLocked) {
         await assertRunLease(client, input.executionLease!, { lock: "update" });
       }
+
+      const authority = await client.query<{ allowed: boolean }>(
+        `SELECT pr_agent_harness.lock_dispatchable_publication_authority(
+          $1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::bigint) AS allowed`,
+        [input.scope.tenantId, input.scope.integrationId, input.scope.platform,
+          input.scope.origin, input.scope.repository, input.scope.authorityGeneration],
+      );
+      if (authority.rows[0]?.allowed !== true) throw new InactiveIntegrationBindingError();
 
       if ((operationBeforeClaim.operationType ?? "publication") !== "publication") {
         if (!input.executionLease) throw new Error("Fix publication requires its approved child Run lease");
@@ -707,6 +755,35 @@ export class PgPublicationStore implements PublicationStore {
     });
   }
 
+  async deferUndispatched(
+    tenantId: string,
+    businessOperationId: string,
+    expectedVersion: number,
+    retryAfterMs: number,
+    errorCode: string,
+  ): Promise<PublicationOperation | undefined> {
+    if (!Number.isSafeInteger(retryAfterMs) || retryAfterMs < 1 || retryAfterMs > 300_000) {
+      throw new Error("publication retry delay must be between 1 and 300000 milliseconds");
+    }
+    return this.db.transaction(tenantId, async (client) => {
+      const updated = await client.query<PublicationRow>(
+        `UPDATE pr_agent_harness.repository_operations
+         SET status='prepared', attempt_count=GREATEST(attempt_count-1,0),
+             version=version+1, dispatched_at=NULL, resolved_at=NULL,
+             next_reconcile_at=clock_timestamp()+($4::double precision*interval '1 millisecond'),
+             last_error_code=$5, updated_at=clock_timestamp()
+         WHERE tenant_id=$1 AND business_operation_id=$2 AND version=$3
+           AND status='in_flight'
+         RETURNING *`,
+        [tenantId, businessOperationId, expectedVersion, retryAfterMs, errorCode],
+      );
+      if (!updated.rows[0]) return undefined;
+      const operation = mapOperation(updated.rows[0]);
+      await auditPublication(client, operation, "publication.dispatch_deferred", "error");
+      return operation;
+    });
+  }
+
 }
 
 export async function preparePublicationInTransaction(
@@ -835,6 +912,21 @@ export class PublicationPreflightError extends Error {
   ) {
     super(`publication preflight failed before dispatch: ${code}`, options);
     this.name = "PublicationPreflightError";
+  }
+}
+
+export class PublicationAccessCheckError extends Error {
+  readonly retryable = true;
+  readonly noExternalEffect = true;
+  readonly retryAfterMs = 1_000;
+
+  constructor(
+    readonly businessOperationId: string,
+    readonly code: string,
+    options?: ErrorOptions,
+  ) {
+    super(`publication access check failed before provider dispatch: ${code}`, options);
+    this.name = "PublicationAccessCheckError";
   }
 }
 
@@ -1252,7 +1344,7 @@ async function assertActiveIntegrationBinding(
 async function auditPublication(
   client: PoolClient,
   operation: PublicationOperation,
-  action: "publication.dispatch_claimed" | "publication.resolved",
+  action: "publication.dispatch_claimed" | "publication.dispatch_deferred" | "publication.resolved",
   decision: "allowed" | "error",
 ): Promise<void> {
   await client.query(

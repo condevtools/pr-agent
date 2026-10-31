@@ -1,6 +1,10 @@
 import type { Pool } from "pg";
 
-import type { AgentProcessRole } from "./config.js";
+import { githubOnboardingRestrictionsEnabled, type AgentProcessRole } from "./config.js";
+import { checkGitHubOnboardingReadiness,
+  githubInstallationReconcilerStatus, getGitHubInstallationSyncStore } from "./github-onboarding.js";
+import type { GitHubInstallationSyncStatus } from "../authority/github-installation-sync.js";
+import type { GitHubInstallationReconcilerStatus } from "../../integrations/github/onboarding/reconciler.js";
 import { resolveProcessHeartbeatConfiguration, ProcessHeartbeatStore,
   type DurableProcessRole } from "./heartbeat.js";
 import { resolveRuntimeCapabilities, type RuntimeCapabilityConfiguration } from "./capabilities.js";
@@ -17,6 +21,12 @@ export interface RuntimeReadinessStatus {
     postgres: boolean;
     runtimeRole: boolean;
     schema: boolean;
+    githubOnboarding?: boolean;
+    githubOnboardingLoop?: boolean;
+    githubOnboardingDegraded?: boolean;
+    githubOnboardingLastErrorCode?: string;
+    githubOnboardingDiscoveryCompleted?: boolean;
+    githubOnboardingQueue?: GitHubInstallationSyncStatus;
     heartbeats: Partial<Record<DurableProcessRole, boolean>>;
   };
 }
@@ -26,6 +36,9 @@ export async function checkRuntimeReadiness(input: {
   role: AgentProcessRole;
   env?: NodeJS.ProcessEnv;
   workerCompatibility?: WorkerCompatibility;
+  checkOnboarding?: () => Promise<boolean>;
+  onboardingStatus?: () => Readonly<GitHubInstallationReconcilerStatus>;
+  onboardingMetrics?: () => Promise<GitHubInstallationSyncStatus>;
 }): Promise<RuntimeReadinessStatus> {
   const env = input.env ?? process.env;
   const capabilities = resolveRuntimeCapabilities(env);
@@ -57,7 +70,7 @@ export async function checkRuntimeReadiness(input: {
       const schema = await input.pool.query<{ schema_ready: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM pr_agent_harness.schema_migrations
-           WHERE migration_name='030_maintenance_retention.sql'
+           WHERE migration_name='032_github_installation_sync.sql'
          ) AS schema_ready`,
       );
       checks.schema = schema.rows[0]?.schema_ready === true;
@@ -83,8 +96,30 @@ export async function checkRuntimeReadiness(input: {
   } catch (error) {
     emitReadinessFailure(error);
   }
+  if ((input.role === "web" || input.role === "all") && githubOnboardingRestrictionsEnabled(env)) {
+    const roleReady = await (input.checkOnboarding ?? checkGitHubOnboardingReadiness)();
+    const coordinator = input.onboardingStatus?.()
+      ?? (input.checkOnboarding ? { running: true } : githubInstallationReconcilerStatus());
+    checks.githubOnboardingLoop = coordinator.running;
+    checks.githubOnboardingDegraded = Boolean(coordinator.lastErrorCode);
+    checks.githubOnboardingDiscoveryCompleted = Boolean(coordinator.lastDiscoveryCompletedAt);
+    if (coordinator.lastErrorCode) checks.githubOnboardingLastErrorCode = coordinator.lastErrorCode;
+    checks.githubOnboarding = roleReady && coordinator.running;
+    if (roleReady) {
+      try {
+        const queue = await (input.onboardingMetrics
+          ?? (async () => (await getGitHubInstallationSyncStore()).status(Number(env.APP_ID))))();
+        checks.githubOnboardingQueue = queue;
+        checks.githubOnboardingDegraded ||= queue.syncConflictCount > 0 || queue.deferredConflictCount > 0
+          || (queue.oldestSyncAgeSeconds ?? 0) >= 300 || (queue.oldestDeferredAgeSeconds ?? 0) >= 300;
+      } catch (error) {
+        checks.githubOnboarding = false;
+        emitReadinessFailure(error);
+      }
+    }
+  }
   return {
-    ok: checks.postgres && checks.runtimeRole && checks.schema
+    ok: checks.postgres && checks.runtimeRole && checks.schema && checks.githubOnboarding !== false
       && Object.values(checks.heartbeats).every(Boolean),
     role: input.role,
     capabilities,

@@ -12,15 +12,16 @@ docker compose up -d --build
 
 - `postgres`：PostgreSQL 17，持久卷 `harness-postgres`，仅 Compose 内网可访问，无宿主机数据库端口。
 - `database-init`：一次性迁移容器，以 `pr_agent_migrator` 事务执行带校验和的迁移；该角色必须由首次数据库 bootstrap 创建为 schema owner，且必须是 `NOSUPERUSER NOBYPASSRLS`。
+- `onboarding-role-init`：迁移后的一次性 bootstrap，为全新和已有 volume 幂等创建/轮换仅能执行 GitHub installation 控制面白名单函数的角色。
 - `pr-agent`：只运行 `web`，等待数据库健康和迁移成功，以 `pr_agent_app` 连接。
 - `worker`：独立领取和执行 Run；不监听 HTTP 端口。
 - `recovery`：独立对账未知发布结果；不监听 HTTP 端口。
 - `maintenance`：以专用 `pr_agent_maintenance` 角色周期执行有界保留扫描；默认只 `preview`，不监听 HTTP 端口。
 
-保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥配置。部署前必须在 `.env` 设置五个互不相同的随机密码：`HARNESS_BOOTSTRAP_PASSWORD`、`HARNESS_MIGRATION_PASSWORD`、`HARNESS_APP_PASSWORD`、`HARNESS_VERIFIER_PASSWORD`、`HARNESS_MAINTENANCE_PASSWORD`；Compose 不提供默认值。`.env` 只用于 Compose 插值，各容器只通过显式白名单接收自己所需配置。初始化 SQL 只在首次创建空数据卷时执行，创建受限的 migrator、app、verifier、maintenance 角色；修改环境变量不会轮换已有数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
+保留原有 GitHub/GitLab 环境配置和 GitHub App 私钥配置。GitHub App 部署必须在 `.env` 设置六个互不相同的随机密码：既有五个 `HARNESS_*_PASSWORD` 加 `HARNESS_ONBOARDING_PASSWORD`；Compose 不提供 App 模式的安全回退值。`.env` 只用于 Compose 插值，各容器只通过显式白名单接收自己所需配置。`onboarding-role-init` 在迁移后同时覆盖新旧 volume；修改环境变量不会轮换其他数据库密码。`docker compose down` 保留数据卷，不要用删除卷的方式升级或处理迁移失败。
 模型 provider key 只注入 worker，API principal 配置只注入 web，recovery 不获得模型 key；三者仍可按自己的入口、执行或发布职责获得必要的平台凭据。
 
-全新部署复制 `.env.example`、替换五个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 必须成功退出，web、worker、recovery 和 maintenance 才会启动。四者都使用 UID/GID `10001:10001`、只读根文件系统、tmpfs、`cap-drop ALL` 和 `no-new-privileges`，且没有 Docker socket。可用 `docker compose ps` 和 `docker compose logs database-init` 核对结果。不要在 maintenance 中配置平台、模型或 verifier 凭据。
+全新 GitHub App 部署复制 `.env.example`、替换六个密码及平台凭据后执行 `docker compose up -d --build`。`postgres` 健康后，`database-init` 和 `onboarding-role-init` 必须成功退出，web、worker、recovery 和 maintenance 才会启动。四者都使用 UID/GID `10001:10001`、只读根文件系统、tmpfs、`cap-drop ALL` 和 `no-new-privileges`，且没有 Docker socket。可用 `docker compose ps` 和对应一次性服务日志核对结果。不要在 maintenance 中配置平台、模型或 verifier 凭据。
 
 基础 Compose 通过内联 `PRIVATE_KEY` 提供 GitHub App PEM，`PRIVATE_KEY_PATH` 默认留空，因此 Coolify 等平台不需要宿主文件。使用文件时叠加 `docker-compose.secret-file.yml`；它会清空内联 key 并为 web、worker、recovery 挂载同一只读路径。本地 Compose 不保证 secret `uid/gid/mode` 重映射生效，Linux 部署应把源文件交给 UID/GID `10001:10001` 并设置 `0400`，或使用平台原生 secret-file。不能为了绕过权限问题把应用改回 root。
 

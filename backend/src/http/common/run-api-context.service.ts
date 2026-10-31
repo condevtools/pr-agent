@@ -26,16 +26,22 @@ export class RunApiContextService implements OnModuleDestroy {
   authenticate(request: Request): RunPrincipal {
     const cached = this.principals.get(request);
     if (cached) { this.authenticator.assertCurrent(cached); return cached; }
-    const headers = request.rawHeaders.filter((_value, index) => index % 2 === 0);
-    if (headers.filter((name) => name.toLowerCase() === "authorization").length !== 1) {
-      throw new RunControlError("UNAUTHORIZED", 401, "Exactly one bearer credential is required");
-    }
+    this.assertSingleAuthorizationHeader(request);
     const principal = this.authenticator.authenticate(request.headers.authorization);
     this.principals.set(request, principal);
     return principal;
   }
 
-  assertCurrentPrincipal(principal: RunPrincipal): void { this.authenticator.assertCurrent(principal); }
+  private assertSingleAuthorizationHeader(request: Request): void {
+    const headers = request.rawHeaders.filter((_value, index) => index % 2 === 0);
+    if (headers.filter((name) => name.toLowerCase() === "authorization").length !== 1) {
+      throw new RunControlError("UNAUTHORIZED", 401, "Exactly one bearer credential is required");
+    }
+  }
+
+  assertCurrentPrincipal(principal: RunPrincipal): void {
+    this.authenticator.assertCurrent(principal);
+  }
 
   async binding(principal: RunPrincipal) {
     const services = await getAgentRuntimeServices();

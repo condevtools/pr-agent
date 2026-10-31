@@ -20,6 +20,7 @@ x-runtime-services:
       FEATURE_DEEP_REVIEW: ${FEATURE_DEEP_REVIEW:-on}
       FEATURE_FIX: ${FEATURE_FIX:-off}
       FEATURE_EVOLUTION: ${FEATURE_EVOLUTION:-off}
+      FEATURE_GITHUB_ONBOARDING: ${FEATURE_GITHUB_ONBOARDING:-auto}
       RUNTIME_HEARTBEAT_INTERVAL_MS: ${RUNTIME_HEARTBEAT_INTERVAL_MS:-5000}
       RUNTIME_HEARTBEAT_STALE_MS: ${RUNTIME_HEARTBEAT_STALE_MS:-20000}
       HARNESS_WORKER_CONCURRENCY: ${HARNESS_WORKER_CONCURRENCY:-4}
@@ -112,6 +113,8 @@ x-runtime-services:
         condition: service_healthy
       database-init:
         condition: service_completed_successfully
+      onboarding-role-init:
+        condition: service_completed_successfully
 services:
   pr-agent:
     <<: *runtime-service
@@ -119,6 +122,7 @@ services:
       <<: *runtime-environment
       HARNESS_API_PRINCIPALS_JSON: ${HARNESS_API_PRINCIPALS_JSON:-}
       HARNESS_API_PRINCIPALS_FILE: ${HARNESS_API_PRINCIPALS_FILE:-}
+      HARNESS_ONBOARDING_PG_PASSWORD: ${HARNESS_ONBOARDING_PASSWORD:-}
     ports:
       - "127.0.0.1:3000:3000"
 
@@ -185,6 +189,7 @@ services:
       HARNESS_APP_PASSWORD: ${HARNESS_APP_PASSWORD:?Set HARNESS_APP_PASSWORD in .env}
       HARNESS_VERIFIER_PASSWORD: ${HARNESS_VERIFIER_PASSWORD:?Set HARNESS_VERIFIER_PASSWORD in .env}
       HARNESS_MAINTENANCE_PASSWORD: ${HARNESS_MAINTENANCE_PASSWORD:?Set HARNESS_MAINTENANCE_PASSWORD in .env}
+      HARNESS_ONBOARDING_PASSWORD: ${HARNESS_ONBOARDING_PASSWORD:-}
     volumes:
       - harness-postgres:/var/lib/postgresql/data
       - ./docker/postgres/10-runtime-role.sql:/docker-entrypoint-initdb.d/10-runtime-role.sql:ro
@@ -216,6 +221,31 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  onboarding-role-init:
+    image: postgres:17-alpine
+    restart: "no"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    command:
+      - /bin/sh
+      - -ec
+      - 'if [ -z "$${HARNESS_ONBOARDING_PASSWORD}" ]; then exit 0; fi; exec psql --no-password --file=/bootstrap/enable-github-onboarding.sql'
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: pr_agent
+      PGUSER: postgres
+      PGPASSWORD: ${HARNESS_BOOTSTRAP_PASSWORD:?Set HARNESS_BOOTSTRAP_PASSWORD in .env}
+      HARNESS_ONBOARDING_PASSWORD: ${HARNESS_ONBOARDING_PASSWORD:-}
+    volumes:
+      - ./docker/postgres/enable-github-onboarding.sql:/bootstrap/enable-github-onboarding.sql:ro
+    depends_on:
+      database-init:
+        condition: service_completed_successfully
 
 volumes:
   harness-postgres:

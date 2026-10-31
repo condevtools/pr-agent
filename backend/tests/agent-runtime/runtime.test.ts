@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { agentRuntimePoolConfig, resolveWorkerSchedulingConfiguration,
   validatePublicationCredentialOrigin, requireOnlinePublicationAuthority } from "../../src/agent-runtime/runtime.js";
+import { githubOnboardingPoolConfig } from "../../src/agent-runtime/runtime/config.js";
+import { githubOnboardingEnabled, githubOnboardingRestrictionsEnabled } from "../../src/core/index.js";
 
 test("Harness PostgreSQL configuration never inherits an unrelated DATABASE_URL", () => {
   assert.throws(() => agentRuntimePoolConfig({ DATABASE_URL: "postgres://unrelated/private" }), /Configure HARNESS/);
@@ -39,6 +41,33 @@ test("runtime roles freeze independent bounded pool and scheduling capacities", 
   assert.throws(() => resolveWorkerSchedulingConfiguration({
     HARNESS_WORKER_CONCURRENCY: "4", HARNESS_WORKER_SPECIAL_CONCURRENCY: "4",
   }), /between 1 and 3/);
+});
+
+test("GitHub onboarding defaults positive sync on for App mode and always opens its restrictive pool", () => {
+  const environment = {
+    APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret",
+    HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password",
+    HARNESS_PG_HOST: "postgres", HARNESS_PG_DATABASE: "pr_agent", HARNESS_PG_PORT: "5432",
+    HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "app-password",
+  };
+  assert.deepEqual(githubOnboardingPoolConfig(environment), {
+    host: "postgres", database: "pr_agent", port: 5432,
+    user: "pr_agent_onboarding", password: "onboarding-password", max: 2,
+    connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000,
+    statement_timeout: 15000, lock_timeout: 5000, idle_in_transaction_session_timeout: 15000,
+  });
+  assert.equal(githubOnboardingEnabled(environment), true);
+  assert.equal(githubOnboardingRestrictionsEnabled(environment), true);
+  assert.equal(githubOnboardingEnabled({ ...environment, FEATURE_GITHUB_ONBOARDING: "off" }), false);
+  assert.equal(githubOnboardingRestrictionsEnabled({ ...environment, FEATURE_GITHUB_ONBOARDING: "off" }), true);
+  assert.doesNotThrow(() => githubOnboardingPoolConfig({ ...environment,
+    FEATURE_GITHUB_ONBOARDING: "off" }));
+  assert.equal(githubOnboardingEnabled({ FEATURE_GITHUB_ONBOARDING: "auto", GITHUB_TOKEN: "pat" }), false);
+  assert.equal(githubOnboardingRestrictionsEnabled({ FEATURE_GITHUB_ONBOARDING: "on", GITHUB_TOKEN: "pat" }), false);
+  assert.throws(() => githubOnboardingPoolConfig({ ...environment,
+    HARNESS_ONBOARDING_PG_PASSWORD: undefined }), /HARNESS_ONBOARDING_PG_PASSWORD/u);
+  assert.throws(() => githubOnboardingPoolConfig({ ...environment,
+    HARNESS_DATABASE_URL: "postgres://app:secret@postgres/pr_agent" }), /explicit PostgreSQL/u);
 });
 
 test("a server credential cannot be sent to a different binding origin", () => {

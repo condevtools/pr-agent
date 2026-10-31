@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { getModelExecutionPolicy } from "../../src/agent-runtime/budget/model-budget-store.js";
-import { readNumberEnv, validateRuntimeEnvironment } from "../../src/core/index.js";
+import { readNumberEnv, resolveGitHubOnboardingOrigin,
+  validateRuntimeEnvironment } from "../../src/core/index.js";
 
 const database = { HARNESS_DATABASE_URL: "postgres://runtime:secret@postgres/runtime" };
 const worker = { ...database, AI_PROVIDER: "openai-compatible", AI_MODEL: "fixture",
@@ -52,6 +53,63 @@ test("web credential sources and numeric limits fail fast without exposing value
     GITHUB_WEBHOOK_SKIP_SIGNATURE: "true" }, "web"), /GITHUB_WEBHOOK_SKIP_SIGNATURE/u);
   assert.throws(() => validateRuntimeEnvironment({ ...web, GITLAB_TOKEN: "token" }, "web"),
     /GITLAB_WEBHOOK_SECRET/u);
+});
+
+test("complete GitHub App mode requires the restrictive onboarding role in auto, on, and off", () => {
+  const explicitWeb = { ...web, HARNESS_DATABASE_URL: undefined, HARNESS_PG_HOST: "postgres",
+    HARNESS_PG_DATABASE: "pr_agent", HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "app-password" };
+  const app = { APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret" };
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "auto" }, "web"));
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "on" }, "web"), /APP_ID\/PRIVATE_KEY\/WEBHOOK_SECRET/u);
+  for (const mode of [undefined, "auto", "on", "off"] as const) {
+    assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+      FEATURE_GITHUB_ONBOARDING: mode }, "web"), /HARNESS_ONBOARDING_PG_PASSWORD/u);
+    assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+      FEATURE_GITHUB_ONBOARDING: mode, HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password" }, "web"));
+  }
+  assert.throws(() => validateRuntimeEnvironment({ ...web, ...app, FEATURE_GITHUB_ONBOARDING: "on",
+    HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password" }, "web"), /HARNESS_DATABASE_URL/u);
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...worker,
+    FEATURE_GITHUB_ONBOARDING: "on" }, "worker"));
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...worker, ...app,
+    FEATURE_GITHUB_ONBOARDING: "off" }, "worker"));
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "sometimes" }, "web"), /auto, on, or off/u);
+});
+
+test("enabled GitHub onboarding requires a public-GitHub App credential set", () => {
+  const explicitWeb = { ...web, HARNESS_DATABASE_URL: undefined, HARNESS_PG_HOST: "postgres",
+    HARNESS_PG_DATABASE: "pr_agent", HARNESS_PG_USER: "pr_agent_app", HARNESS_PG_PASSWORD: "app-password",
+    HARNESS_ONBOARDING_PG_PASSWORD: "onboarding-password", FEATURE_GITHUB_ONBOARDING: "auto" };
+  const app = { APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret" };
+  for (const missing of ["APP_ID", "PRIVATE_KEY", "WEBHOOK_SECRET"] as const) {
+    assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app, [missing]: undefined }, "web"),
+      /APP_ID\/PRIVATE_KEY\/WEBHOOK_SECRET/u);
+  }
+  for (const appId of ["not-an-id", "0", String(Number.MAX_SAFE_INTEGER + 1)]) {
+    assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app, APP_ID: appId }, "web"),
+      /APP_ID/u);
+  }
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    GITHUB_API_URL: "https://github.example/api/v3" }, "web"), /GITHUB_API_URL/u);
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    GITHUB_API_URL: "https://api.github.com:8443" }, "web"), /GITHUB_API_URL/u);
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    GITHUB_API_URL: "https://api.github.com/" }, "web"));
+  assert.equal(resolveGitHubOnboardingOrigin({ GITHUB_API_URL: "https://api.github.com/" }),
+    "https://api.github.com");
+  assert.throws(() => resolveGitHubOnboardingOrigin({ GITHUB_API_URL: "https://github.example/api/v3" }),
+    /public GitHub API origin/u);
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb, APP_ID: "123",
+    PRIVATE_KEY_PATH: "/run/secrets/github-app.pem", WEBHOOK_SECRET: "webhook-secret" }, "web"));
+  assert.doesNotThrow(() => validateRuntimeEnvironment({ ...explicitWeb,
+    FEATURE_GITHUB_ONBOARDING: "off", GITHUB_API_URL: "https://github.example/api/v3",
+    GITHUB_TOKEN: "pat-only" }, "web"));
+  assert.throws(() => validateRuntimeEnvironment({ ...explicitWeb, ...app,
+    FEATURE_GITHUB_ONBOARDING: "off", GITHUB_API_URL: "https://github.example/api/v3" }, "web"),
+  /GITHUB_API_URL/u);
 });
 
 test("maintenance policy is bounded, ordered, and preview by default", () => {
@@ -129,6 +187,14 @@ function exampleEnvironment(file: string): NodeJS.ProcessEnv {
     if ((value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
     env[key] = /replace-with|YOUR_PRIVATE_KEY|\.\.\./u.test(value) ? `fixture-${key.toLowerCase()}` : value;
+  }
+  if (env.APP_ID && (env.PRIVATE_KEY || env.PRIVATE_KEY_PATH) && env.WEBHOOK_SECRET) {
+    delete env.HARNESS_DATABASE_URL;
+    env.HARNESS_PG_HOST = "postgres";
+    env.HARNESS_PG_DATABASE = "pr_agent";
+    env.HARNESS_PG_USER = "pr_agent_app";
+    env.HARNESS_PG_PASSWORD = "fixture-app-password";
+    env.HARNESS_ONBOARDING_PG_PASSWORD = env.HARNESS_ONBOARDING_PASSWORD;
   }
   return env;
 }

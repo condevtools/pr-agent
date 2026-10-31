@@ -6,6 +6,7 @@
   "scripts": {
     "dev:backend": "pnpm --filter backend dev",
     "test:backend": "pnpm --filter backend test",
+    "test:github:onboarding:rollback": "node scripts/github-onboarding-rollback-smoke.mjs",
     "dev:frontend": "pnpm --filter frontend dev",
     "dev:all": "turbo dev",
     "build:all": "turbo build",

@@ -88,5 +88,6 @@ export class RouteAccessGuard implements CanActivate, OnModuleInit {
 }
 
 function validPolicy(policy: unknown): policy is AccessPolicy {
-  return typeof policy === "string" && (["public", "signed-webhook", "runs:command", ...RUN_PERMISSIONS] as string[]).includes(policy);
+  return typeof policy === "string"
+    && (["public", "signed-webhook", "runs:command", ...RUN_PERMISSIONS] as string[]).includes(policy);
 }

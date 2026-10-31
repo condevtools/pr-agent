@@ -9,6 +9,8 @@ import type { PublicationAdapter, PublicationOperation, PublicationScope, Public
 import type { PublicationBatchCoordinator, PublicationBatchStore } from "../publication/batches.js";
 import { getSharedGitHubProbot, resolvePublicationCredential } from "./credentials.js";
 import { getAgentRuntimeServices, type AgentRuntimeServices } from "./services.js";
+import { assertGitHubBindingAccess, GitHubOnboardingAccessError } from "../../integrations/github/onboarding/provider.js";
+import { guardPublicationAccess } from "../publication/access-guard.js";
 
 export interface PublicationRuntime {
   service: PublicationService;
@@ -25,6 +27,7 @@ export async function resolvePublicationRuntime(input: {
 }): Promise<PublicationRuntime> {
   const services = await getAgentRuntimeServices();
   const binding = await services.authority.resolve(input.platform, input.origin, input.repository);
+  await assertGitHubBindingAccess(binding);
   return publicationRuntimeForBinding(binding, services);
 }
 
@@ -62,11 +65,24 @@ export async function publicationRuntimeForBinding(
           return { app, installation };
         },
       });
+      const checkAccess = async () => {
+        await assertGitHubBindingAccess(binding);
+        // Re-read after the provider lookup: a lifecycle event can commit while
+        // that lookup is in flight. Never use the adapter's captured access state.
+        const latest = await current.authority.get(binding.tenantId, binding.id);
+        if (latest.generation !== binding.generation || !["active", "draining"].includes(latest.state)
+            || latest.providerAccessState !== "verified") {
+          throw new GitHubOnboardingAccessError("GitHub publication access is no longer active");
+        }
+      };
       if (operation.operationType && operation.operationType !== "publication") {
-        return createFixPublicationAdapter({ binding, token: credential, operation, verifyCredentialIdentity });
+        return guardPublicationAccess(createFixPublicationAdapter({ binding, token: credential,
+          operation, verifyCredentialIdentity }), checkAccess,
+        { isAccessDenied: (cause) => cause instanceof GitHubOnboardingAccessError });
       }
-      return createGitHubPublicationAdapter({ binding: { ...binding, platform: "github" }, octokit, operation,
-        verifyCredentialIdentity });
+      return guardPublicationAccess(createGitHubPublicationAdapter({ binding: { ...binding, platform: "github" }, octokit, operation,
+        verifyCredentialIdentity }), checkAccess,
+      { isAccessDenied: (cause) => cause instanceof GitHubOnboardingAccessError });
     },
   };
 }
