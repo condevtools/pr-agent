@@ -19,7 +19,9 @@ else {
     const githubId = randomUUID();
     const gitlabId = randomUUID();
     try {
-      await createRestrictedRoles(pool);
+      await ensureRestrictedRoles(pool);
+      // Roles belong to the shared test cluster, not the fresh per-file database.
+      await ensureRestrictedRoles(pool);
       await installSchemaThrough032(pool);
       await seedBindings(pool, { tenantId, githubId, gitlabId });
 
@@ -96,12 +98,17 @@ interface BaselineManifest {
   migrations: Array<{ name: string; checksum: string }>;
 }
 
-async function createRestrictedRoles(pool: Pool): Promise<void> {
+async function ensureRestrictedRoles(pool: Pool): Promise<void> {
   for (const role of ["pr_agent_app", "pr_agent_verifier", "pr_agent_onboarding"] as const) {
     const ddl = await pool.query<{ sql: string }>(`SELECT format(
       'CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
-      $1::text) AS sql`, [role]);
-    await pool.query(ddl.rows[0]!.sql);
+      $1::text) AS sql WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=$1)`, [role]);
+    if (ddl.rows[0]) await pool.query(ddl.rows[0].sql);
+    const attributes = await pool.query(`SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
+      FROM pg_roles WHERE rolname=$1`, [role]);
+    assert.deepEqual(attributes.rows, [{ rolsuper: false, rolcreatedb: false,
+      rolcreaterole: false, rolreplication: false, rolbypassrls: false }],
+    `${role} must remain a restricted role when reused by another test`);
   }
 }
 
