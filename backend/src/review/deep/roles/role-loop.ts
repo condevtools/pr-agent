@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { canonicalJson, fingerprint } from "../../../agent-runtime/versions.js";
+import { observeAgentOperation } from "../../../observability/index.js";
 import { RunCheckpointCompatibilityError, RunLeaseLostError } from "../../../agent-runtime/runs/contracts.js";
 import { composeReviewSystemPrompt, frozenReviewText } from "../../strategy/text-components.js";
 import type {
@@ -100,6 +101,37 @@ export const deepRoleTurnJsonSchema = {
 } as const;
 
 export async function runDeepReviewRole(input: {
+  role: DeepReviewRole;
+  source: DeepReviewSource;
+  context: DeepWorkflowContext;
+  limits: RoleLimits;
+}): Promise<RoleResult> {
+  return observeAgentOperation(
+    `deep-review-${input.role}`,
+    "agent",
+    {
+      input: { role: input.role, revision: input.source.identity,
+        sourceCoverage: input.source.coverage },
+      metadata: { role: input.role, workflow: "review.deep.v1",
+        runId: input.context.lease.runId },
+    },
+    async (observation) => {
+      const result = await executeDeepReviewRole(input);
+      observation.update({ output: { coverage: result.coverage,
+        candidateCount: result.candidates.length },
+        metadata: { coverageStatus: result.coverage.status,
+          attemptedTurns: result.coverage.attemptedTurns,
+          completedToolCalls: result.coverage.completedToolCalls,
+          candidateCount: result.candidates.length },
+        ...(result.coverage.status === "complete" ? {}
+          : { level: result.coverage.status === "failed" ? "ERROR" as const : "WARNING" as const,
+            statusMessage: `deep_role_${result.coverage.status}` }) });
+      return result;
+    },
+  );
+}
+
+async function executeDeepReviewRole(input: {
   role: DeepReviewRole;
   source: DeepReviewSource;
   context: DeepWorkflowContext;

@@ -89,8 +89,11 @@ export async function callGeminiJson(params: {
           providerRequestId: payload?.responseId,
           modelVersion: payload?.modelVersion,
           httpStatus: response.status,
+          observationOutput: payload?.candidates?.map((candidate) => candidate.content),
         };
       },
+      { input: [{ role: "system", content: params.systemPrompt },
+        { role: "user", content: params.prompt }], parameters: generationConfig },
     );
   };
 

@@ -100,8 +100,13 @@ export async function callAnthropicJson(params: {
           providerRequestId: response.headers.get("request-id") ?? payload?.id,
           modelVersion: payload?.model,
           httpStatus: response.status,
+          observationOutput: payload?.content,
         };
       },
+      { input: [{ role: "system", content: params.systemPrompt },
+        { role: "user", content: params.prompt }], parameters: {
+        max_tokens: requestBody.max_tokens, tools: requestBody.tools, tool_choice: requestBody.tool_choice,
+      } },
     );
   };
 

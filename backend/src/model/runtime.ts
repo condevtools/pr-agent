@@ -142,8 +142,16 @@ export async function requestOpenAICompletionText(params: {
         usage: normalizeOpenAIUsage(response.usage),
         providerRequestId: response.id,
         modelVersion: response.model,
+        observationOutput: response.choices?.map(({ message, finish_reason }) => ({
+          role: message.role, content: message.content, tool_calls: message.tool_calls,
+          finishReason: finish_reason,
+        })),
       };
     },
+    { input: request.messages, parameters: {
+      temperature: request.temperature, [tokenParameter]: maxOutputTokens,
+      ...(params.responseFormat === undefined ? {} : { response_format: params.responseFormat }),
+    } },
   );
   return extractModelText(completion.choices?.[0]?.message?.content);
 }

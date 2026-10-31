@@ -12,6 +12,7 @@ import {
 } from "../agent-runtime/runtime.js";
 import { closeGitHubOnboardingStore,
   stopGitHubInstallationReconciler } from "../agent-runtime/runtime/github-onboarding.js";
+import { shutdownAgentObservability } from "../observability/index.js";
 
 export interface ApplicationShutdownDependencies {
   beginHttpShutdown(): void;
@@ -21,6 +22,7 @@ export interface ApplicationShutdownDependencies {
   closeGitHubOnboardingResources(): Promise<void>;
   beginModelShutdown(): void;
   drainModelRequests(): Promise<boolean>;
+  closeObservability?(): Promise<void>;
 }
 
 export class ApplicationShutdownSequence {
@@ -44,16 +46,21 @@ export class ApplicationShutdownSequence {
 
   onApplicationShutdown(): Promise<boolean> {
     this.closing ??= (async () => {
-      await this.beforeApplicationShutdown();
-      const failures: unknown[] = [];
-      for (const task of [this.dependencies.closeApplicationResources,
-        this.dependencies.closeGitHubOnboardingResources]) {
-        try { await task(); } catch (error) { failures.push(error); }
+      try {
+        await this.beforeApplicationShutdown();
+        const failures: unknown[] = [];
+        for (const task of [this.dependencies.closeApplicationResources,
+          this.dependencies.closeGitHubOnboardingResources]) {
+          try { await task(); } catch (error) { failures.push(error); }
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) throw new AggregateError(failures, "Application resources failed to close");
+        this.dependencies.beginModelShutdown();
+        return await this.dependencies.drainModelRequests();
+      } finally {
+        try { await this.dependencies.closeObservability?.(); }
+        catch { logCore("warn", "observability.shutdown_failed"); }
       }
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) throw new AggregateError(failures, "Application resources failed to close");
-      this.dependencies.beginModelShutdown();
-      return this.dependencies.drainModelRequests();
     })();
     return this.closing;
   }
@@ -69,6 +76,7 @@ export class ShutdownCoordinatorService implements BeforeApplicationShutdown, On
     closeGitHubOnboardingResources: closeGitHubOnboardingStore,
     beginModelShutdown,
     drainModelRequests,
+    closeObservability: shutdownAgentObservability,
   });
 
   async beforeApplicationShutdown(signal?: string): Promise<void> {

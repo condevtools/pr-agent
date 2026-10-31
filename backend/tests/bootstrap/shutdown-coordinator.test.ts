@@ -13,6 +13,7 @@ test("shutdown quiesces background work before HTTP disposal and closes transpor
     closeGitHubOnboardingResources: async () => { events.push("github-sync-resources-closed"); },
     beginModelShutdown: () => { events.push("model-intake-stopped"); },
     drainModelRequests: async () => { events.push("model-drained"); return true; },
+    closeObservability: async () => { events.push("observability-closed"); },
   });
 
   await Promise.all([
@@ -32,7 +33,26 @@ test("shutdown quiesces background work before HTTP disposal and closes transpor
     "github-sync-resources-closed",
     "model-intake-stopped",
     "model-drained",
+    "observability-closed",
   ]);
+});
+
+test("telemetry closure runs after a resource failure and never replaces the shutdown error", async () => {
+  const failure = new Error("resource failure");
+  let closed = 0;
+  const sequence = new ApplicationShutdownSequence({
+    beginHttpShutdown: () => undefined,
+    quiesceRuntime: async () => undefined,
+    quiesceGitHubOnboarding: async () => undefined,
+    closeApplicationResources: async () => { throw failure; },
+    closeGitHubOnboardingResources: async () => undefined,
+    beginModelShutdown: () => undefined,
+    drainModelRequests: async () => true,
+    closeObservability: async () => { closed += 1; throw new Error("exporter failure"); },
+  });
+  await assert.rejects(sequence.onApplicationShutdown(), failure);
+  await assert.rejects(sequence.onApplicationShutdown(), failure);
+  assert.equal(closed, 1);
 });
 
 test("shutdown still drains onboarding when another runtime phase fails", async () => {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { logCore } from "#core";
 
 import type { PoolClient } from "pg";
 
@@ -6,6 +7,7 @@ import { RuntimeDatabase } from "../postgres/database.js";
 import { measureDatabaseOperation } from "../database-timing.js";
 import {
   type ModelExecutionContext,
+  type ModelObservationPayload,
   type ModelProvider,
   type ModelRequestIntent,
   type ModelTransportResult,
@@ -14,6 +16,8 @@ import {
 import { assertRunLease } from "../execution/store.js";
 import type { RunLease } from "../runs/contracts.js";
 import { deepBudgetSchema, deepRolePrefix } from "../../review/deep/budget.js";
+import { observeAgentOperation } from "../../observability/index.js";
+import { modelObservationUsage } from "../../model/observability.js";
 
 export interface ModelPriceRates {
   inputMicrosPerMillion: number;
@@ -741,7 +745,8 @@ export function createBudgetedModelExecutionContext(input: {
   let ordinal = 0;
   return {
     policy: input.policy,
-    async execute<T>(intent: ModelRequestIntent, transport: () => Promise<ModelTransportResult<T>>): Promise<T> {
+    async execute<T>(intent: ModelRequestIntent, transport: () => Promise<ModelTransportResult<T>>,
+      observation?: ModelObservationPayload): Promise<T> {
       const bounded = {
         ...intent,
         requestKind: `${workflow}:${input.stepKey ?? input.stepId}:${intent.provider}:${intent.requestKind}`,
@@ -756,22 +761,65 @@ export function createBudgetedModelExecutionContext(input: {
       }
       if (call.status !== "prepared") throw new Error("model call requires reconciliation before retry");
       await input.store.markDispatched(call, input.lease);
-      try {
-        const result = await transport();
-        if (result.httpStatus !== undefined && result.httpStatus >= 400) {
-          await input.store.settleProviderFailure({ call, lease: input.lease, policy: input.policy, result });
-        } else {
-          await input.store.settleKnown({ call, lease: input.lease, policy: input.policy, result });
+      return observeAgentOperation("model.generate", "generation", {
+        model: intent.model,
+        input: observation?.input,
+        modelParameters: observation?.parameters,
+        metadata: {
+          runId: input.lease.runId, modelCallId: call.id, provider: intent.provider,
+          workflow, stepKey: input.stepKey, stepId: input.stepId,
+          stepAttemptId: input.stepAttemptId, physicalOrdinal: ordinal,
+          requestKind: intent.requestKind, requestHash: intent.requestHash,
+          role: intent.metadata?.role, turn: intent.metadata?.turn,
+          schemaName: intent.metadata?.schemaName,
+          maxOutputTokens: bounded.maxOutputTokens, pricingHash: input.policy.hash,
+          currency: input.policy.currency, usageStatus: "unavailable", settlementStatus: "pending",
+        },
+      }, async (generation) => {
+        try {
+          const result = await transport();
+          if (result.httpStatus !== undefined && result.httpStatus >= 400) {
+            await input.store.settleProviderFailure({ call, lease: input.lease, policy: input.policy, result });
+          } else {
+            await input.store.settleKnown({ call, lease: input.lease, policy: input.policy, result });
+          }
+          // Observability must never turn a settled provider request into a business failure.
+          try {
+            const actual = result.usage
+              ? calculateActualModelUsage(result.usage, input.policy.rates, input.policy.provider)
+              : undefined;
+            generation.update({
+              output: result.observationOutput,
+              usageDetails: actual && result.usage
+                ? modelObservationUsage(intent.provider, result.usage) : undefined,
+              costDetails: actual && input.policy.currency === "USD"
+                ? { total: actual.costMicros / 1_000_000 } : undefined,
+              level: result.httpStatus !== undefined && result.httpStatus >= 400 ? "ERROR" : "DEFAULT",
+              statusMessage: result.httpStatus !== undefined && result.httpStatus >= 400
+                ? "provider_http_failure" : undefined,
+              metadata: {
+                providerRequestId: result.providerRequestId, modelVersion: result.modelVersion,
+                httpStatus: result.httpStatus, usageStatus: actual ? "actual" : "unavailable",
+                settlementStatus: actual ? "settled" : "pending",
+                actualCostMicros: actual?.costMicros,
+                costSource: "frozen_run_pricing", currency: input.policy.currency,
+              },
+            });
+          } catch (error) {
+            logCore("warn", "observability.generation_update_failed", {
+              runId: input.lease.runId, modelCallId: call.id, error,
+            });
+          }
+          return result.value;
+        } catch (error) {
+          await input.store.settleUnknown({
+            call,
+            lease: input.lease,
+            errorCode: error instanceof Error ? error.name : "model_transport_error",
+          });
+          throw error;
         }
-        return result.value;
-      } catch (error) {
-        await input.store.settleUnknown({
-          call,
-          lease: input.lease,
-          errorCode: error instanceof Error ? error.name : "model_transport_error",
-        });
-        throw error;
-      }
+      });
     },
   };
 }

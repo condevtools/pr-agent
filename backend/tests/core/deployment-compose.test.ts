@@ -39,6 +39,14 @@ test("application Compose isolates credentials, process roles, and container pri
         OPENAI_COMPATIBLE_API_KEY: "sentinel-compatible-worker-only",
         ANTHROPIC_API_KEY: "sentinel-anthropic-worker-only",
         GEMINI_API_KEY: "sentinel-gemini-worker-only",
+        LANGFUSE_ENABLED: "on",
+        LANGFUSE_BASE_URL: "https://langfuse.example.test",
+        LANGFUSE_ALLOW_INSECURE_HTTP: "false",
+        LANGFUSE_PUBLIC_KEY: "sentinel-langfuse-public-worker-only",
+        LANGFUSE_SECRET_KEY: "sentinel-langfuse-secret-worker-only",
+        LANGFUSE_CAPTURE_CONTENT: "redacted",
+        LANGFUSE_TRACING_ENVIRONMENT: "compose-test",
+        LANGFUSE_RELEASE: "sha-compose-test",
         HARNESS_API_PRINCIPALS_JSON: "sentinel-web-principals-only",
         GITHUB_TOKEN: "runtime-github-token",
         GITLAB_TOKEN: "runtime-gitlab-token",
@@ -108,6 +116,19 @@ test("application Compose isolates credentials, process roles, and container pri
   assert.deepEqual(servicesContaining(services, "sentinel-compatible-worker-only"), ["worker"]);
   assert.deepEqual(servicesContaining(services, "sentinel-anthropic-worker-only"), ["worker"]);
   assert.deepEqual(servicesContaining(services, "sentinel-gemini-worker-only"), ["worker"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-langfuse-public-worker-only"), ["worker"]);
+  assert.deepEqual(servicesContaining(services, "sentinel-langfuse-secret-worker-only"), ["worker"]);
+  assert.equal(services.worker!.environment!.LANGFUSE_ENABLED, "on");
+  assert.equal(services.worker!.environment!.LANGFUSE_BASE_URL, "https://langfuse.example.test");
+  assert.equal(services.worker!.environment!.LANGFUSE_ALLOW_INSECURE_HTTP, "false");
+  assert.equal(services.worker!.environment!.LANGFUSE_CAPTURE_CONTENT, "redacted");
+  assert.equal(services.worker!.environment!.LANGFUSE_TRACING_ENVIRONMENT, "compose-test");
+  assert.equal(services.worker!.environment!.LANGFUSE_RELEASE, "sha-compose-test");
+  for (const name of ["pr-agent", "recovery", "maintenance", "database-init", "onboarding-role-init", "postgres"]) {
+    const environment = services[name]!.environment ?? {};
+    assert.equal(environment.LANGFUSE_PUBLIC_KEY, undefined);
+    assert.equal(environment.LANGFUSE_SECRET_KEY, undefined);
+  }
   assert.deepEqual(servicesContaining(services, "sentinel-web-principals-only"), ["pr-agent"]);
   assert.deepEqual(servicesContaining(services, "sentinel-dead-health-timeout"), []);
   assert.deepEqual(servicesContaining(services, "sentinel-dead-health-probe"), []);

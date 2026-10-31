@@ -12,6 +12,7 @@ import { resolveFrozenModelExecutionPolicy } from "./agent-runtime/runtime/worke
 import { evolutionReleasePolicy } from "./evolution/releases/policy.js";
 import { beginModelShutdown, drainModelRequests } from "#model";
 import { beginHttpShutdown } from "#core";
+import { initializeAgentObservability, shutdownAgentObservability } from "./observability/index.js";
 
 async function bootstrap(): Promise<void> {
   requireOnlinePublicationAuthority();
@@ -23,6 +24,7 @@ async function bootstrap(): Promise<void> {
     if (roleStartsWeb(role)) resolveFrozenModelExecutionPolicy(process.env);
     if (capabilities.evolution) evolutionReleasePolicy(process.env);
   }
+  if (roleStartsWorker(role)) initializeAgentObservability();
   const runtime = runtimeComposition();
   await runtime.start(role);
 
@@ -70,10 +72,14 @@ async function waitForRuntimeShutdown(
       if (stopping) return;
       stopping = true;
       try {
-        beginHttpShutdown();
-        await closeRuntime();
-        beginModelShutdown();
-        await drainModelRequests();
+        try {
+          beginHttpShutdown();
+          await closeRuntime();
+          beginModelShutdown();
+          await drainModelRequests();
+        } finally {
+          await shutdownAgentObservability();
+        }
         logCore("info", "application.stopped", { role, signal });
         resolve();
       } catch (error) {
@@ -95,6 +101,7 @@ function captureRawBody(
 
 bootstrap().catch(async (error) => {
   await runtimeComposition().close().catch(() => undefined);
+  await shutdownAgentObservability();
   logCore("error", "application.bootstrap_failed", { error });
   process.exitCode = 1;
 });

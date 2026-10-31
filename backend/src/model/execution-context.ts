@@ -31,6 +31,14 @@ export interface ModelTransportResult<T> {
   providerRequestId?: string;
   modelVersion?: string;
   httpStatus?: number;
+  /** Selected response content for telemetry only; never provider headers or raw responses. */
+  observationOutput?: unknown;
+}
+
+/** Transient content, deliberately separate from the durable model request intent. */
+export interface ModelObservationPayload {
+  input?: unknown;
+  parameters?: Record<string, unknown>;
 }
 
 export interface ModelExecutionContext {
@@ -39,6 +47,7 @@ export interface ModelExecutionContext {
   execute<T>(
     intent: ModelRequestIntent,
     transport: () => Promise<ModelTransportResult<T>>,
+    observation?: ModelObservationPayload,
   ): Promise<T>;
 }
 
@@ -85,6 +94,7 @@ export function currentOpenAiTokenParameter(
 export async function executeModelRequest<T>(
   intent: ModelRequestIntent,
   transport: () => Promise<ModelTransportResult<T>>,
+  observation?: ModelObservationPayload,
 ): Promise<T> {
   const context = currentModelExecutionContext();
   if (!context) throw new ModelExecutionContextRequiredError(intent.requestKind);
@@ -92,7 +102,7 @@ export async function executeModelRequest<T>(
   return context.execute(intent, async () => {
     context.signal?.throwIfAborted();
     return transport();
-  });
+  }, observation);
 }
 
 export class ModelExecutionContextRequiredError extends Error {

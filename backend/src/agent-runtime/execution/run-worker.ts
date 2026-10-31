@@ -18,6 +18,7 @@ import type { PublicationOutcomeHandler } from "../publication/outcome.js";
 import type { RuntimeQueueClass } from "./scheduler.js";
 import { prepareRunArtifact, RunArtifactCorruptError, RunArtifactLimitError,
   RunArtifactUnavailableError } from "../artifacts/index.js";
+import { observeAgentOperation, type AgentObservationHandle } from "../../observability/index.js";
 
 interface WorkerDependencies {
   store: RunExecutionStore;
@@ -195,6 +196,31 @@ export class RunWorker {
   }
 
   private async execute(lease: RunLease, binding: PublicationBinding, controller: AbortController): Promise<void> {
+    const workflow = String(lease.input.workflow ?? lease.runType ?? "unknown");
+    await observeAgentOperation(
+      `execute-${stableObservationSegment(workflow)}`,
+      "agent",
+      {
+        input: { workflow, repository: binding.repository,
+          revision: { baseSha: lease.baseSha, headSha: lease.headSha } },
+        metadata: {
+          tenantId: lease.tenantId, runId: lease.runId, integrationId: lease.integrationId,
+          jobId: lease.jobId, jobKind: lease.jobKind ?? "start", jobAttempt: lease.jobAttempt,
+          leaseEpoch: lease.epoch, workflow, platform: binding.platform,
+          repository: binding.repository, runtimeVersionHash: lease.runtimeVersionHash,
+        },
+      },
+      (observation) => this.executeAttempt(lease, binding, controller, observation),
+      { root: true, sessionId: lease.runId },
+    );
+  }
+
+  private async executeAttempt(
+    lease: RunLease,
+    binding: PublicationBinding,
+    controller: AbortController,
+    observation: AgentObservationHandle,
+  ): Promise<void> {
     const store = this.dependencies.store;
     let active = true;
     let heartbeating = false;
@@ -249,62 +275,77 @@ export class RunWorker {
             ? { tool: { name: deepToolName(key) ?? key, kind: deepToolName(key) ? "repository_read" as const : "provider_read" as const, requestHash: inputHash } }
             : {}),
         });
-        if (step.reused) {
-          return store.loadStepOutput<T>(lease, step);
-        }
-        try {
-        const policy = lease.runtimeConfig.modelPolicy as ModelExecutionPolicy;
-        const result = kind === "model"
-          ? await withModelExecutionContext(
-            {
-              ...createBudgetedModelExecutionContext({
-                store: this.dependencies.budget,
-                lease,
+        return observeAgentOperation(
+          stepObservationName(kind),
+          kind === "tool" ? "tool" : "span",
+          {
+            input: { stepKey: key, inputHash },
+            metadata: { stepKey: key, stepKind: kind, stepId: step.id,
+              stepAttemptId: step.attemptId, stepAttemptNumber: step.attemptNumber,
+              reused: step.reused },
+          },
+          async (stepObservation) => {
+            if (step.reused) {
+              const reused = await store.loadStepOutput<T>(lease, step);
+              stepObservation.update({ output: reused, metadata: { reused: true } });
+              return reused;
+            }
+            try {
+              const policy = lease.runtimeConfig.modelPolicy as ModelExecutionPolicy;
+              const result = kind === "model"
+                ? await withModelExecutionContext(
+                  {
+                    ...createBudgetedModelExecutionContext({
+                      store: this.dependencies.budget,
+                      lease,
+                      stepId: step.id,
+                      stepAttemptId: step.attemptId,
+                      policy,
+                      stepKey: key,
+                    }),
+                    signal: controller.signal,
+                  },
+                  action,
+                )
+                : await action();
+              await assertActive();
+              let output: Record<string, unknown>;
+              try {
+                output = JSON.parse(JSON.stringify({ value: result })) as Record<string, unknown>;
+              } catch (error) {
+                throw new RunExecutionContractError(`Run step output is not JSON-serializable: ${
+                  error instanceof Error ? error.message : "unknown serialization error"}`);
+              }
+              const preparedArtifact = await prepareRunArtifact(Buffer.from(JSON.stringify(output)), {
+                contentType: "application/json",
+                purpose: "step_output",
+              });
+              const storedOutput = {
+                storage: "artifact",
+                artifactHash: preparedArtifact.artifactHash,
+                rawSizeBytes: preparedArtifact.rawSizeBytes,
+                compressedSizeBytes: preparedArtifact.compressedSizeBytes,
+              };
+              const state = { stage: key, stepId: step.id, outputHash: fingerprint(output) };
+              await store.completeStep(lease, {
                 stepId: step.id,
-                stepAttemptId: step.attemptId,
-                policy,
-                stepKey: key,
-              }),
-              signal: controller.signal,
-            },
-            action,
-          )
-          : await action();
-        await assertActive();
-        let output: Record<string, unknown>;
-        try {
-          output = JSON.parse(JSON.stringify({ value: result })) as Record<string, unknown>;
-        } catch (error) {
-          throw new RunExecutionContractError(`Run step output is not JSON-serializable: ${
-            error instanceof Error ? error.message : "unknown serialization error"}`);
-        }
-        const preparedArtifact = await prepareRunArtifact(Buffer.from(JSON.stringify(output)), {
-          contentType: "application/json",
-          purpose: "step_output",
-        });
-        const storedOutput = {
-          storage: "artifact",
-          artifactHash: preparedArtifact.artifactHash,
-          rawSizeBytes: preparedArtifact.rawSizeBytes,
-          compressedSizeBytes: preparedArtifact.compressedSizeBytes,
-        };
-        const state = { stage: key, stepId: step.id, outputHash: fingerprint(output) };
-        await store.completeStep(lease, {
-          stepId: step.id,
-          attemptId: step.attemptId,
-          output: storedOutput,
-          outputHash: fingerprint(output),
-          preparedArtifact,
-          checkpoint: { schemaVersion: 1, state, stateHash: fingerprint(state) },
-        });
-        return result;
-        } catch (error) {
-          if (!(error instanceof RunLeaseLostError) && !controller.signal.aborted) {
-            await store.failStep(lease, { stepId: step.id, attemptId: step.attemptId,
-              errorCode: error instanceof Error ? error.name.slice(0, 128) : "StepFailed" });
-          }
-          throw error;
-        }
+                attemptId: step.attemptId,
+                output: storedOutput,
+                outputHash: fingerprint(output),
+                preparedArtifact,
+                checkpoint: { schemaVersion: 1, state, stateHash: fingerprint(state) },
+              });
+              stepObservation.update({ output: result, metadata: { reused: false } });
+              return result;
+            } catch (error) {
+              if (!(error instanceof RunLeaseLostError) && !controller.signal.aborted) {
+                await store.failStep(lease, { stepId: step.id, attemptId: step.attemptId,
+                  errorCode: error instanceof Error ? error.name.slice(0, 128) : "StepFailed" });
+              }
+              throw error;
+            }
+          },
+        );
       },
     };
     try {
@@ -313,6 +354,8 @@ export class RunWorker {
           throw new Error("publication outcome handler is not configured");
         }
         await this.dependencies.outcomeHandler.execute(lease);
+        observation.update({ output: { outcome: `${lease.jobKind}_completed` },
+          metadata: { outcome: `${lease.jobKind}_completed` } });
         return;
       }
       await store.latestCheckpoint(lease, { schemaVersion: 1, runtimeVersionHash: lease.runtimeVersionHash });
@@ -326,6 +369,7 @@ export class RunWorker {
                 : lease.input.workflow === "issue.triage.v1" ? "issue_triage_completed" : "review_completed" },
       lease.input.workflow === "fix.publish.v1" ? undefined
         : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
+      observation.update({ output: { outcome: "succeeded" }, metadata: { outcome: "succeeded" } });
     } catch (error) {
       const abortReason = controller.signal.reason;
       if (controller.signal.aborted && !(abortReason instanceof RunLeaseLostError)) {
@@ -335,20 +379,35 @@ export class RunWorker {
         } catch (releaseError) {
           if (!(releaseError instanceof RunLeaseLostError)) throw releaseError;
         }
+        observation.update({ output: { outcome: "relinquished",
+          reason: this.stopped ? "worker_shutdown" : "heartbeat_lease_uncertain" },
+          metadata: { outcome: "relinquished",
+            outcomeReason: this.stopped ? "worker_shutdown" : "heartbeat_lease_uncertain" },
+          level: "WARNING", statusMessage: "run_attempt_relinquished" });
         return;
       }
-      if (error instanceof RunLeaseLostError || controller.signal.aborted) return;
+      if (error instanceof RunLeaseLostError || controller.signal.aborted) {
+        observation.update({ output: { outcome: "lease_lost" }, metadata: { outcome: "lease_lost" },
+          level: "WARNING", statusMessage: "run_lease_lost" });
+        return;
+      }
       if (lease.jobKind === "publication_outcome" || lease.jobKind === "manual_resume") {
         await store.retrySpecialJob(
           lease,
           retryBackoffMs(lease.jobAttempt),
           error instanceof Error ? error.name : "publication_outcome_retry",
         );
+        observation.update({ output: { outcome: "publication_outcome_retry" },
+          metadata: { outcome: "publication_outcome_retry" },
+          level: "WARNING", statusMessage: "publication_outcome_retry" });
         this.dependencies.onError(error, lease.runId);
         return;
       }
       if (error instanceof PendingPublicationError) {
         await store.transition(lease, { to: "waiting_for_reconciliation", reasonCode: "publication_pending" });
+        observation.update({ output: { outcome: "waiting_for_reconciliation" },
+          metadata: { outcome: "waiting_for_reconciliation" },
+          level: "WARNING", statusMessage: "publication_waiting_for_reconciliation" });
       } else if (
         error instanceof PublicationDefiniteFailureError ||
         error instanceof StalePublicationError ||
@@ -366,12 +425,22 @@ export class RunWorker {
           reasonCode: error instanceof Error ? error.name : "review_failed",
         }, lease.input.workflow === "fix.publish.v1" ? undefined
           : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));
+        observation.update({ output: { outcome: "failed",
+          reasonCode: error instanceof Error ? error.name : "review_failed" },
+          metadata: { outcome: "failed",
+            outcomeReasonCode: error instanceof Error ? error.name : "review_failed" },
+          level: "ERROR", statusMessage: "run_attempt_failed" });
       } else {
         await store.transition(lease, {
           to: "retry_wait",
           reasonCode: error instanceof Error ? error.name : "review_retry",
           retryDelayMs: retryBackoffMs(lease.jobAttempt),
         });
+        observation.update({ output: { outcome: "retry_wait",
+          reasonCode: error instanceof Error ? error.name : "review_retry" },
+          metadata: { outcome: "retry_wait",
+            outcomeReasonCode: error instanceof Error ? error.name : "review_retry" },
+          level: "WARNING", statusMessage: "run_attempt_retry_wait" });
       }
       this.dependencies.onError(error, lease.runId);
     } finally {
@@ -383,6 +452,18 @@ export class RunWorker {
       }
     }
   }
+}
+
+function stepObservationName(kind: RunStepKind): string {
+  if (kind === "tool") return "invoke-tool";
+  if (kind === "model") return "execute-model-step";
+  if (kind === "verification") return "verify-result";
+  if (kind === "publication") return "prepare-publication";
+  return "coordinate-workflow";
+}
+
+function stableObservationSegment(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "") || "unknown-workflow";
 }
 
 export function retryBackoffMs(

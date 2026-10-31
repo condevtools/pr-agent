@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { canonicalJson, fingerprint } from "../../agent-runtime/versions.js";
+import { observeAgentOperation } from "../../observability/index.js";
 import { composeReviewSystemPrompt, frozenReviewText } from "../strategy/text-components.js";
 import type {
   CriticDecision,
@@ -46,6 +47,29 @@ export const deepCriticJsonSchema = {
 } as const;
 
 export async function runDeepReviewCritic(input: {
+  candidates: readonly FindingCandidate[];
+  coverage: readonly RoleCoverage[];
+  context: DeepWorkflowContext;
+  policy: DeepWorkflowPolicy;
+}): Promise<CriticDecision[]> {
+  return observeAgentOperation(
+    "deep-review-critic",
+    "agent",
+    {
+      input: { candidateCount: input.candidates.length, coverage: input.coverage },
+      metadata: { role: "critic", workflow: "review.deep.v1",
+        runId: input.context.lease.runId },
+    },
+    async (observation) => {
+      const decisions = await executeDeepReviewCritic(input);
+      observation.update({ output: { decisionCount: decisions.length, decisions },
+        metadata: { decisionCount: decisions.length } });
+      return decisions;
+    },
+  );
+}
+
+async function executeDeepReviewCritic(input: {
   candidates: readonly FindingCandidate[];
   coverage: readonly RoleCoverage[];
   context: DeepWorkflowContext;
