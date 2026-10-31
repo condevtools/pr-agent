@@ -5,14 +5,13 @@ import { z } from "zod";
 
 import { runNotFound, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
-import { RunApiAuthenticator, type RepositoryAdminPrincipal } from "./run-auth.js";
+import { RunApiAuthenticator } from "./run-auth.js";
 import { logCore } from "#core";
 
 @Injectable()
 export class RunApiContextService implements OnModuleDestroy {
   private readonly authenticator = new RunApiAuthenticator(readPrincipalConfiguration());
   private readonly principals = new WeakMap<Request, RunPrincipal>();
-  private readonly repositoryAdmins = new WeakMap<Request, RepositoryAdminPrincipal>();
   private readonly reload = () => {
     try { this.authenticator.reload(readPrincipalConfiguration()); }
     catch {
@@ -33,15 +32,6 @@ export class RunApiContextService implements OnModuleDestroy {
     return principal;
   }
 
-  authenticateRepositoryAdmin(request: Request): RepositoryAdminPrincipal {
-    const cached = this.repositoryAdmins.get(request);
-    if (cached) { this.authenticator.assertCurrent(cached); return cached; }
-    this.assertSingleAuthorizationHeader(request);
-    const principal = this.authenticator.authenticateRepositoryAdmin(request.headers.authorization);
-    this.repositoryAdmins.set(request, principal);
-    return principal;
-  }
-
   private assertSingleAuthorizationHeader(request: Request): void {
     const headers = request.rawHeaders.filter((_value, index) => index % 2 === 0);
     if (headers.filter((name) => name.toLowerCase() === "authorization").length !== 1) {
@@ -49,7 +39,7 @@ export class RunApiContextService implements OnModuleDestroy {
     }
   }
 
-  assertCurrentPrincipal(principal: RunPrincipal | RepositoryAdminPrincipal): void {
+  assertCurrentPrincipal(principal: RunPrincipal): void {
     this.authenticator.assertCurrent(principal);
   }
 

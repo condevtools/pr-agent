@@ -42,6 +42,8 @@ export interface CreateRunInput {
   runtimeVersionHash: string;
   /** Server-produced full build/source digest for audit only; never used for execution compatibility. */
   sourceAuditHash?: string;
+  /** Stable provider delivery identity used for cross-workflow idempotency. */
+  sourceIdentity?: { kind: "github_delivery"; key: string; hash: string };
   input: Record<string, unknown>;
   authorityGeneration?: number;
   /** Binding authority version observed while constructing this capability-scoped Run. */
@@ -210,7 +212,7 @@ export class RunStore {
             tool_version_hash, policy_version_hash, runtime_version_hash, input_json,
             authority_generation, execution_mode_generation,
             runtime_config_json, limits_json, deadline_at,
-            parent_run_id, next_event_seq
+            parent_run_id, source_kind, source_key, source_hash, next_event_seq
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17::jsonb,
@@ -219,7 +221,7 @@ export class RunStore {
               THEN now() + ($22::double precision * interval '1 millisecond')
               ELSE COALESCE($23::timestamptz, now() + interval '15 minutes')
             END,
-            $24, 2
+            $24, $25, $26, $27, 2
           )
           ON CONFLICT (tenant_id, create_scope, create_key) DO NOTHING
           RETURNING id, tenant_id, status, version
@@ -249,6 +251,9 @@ export class RunStore {
           execution.maxRunMs,
           input.deadlineAt ?? null,
           input.parentRunId ?? null,
+          input.sourceIdentity?.kind ?? null,
+          input.sourceIdentity?.key ?? null,
+          input.sourceIdentity?.hash ?? null,
         ],
       );
 
@@ -412,6 +417,14 @@ function validateCreateRunInput(input: CreateRunInput): void {
   }
   if (input.sourceAuditHash !== undefined && !SHA256_PATTERN.test(input.sourceAuditHash)) {
     throw new Error("source audit hash must be a lowercase SHA-256 value");
+  }
+  if (input.sourceIdentity !== undefined
+      && (input.sourceIdentity.kind !== "github_delivery"
+        || !/^github:delivery:.+/u.test(input.sourceIdentity.key)
+        || input.sourceIdentity.key.length > 1024
+        || !SHA256_PATTERN.test(input.sourceIdentity.hash)
+        || input.createKey !== input.sourceIdentity.key)) {
+    throw new Error("provider source identity is invalid");
   }
   const required = [
     input.actorId,

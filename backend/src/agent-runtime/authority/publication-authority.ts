@@ -297,6 +297,22 @@ export class PublicationAuthorityStore {
     });
   }
 
+  /** Resolve deferred events by immutable provider identity, including operator-disabled bindings. */
+  async findByProviderRepository(platform: IntegrationPlatform, origin: string, repositoryId: number):
+  Promise<{ binding: PublicationBinding; active: boolean } | undefined> {
+    positiveId(repositoryId);
+    return this.db.trustedTransaction(async (client) => {
+      const result = await client.query<PublicationBindingRow & { active: boolean }>(
+        `SELECT * FROM pr_agent_harness.integration_bindings
+         WHERE platform=$1 AND origin=$2 AND provider_repository_id=$3`,
+        [platform, origin, repositoryId],
+      );
+      if (result.rows.length > 1) throw new Error("Ambiguous provider repository binding");
+      const row = result.rows[0];
+      return row ? { binding: mapPublicationBinding(row), active: row.active } : undefined;
+    });
+  }
+
   async listRecoverable(): Promise<PublicationBinding[]> {
     return this.db.trustedTransaction(async (client) => {
       const result = await client.query<PublicationBindingRow>(

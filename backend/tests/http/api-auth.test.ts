@@ -8,7 +8,6 @@ import { RunControlError } from "../../src/agent-runtime/runs/control-contracts.
 const tenantId = randomUUID();
 const integrationId = randomUUID();
 const token = "test-token._~+/-=";
-const adminToken = "repository-admin-token";
 
 test("strict principal configuration rejects unknown fields and duplicate permissions", () => {
   assert.throws(() => new RunApiAuthenticator(JSON.stringify([{ ...record(), unexpected: true }])), /strict scoped principals/);
@@ -30,32 +29,12 @@ test("authenticate returns only the configured tenant, integration, and permissi
   assert.equal(principal.permissions.includes("runs:cancel"), false);
 });
 
-test("repository administrator credentials are isolated from Run API credentials", () => {
-  const authenticator = new RunApiAuthenticator(JSON.stringify([record(), adminRecord()]));
-  assert.throws(() => authenticator.authenticate(`Bearer ${adminToken}`), (error: unknown) =>
-    error instanceof RunControlError && error.code === "FORBIDDEN" && error.status === 403);
-  assert.throws(() => authenticator.authenticateRepositoryAdmin(`Bearer ${token}`), (error: unknown) =>
-    error instanceof RunControlError && error.code === "FORBIDDEN" && error.status === 403);
-  assert.deepEqual(authenticator.authenticateRepositoryAdmin(`Bearer ${adminToken}`), {
+test("onboarding-only repository administrator principals are rejected", () => {
+  assert.throws(() => new RunApiAuthenticator(JSON.stringify([{
     principalType: "repository_admin", subjectId: "repository-admin", actorType: "user",
+    tokenSha256: createHash("sha256").update("obsolete-admin-token").digest("hex"),
     tenantId, githubAccountIds: [1234], permissions: ["repositories:manage"],
-  });
-});
-
-test("one GitHub account cannot be assigned to repository administrators in different tenants", () => {
-  assert.throws(() => new RunApiAuthenticator(JSON.stringify([
-    adminRecord(),
-    { ...adminRecord(), subjectId: "other-admin", tenantId: randomUUID(),
-      tokenSha256: createHash("sha256").update("other-admin-token").digest("hex") },
-  ])), /strict scoped principals/);
-});
-
-test("expired repository administrator credentials are denied", () => {
-  const authenticator = new RunApiAuthenticator(JSON.stringify([{
-    ...adminRecord(), expiresAt: "2020-01-01T00:00:00.000Z",
-  }]));
-  assert.throws(() => authenticator.authenticateRepositoryAdmin(`Bearer ${adminToken}`), (error: unknown) =>
-    error instanceof RunControlError && error.code === "UNAUTHORIZED" && error.status === 401);
+  }])), /strict scoped principals/);
 });
 
 test("authenticate rejects malformed, oversized, and incorrect bearer credentials", () => {
@@ -76,15 +55,6 @@ function record() {
     subjectId: "api-user", actorType: "user" as const,
     tokenSha256: createHash("sha256").update(token).digest("hex"),
     tenantId, integrationId, permissions: ["runs:read", "runs:trace"] as const,
-  };
-}
-
-function adminRecord() {
-  return {
-    principalType: "repository_admin" as const,
-    subjectId: "repository-admin", actorType: "user" as const,
-    tokenSha256: createHash("sha256").update(adminToken).digest("hex"),
-    tenantId, githubAccountIds: [1234], permissions: ["repositories:manage"] as const,
   };
 }
 

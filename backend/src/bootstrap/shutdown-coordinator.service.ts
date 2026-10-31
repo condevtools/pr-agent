@@ -10,11 +10,15 @@ import {
   closeAgentRuntimeApplicationResources,
   quiesceAgentRuntime,
 } from "../agent-runtime/runtime.js";
+import { closeGitHubOnboardingStore,
+  stopGitHubInstallationReconciler } from "../agent-runtime/runtime/github-onboarding.js";
 
 export interface ApplicationShutdownDependencies {
   beginHttpShutdown(): void;
   quiesceRuntime(): Promise<void>;
+  quiesceGitHubOnboarding(): Promise<void>;
   closeApplicationResources(): Promise<void>;
+  closeGitHubOnboardingResources(): Promise<void>;
   beginModelShutdown(): void;
   drainModelRequests(): Promise<boolean>;
 }
@@ -28,7 +32,12 @@ export class ApplicationShutdownSequence {
   beforeApplicationShutdown(): Promise<void> {
     this.quiescing ??= (async () => {
       this.dependencies.beginHttpShutdown();
-      await this.dependencies.quiesceRuntime();
+      const failures: unknown[] = [];
+      for (const task of [this.dependencies.quiesceRuntime, this.dependencies.quiesceGitHubOnboarding]) {
+        try { await task(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "Application background work failed to quiesce");
     })();
     return this.quiescing;
   }
@@ -36,7 +45,13 @@ export class ApplicationShutdownSequence {
   onApplicationShutdown(): Promise<boolean> {
     this.closing ??= (async () => {
       await this.beforeApplicationShutdown();
-      await this.dependencies.closeApplicationResources();
+      const failures: unknown[] = [];
+      for (const task of [this.dependencies.closeApplicationResources,
+        this.dependencies.closeGitHubOnboardingResources]) {
+        try { await task(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "Application resources failed to close");
       this.dependencies.beginModelShutdown();
       return this.dependencies.drainModelRequests();
     })();
@@ -49,7 +64,9 @@ export class ShutdownCoordinatorService implements BeforeApplicationShutdown, On
   private readonly sequence = new ApplicationShutdownSequence({
     beginHttpShutdown,
     quiesceRuntime: quiesceAgentRuntime,
+    quiesceGitHubOnboarding: stopGitHubInstallationReconciler,
     closeApplicationResources: closeAgentRuntimeApplicationResources,
+    closeGitHubOnboardingResources: closeGitHubOnboardingStore,
     beginModelShutdown,
     drainModelRequests,
   });

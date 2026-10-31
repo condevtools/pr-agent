@@ -16,7 +16,9 @@ const PULL_REQUEST_REVIEW_THREAD_EVENTS = [
   "pull_request_review_thread.resolved",
   "pull_request_review_thread.unresolved",
 ] as const;
-const INSTALLATION_RESTRICTION_EVENTS = ["installation.deleted", "installation.suspend"] as const;
+const INSTALLATION_EVENTS = ["installation.created", "installation.deleted", "installation.suspend",
+  "installation.unsuspend", "installation.new_permissions_accepted"] as const;
+const INSTALLATION_REPOSITORY_EVENTS = ["installation_repositories.added", "installation_repositories.removed"] as const;
 
 export const app: ApplicationFunction = (probot): void => {
   requireOnlinePublicationAuthority();
@@ -82,13 +84,15 @@ export const app: ApplicationFunction = (probot): void => {
     });
   });
 
-  for (const installationEvent of INSTALLATION_RESTRICTION_EVENTS) {
+  for (const installationEvent of INSTALLATION_EVENTS) {
     probot.on(installationEvent, async (context) => {
       await dispatchEvent({ eventName: "installation", context });
     });
   }
 
-  probot.on("installation_repositories.removed", async (context) => {
-    await dispatchEvent({ eventName: "installation_repositories", context });
-  });
+  for (const repositoryEvent of INSTALLATION_REPOSITORY_EVENTS) {
+    probot.on(repositoryEvent, async (context) => {
+      await dispatchEvent({ eventName: "installation_repositories", context });
+    });
+  }
 };

@@ -12,8 +12,9 @@ CREATE ROLE pr_agent_verifier LOGIN PASSWORD :'verifier_password'
 CREATE ROLE pr_agent_maintenance LOGIN PASSWORD :'maintenance_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
--- Optional control-plane identity. Keeping the password unset preserves the
--- existing feature-off deployment and does not create an unused login.
+-- Sixth least-privilege control-plane identity. Non-App deployments may leave
+-- the password unset; Compose also bootstraps/rotates it after migrations so
+-- existing volumes receive the same role without per-repository actions.
 \set onboarding_password ''
 \getenv onboarding_password HARNESS_ONBOARDING_PASSWORD
 SELECT format(

@@ -56,16 +56,17 @@ test("application Compose isolates credentials, process roles, and container pri
     volumes?: Array<{ source?: string; target?: string }>; ports?: unknown[];
     secrets?: Array<{ source?: string; target?: string; mode?: string | number }>;
     command?: string[];
+    depends_on?: Record<string, { condition?: string }>;
   }> };
   const services = config.services;
   assert.deepEqual(Object.keys(services).sort(),
-    ["database-init", "maintenance", "postgres", "pr-agent", "recovery", "worker"]);
-  assert.deepEqual(servicesContaining(services, secrets.bootstrap), ["postgres"]);
+    ["database-init", "maintenance", "onboarding-role-init", "postgres", "pr-agent", "recovery", "worker"]);
+  assert.deepEqual(servicesContaining(services, secrets.bootstrap), ["onboarding-role-init", "postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.migration), ["database-init", "postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.app), ["postgres", "pr-agent", "recovery", "worker"]);
   assert.deepEqual(servicesContaining(services, secrets.verifier), ["postgres"]);
   assert.deepEqual(servicesContaining(services, secrets.maintenance), ["maintenance", "postgres"]);
-  assert.deepEqual(servicesContaining(services, secrets.onboarding), ["postgres", "pr-agent"]);
+  assert.deepEqual(servicesContaining(services, secrets.onboarding), ["onboarding-role-init", "postgres", "pr-agent"]);
 
   const app = services["pr-agent"]!.environment!;
   assert.equal(app.APP_ID, "runtime-app-id");
@@ -79,10 +80,16 @@ test("application Compose isolates credentials, process roles, and container pri
   assert.equal(app.HARNESS_MODEL_PRICING_JSON, '{"version":"runtime-pricing"}');
   assert.equal(app.HARNESS_PG_PASSWORD, secrets.app);
   assert.equal(app.HARNESS_ONBOARDING_PG_PASSWORD, secrets.onboarding);
-  assert.equal(app.FEATURE_GITHUB_ONBOARDING, "off");
+  assert.equal(app.FEATURE_GITHUB_ONBOARDING, "auto");
   assert.equal(services.worker!.environment!.HARNESS_ONBOARDING_PG_PASSWORD, undefined);
   assert.equal(services.recovery!.environment!.HARNESS_ONBOARDING_PG_PASSWORD, undefined);
   assert.equal(services["database-init"]!.environment!.HARNESS_PG_PASSWORD, secrets.migration);
+  assert.equal(services["onboarding-role-init"]!.environment!.PGPASSWORD, secrets.bootstrap);
+  assert.equal(services["onboarding-role-init"]!.environment!.HARNESS_ONBOARDING_PASSWORD, secrets.onboarding);
+  assert.equal(services["onboarding-role-init"]!.depends_on?.["database-init"]?.condition,
+    "service_completed_successfully");
+  assert.equal(services["pr-agent"]!.depends_on?.["onboarding-role-init"]?.condition,
+    "service_completed_successfully");
   assert.equal(services["pr-agent"]!.environment!.PR_AGENT_PROCESS_ROLE, "web");
   assert.equal(services.worker!.environment!.PR_AGENT_PROCESS_ROLE, "worker");
   assert.equal(services.recovery!.environment!.PR_AGENT_PROCESS_ROLE, "recovery");

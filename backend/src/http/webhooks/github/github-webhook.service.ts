@@ -1,8 +1,10 @@
 import { Injectable } from "@nestjs/common";
 
 import { BadWebhookRequestError, logCore, parseBooleanEnv, readOptionalStringEnv } from "#core";
+import { getSharedGitHubProbot } from "../../../agent-runtime/runtime/credentials.js";
 import { type LoggerLike } from "../../../review/platforms/github/contracts.js";
-import { handlePlainGitHubWebhook, verifyWebhookSignature } from "#integrations/github";
+import type { MinimalGitHubOctokit } from "../../../integrations/github/api/types.js";
+import { handleGitHubWebhookEvent, handlePlainGitHubWebhook, verifyWebhookSignature } from "#integrations/github";
 import { runVerifiedGitHubIntake } from "./verified-github-intake.js";
 import {
   normalizeHeaderRecord,
@@ -44,7 +46,7 @@ export class GithubWebhookService {
         skipSignatureVerification: true, allowLifecycleMutation: false, sourceHash: params.sourceHash,
       });
     }
-    verifyWebhookSignature(rawBody, normalizedHeaders);
+    const signatureKind = verifyWebhookSignature(rawBody, normalizedHeaders);
     const eventName = normalizedHeaders["x-github-event"] ?? "unknown";
     return runVerifiedGitHubIntake({
       eventName,
@@ -52,12 +54,54 @@ export class GithubWebhookService {
       headers: normalizedHeaders,
       payload: params.payload,
       rawBody,
-      execute: ({ sourceHash }) => handlePlainGitHubWebhook({
-        payload: params.payload, rawBody, headers: normalizedHeaders, logger: this.serviceLogger,
-        skipSignatureVerification: true, allowLifecycleMutation: true, sourceHash,
-      }),
+      execute: ({ sourceHash }) => signatureKind === "app"
+        ? handleGitHubWebhookEvent({ eventName, payload: params.payload,
+          octokit: createLazyGitHubInstallationOctokit(params.payload),
+          logger: this.serviceLogger, runtimeMode: "github-app",
+          deliveryId: normalizedHeaders["x-github-delivery"], sourceHash })
+        : handlePlainGitHubWebhook({ payload: params.payload, rawBody, headers: normalizedHeaders,
+          logger: this.serviceLogger, skipSignatureVerification: true,
+          allowLifecycleMutation: false, sourceHash }),
     });
   }
+}
+
+function installationIdentity(payload: unknown): number {
+  const installation = payload && typeof payload === "object"
+    ? (payload as { installation?: unknown }).installation : undefined;
+  const id = installation && typeof installation === "object"
+    ? (installation as { id?: unknown }).id : undefined;
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
+    throw new BadWebhookRequestError("invalid GitHub App installation identity");
+  }
+  return id;
+}
+
+/** Defers installation authentication until a managed binding actually needs provider data. */
+export function createLazyGitHubInstallationOctokit(
+  payload: unknown,
+  loadClient: (installationId: number) => Promise<object> = async (installationId) =>
+    await getSharedGitHubProbot().auth(installationId) as object,
+): MinimalGitHubOctokit {
+  let client: Promise<object> | undefined;
+  const resolve = () => client ??= loadClient(installationIdentity(payload));
+  const method = (group: PropertyKey | undefined, name: PropertyKey) => async (...args: unknown[]) => {
+    const root = await resolve() as Record<PropertyKey, unknown>;
+    const parent = group === undefined ? root : root[group] as Record<PropertyKey, unknown>;
+    const target = parent[name];
+    if (typeof target !== "function") throw new Error("GitHub installation client method is unavailable");
+    return Reflect.apply(target, parent, args);
+  };
+  const group = (name: PropertyKey): object => new Proxy({}, {
+    get: (_target, property) => method(name, property),
+  });
+  return new Proxy({}, {
+    get: (_target, property) => {
+      if (property === "paginate" || property === "getListFilesTruncated"
+          || property === "getLastListFilesTruncated") return method(undefined, property);
+      return group(property);
+    },
+  }) as MinimalGitHubOctokit;
 }
 
 function buildFallbackRawBodyForSignatureSkip(

@@ -10,18 +10,47 @@ import { BASELINE_REVIEW_TEXT, withReviewTextVersions } from "../strategy/text-c
 import { recordDeepReleaseSelection, resolveBaselineDeepReleaseSelection,
   resolveDeepReleaseSelection } from "../../evolution/releases/selection.js";
 import { bindingAllowsCapability } from "../../agent-runtime/runtime/capabilities.js";
+import {
+  createOrReuseGitHubDeliveryRun,
+  GitHubDeliveryHandoffError,
+  type GitHubDeferredRunHandoff,
+  type GitHubDeliveryIdentity,
+} from "./github-delivery-handoff.js";
+
+export type { GitHubDeferredRunHandoff } from "./github-delivery-handoff.js";
 
 /** Called only after authenticated provider routing has resolved the trusted binding. */
 export async function enqueueReviewRun(
   binding: PublicationBinding,
   input: ReviewRunInput,
   identity?: { actorType: "user" | "service"; actorId: string; parentRunId?: string },
+  deferredHandoff?: GitHubDeferredRunHandoff,
 ): Promise<{ id: string; created: boolean }> {
   if ((binding.reviewExecutionState ?? "active") !== "active") {
     throw new Error("Active asynchronous review execution authority is required");
   }
-  const creation = await buildReviewRunCreationInput(binding, input, identity);
+  const parsed = parseTrustedReviewInput(binding, input);
   const services = await getAgentRuntimeServices();
+  const delivery = githubDeliveryIdentity(binding, parsed);
+  if (deferredHandoff && !delivery) {
+    throw new Error("Deferred GitHub handoff requires a stable GitHub delivery identity");
+  }
+  if (delivery) {
+    const result = await services.db.transaction(binding.tenantId, async (client) => {
+      try {
+        return await createOrReuseGitHubDeliveryRun(client, delivery,
+          async () => await buildParsedReviewRunCreationInput(binding, parsed, identity), deferredHandoff);
+      } catch (error) {
+        // These statuses are returned by SQL after recording integrity evidence.
+        // Commit that evidence before surfacing a denial; creation/lease failures still roll back.
+        if (error instanceof GitHubDeliveryHandoffError && error.code !== "deferred_claim_stale") return error;
+        throw error;
+      }
+    });
+    if (result instanceof GitHubDeliveryHandoffError) throw result;
+    return result;
+  }
+  const creation = await buildParsedReviewRunCreationInput(binding, parsed, identity);
   const result = await new RunStore(services.db).createRun(creation);
   return { id: result.id, created: result.created };
 }
@@ -31,18 +60,16 @@ export async function buildReviewRunCreationInput(
   input: ReviewRunInput,
   identity?: { actorType: "user" | "service"; actorId: string; parentRunId?: string },
 ): Promise<CreateRunInput> {
-  const parsed = reviewRunInputSchema.parse(input);
-  if (parsed.platform !== binding.platform || parsed.target.origin !== binding.origin
-      || parsed.target.repository !== binding.repository || parsed.target.providerRepositoryId !== binding.providerRepositoryId) {
-    throw new Error("Review intake target does not match its trusted integration");
-  }
-  const { provider, model } = resolveModelConfiguration();
-  const policy = getModelExecutionPolicy(provider, model);
-  const baseManifest = await runtimeVersionManifest(policy);
-  const manifest = parsed.workflow === "review.deep.v1" ? withReviewTextVersions(baseManifest, BASELINE_REVIEW_TEXT) : baseManifest;
-  const runtimeConfig = { ...AGENT_RUNTIME_CONFIG, modelPolicy: policy,
-    ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits), reviewText: BASELINE_REVIEW_TEXT } : {}) };
-  return {
+  return await buildParsedReviewRunCreationInput(binding, parseTrustedReviewInput(binding, input), identity);
+}
+
+async function buildParsedReviewRunCreationInput(
+  binding: PublicationBinding,
+  parsed: ReviewRunInput,
+  identity?: { actorType: "user" | "service"; actorId: string; parentRunId?: string },
+): Promise<CreateRunInput> {
+  const delivery = githubDeliveryIdentity(binding, parsed);
+  const creation = {
     tenantId: binding.tenantId, integrationId: binding.id,
     actorType: identity?.actorType ?? "service", actorId: identity?.actorId ?? `integration:${binding.id}`,
     parentRunId: identity?.parentRunId,
@@ -50,9 +77,21 @@ export async function buildReviewRunCreationInput(
     // Configuration revisions do not turn a redelivered event into a new request.
     requestHash: reviewCreationRequestHash(parsed),
     runType: parsed.workflow, baseSha: parsed.revision.baseSha, headSha: parsed.revision.headSha,
-    ...manifest, input: parsed, authorityGeneration: binding.generation,
+    input: parsed, authorityGeneration: binding.generation,
     bindingAuthorityVersion: binding.version,
     executionModeGeneration: binding.executionModeGeneration ?? 0,
+    ...(delivery ? { sourceIdentity: {
+      kind: "github_delivery" as const, key: delivery.sourceKey, hash: delivery.sourceHash,
+    } } : {}),
+  };
+  const { provider, model } = resolveModelConfiguration();
+  const policy = getModelExecutionPolicy(provider, model);
+  const baseManifest = await runtimeVersionManifest(policy);
+  const manifest = parsed.workflow === "review.deep.v1" ? withReviewTextVersions(baseManifest, BASELINE_REVIEW_TEXT) : baseManifest;
+  const runtimeConfig = { ...AGENT_RUNTIME_CONFIG, modelPolicy: policy,
+    ...(parsed.workflow === "review.deep.v1" ? { deepBudget: freezeDeepBudget(policy.runLimits), reviewText: BASELINE_REVIEW_TEXT } : {}) };
+  return {
+    ...creation, ...manifest,
     runtimeConfig,
     limits: { maxRunMs: AGENT_RUNTIME_CONFIG.maxRunMs, maxJobAttempts: AGENT_RUNTIME_CONFIG.maxJobAttempts,
       maxStepAttempts: AGENT_RUNTIME_CONFIG.maxStepAttempts, model: policy.runLimits },
@@ -73,4 +112,23 @@ export async function buildReviewRunCreationInput(
         admission: (transaction, runId) => recordDeepReleaseSelection(transaction, runId, selected.record) };
     } } : {}),
   };
+}
+
+function parseTrustedReviewInput(binding: PublicationBinding, input: ReviewRunInput): ReviewRunInput {
+  const parsed = reviewRunInputSchema.parse(input);
+  if (parsed.platform !== binding.platform || parsed.target.origin !== binding.origin
+      || parsed.target.repository !== binding.repository
+      || parsed.target.providerRepositoryId !== binding.providerRepositoryId) {
+    throw new Error("Review intake target does not match its trusted integration");
+  }
+  return parsed;
+}
+
+function githubDeliveryIdentity(
+  binding: PublicationBinding,
+  input: ReviewRunInput,
+): GitHubDeliveryIdentity | undefined {
+  if (input.platform !== "github" || !input.source.key.startsWith("github:delivery:")) return undefined;
+  return { tenantId: binding.tenantId, bindingId: binding.id,
+    sourceKey: input.source.key, sourceHash: input.source.hash };
 }

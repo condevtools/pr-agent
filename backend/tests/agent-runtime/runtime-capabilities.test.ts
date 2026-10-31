@@ -77,18 +77,42 @@ test("an unmigrated PostgreSQL database is reachable but not schema-ready", asyn
   assert.equal(status.checks.schema, false);
 });
 
-test("enabled onboarding requires its dedicated role only on the web process", async () => {
+test("complete App mode requires its restrictive onboarding role only on the web process", async () => {
   let probes = 0;
   const options = { pool: fakeReadinessPool({ worker: true, recovery: true, verifier: false }),
-    env: { FEATURE_GITHUB_ONBOARDING: "on" }, workerCompatibility,
+    env: { APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret" }, workerCompatibility,
     checkOnboarding: async () => { probes += 1; return false; } };
   const web = await checkRuntimeReadiness({ ...options, role: "web" });
   assert.equal(web.ok, false);
   assert.equal(web.checks.githubOnboarding, false);
+  const emergencyOff = await checkRuntimeReadiness({ ...options, role: "web",
+    env: { ...options.env, FEATURE_GITHUB_ONBOARDING: "off" } });
+  assert.equal(emergencyOff.ok, false);
+  assert.equal(emergencyOff.checks.githubOnboarding, false);
   const worker = await checkRuntimeReadiness({ ...options, role: "worker" });
   assert.equal(worker.ok, true);
   assert.equal(worker.checks.githubOnboarding, undefined);
-  assert.equal(probes, 1);
+  assert.equal(probes, 2);
+});
+
+test("provider discovery failure degrades onboarding diagnostics without failing local readiness", async () => {
+  const status = await checkRuntimeReadiness({
+    pool: fakeReadinessPool({ worker: true, recovery: true, verifier: false }),
+    role: "web",
+    env: { APP_ID: "123", PRIVATE_KEY: "private-key", WEBHOOK_SECRET: "webhook-secret" },
+    workerCompatibility,
+    checkOnboarding: async () => true,
+    onboardingStatus: () => ({ running: true, lastErrorCode: "github_api_temporary" }),
+    onboardingMetrics: async () => ({ pendingSyncCount: 2, oldestSyncAgeSeconds: 400,
+      pendingDeferredCount: 3, oldestDeferredAgeSeconds: 350, syncConflictCount: 1, deferredConflictCount: 0 }),
+  });
+  assert.equal(status.ok, true);
+  assert.equal(status.checks.githubOnboarding, true);
+  assert.equal(status.checks.githubOnboardingLoop, true);
+  assert.equal(status.checks.githubOnboardingDegraded, true);
+  assert.equal(status.checks.githubOnboardingLastErrorCode, "github_api_temporary");
+  assert.equal(status.checks.githubOnboardingQueue?.pendingDeferredCount, 3);
+  assert.equal(status.checks.githubOnboardingDiscoveryCompleted, false);
 });
 
 test("stale required process heartbeat makes readiness fail", async () => {
@@ -205,7 +229,7 @@ function fakeReadinessPool(
     if (sql.includes("migration_ledger_ready")) {
       return { rows: [{ safe_role: true, migration_ledger_ready: true }] };
     }
-    if (sql.includes("migration_name='031_github_onboarding.sql'")) return { rows: [{ schema_ready: true }] };
+    if (sql.includes("migration_name='032_github_installation_sync.sql'")) return { rows: [{ schema_ready: true }] };
     return { rows: (Object.entries(freshness) as Array<[keyof typeof freshness, boolean]>).map(
       ([process_role, fresh]) => ({ process_role, fresh,
         capability_reports: process_role === "worker" && fresh

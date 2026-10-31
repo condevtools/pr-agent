@@ -14,9 +14,6 @@ await import("#core");
 await import("#review");
 await import("#model");
 await access(new URL("../dist/main.js", import.meta.url));
-for (const asset of ["index.html", "app.js", "app.css"]) {
-  await access(new URL(`../dist/http/admin/github/assets/${asset}`, import.meta.url));
-}
 await access(new URL("../dist/agent-runtime/postgres/migrations/031_github_onboarding.sql", import.meta.url));
 await access(new URL("../dist/agent-runtime/postgres/migrations/020_release_control.sql", import.meta.url));
 for (const retired of ["harness", "agents", "modules", "common", "testing",
@@ -30,4 +27,4 @@ delete process.env.APP_ID;
 const { AppModule } = await import("../dist/app.module.js");
 const app = await NestFactory.create(AppModule, { logger: false });
 try { await app.init(); } finally { await app.close(); }
-console.log("PASS built aliases, Nest composition, assets, and source/build runtime manifests");
+console.log("PASS built aliases, Nest composition, migrations, and source/build runtime manifests");

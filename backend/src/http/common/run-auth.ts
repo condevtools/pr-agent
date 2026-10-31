@@ -17,26 +17,9 @@ const runPrincipalSchema = z.object({
   permissions: z.array(z.enum(RUN_PERMISSIONS)).min(1).max(RUN_PERMISSIONS.length)
     .refine((items) => new Set(items).size === items.length, "Duplicate permissions"),
 }).strict();
-const repositoryAdminPrincipalSchema = z.object({
-  ...credentialFields,
-  principalType: z.literal("repository_admin"), tenantId: z.string().uuid(),
-  githubAccountIds: z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER)).min(1).max(1000)
-    .refine((items) => new Set(items).size === items.length, "Duplicate GitHub account IDs"),
-  permissions: z.tuple([z.literal("repositories:manage")]),
-}).strict();
-const principalSchema = z.union([runPrincipalSchema, repositoryAdminPrincipalSchema]);
+const principalSchema = runPrincipalSchema;
 
-export interface RepositoryAdminPrincipal {
-  principalType: "repository_admin";
-  subjectId: string;
-  actorType: "user" | "service";
-  tenantId: string;
-  githubAccountIds: readonly number[];
-  permissions: readonly ["repositories:manage"];
-}
-
-type AuthenticatedPrincipal = RunPrincipal | RepositoryAdminPrincipal;
-type StoredPrincipal = AuthenticatedPrincipal & { digest: Buffer; keyId?: string;
+type StoredPrincipal = RunPrincipal & { digest: Buffer; keyId?: string;
   expiresAt?: string; notBefore?: string; disabled?: boolean };
 
 /** Reloadable hashed credentials; invalid replacement configuration fails closed. */
@@ -63,15 +46,6 @@ export class RunApiAuthenticator {
       if (new Set(keyIds).size !== keyIds.length) throw new Error("Duplicate key id");
       if (records.some((record) => record.notBefore && record.expiresAt
           && Date.parse(record.notBefore) >= Date.parse(record.expiresAt))) throw new Error("Invalid credential lifetime");
-      const accountOwners = new Map<number, string>();
-      for (const record of records) {
-        if (!("principalType" in record)) continue;
-        for (const accountId of record.githubAccountIds) {
-          const owner = accountOwners.get(accountId);
-          if (owner && owner !== record.tenantId) throw new Error("Conflicting GitHub account tenant");
-          accountOwners.set(accountId, record.tenantId);
-        }
-      }
       this.principals = records.map(({ tokenSha256, ...principal }) => ({ ...principal, digest: Buffer.from(tokenSha256, "hex") }));
     } catch {
       throw new Error("HARNESS_API_PRINCIPALS_JSON must contain strict scoped principals with unique SHA-256 token digests");
@@ -79,28 +53,16 @@ export class RunApiAuthenticator {
   }
 
   authenticate(authorization: unknown): RunPrincipal {
-    const principal = this.authenticateAny(authorization);
-    if (isRepositoryAdminPrincipal(principal)) {
-      throw new RunControlError("FORBIDDEN", 403, "Repository administrator credentials cannot access Run APIs");
-    }
-    return principal;
+    return this.authenticateAny(authorization);
   }
 
-  authenticateRepositoryAdmin(authorization: unknown): RepositoryAdminPrincipal {
-    const principal = this.authenticateAny(authorization);
-    if (!isRepositoryAdminPrincipal(principal)) {
-      throw new RunControlError("FORBIDDEN", 403, "Repository administrator permission is required");
-    }
-    return principal;
-  }
-
-  private authenticateAny(authorization: unknown): AuthenticatedPrincipal {
+  private authenticateAny(authorization: unknown): RunPrincipal {
     if (this.principals.length === 0) throw new RunControlError("RUN_API_DISABLED", 503, "Run API authentication is not configured");
     if (typeof authorization !== "string" || authorization.length > 4096 || !/^Bearer [A-Za-z0-9._~+/-]+=*$/.test(authorization)) {
       throw new RunControlError("UNAUTHORIZED", 401, "A bearer credential is required");
     }
     const digest = createHash("sha256").update(authorization.slice(7)).digest();
-    let matched: AuthenticatedPrincipal | undefined;
+    let matched: RunPrincipal | undefined;
     let expiry: number | undefined;
     // Compare all fixed-size digests; avoid an early return revealing registry position.
     const now = Date.now();
@@ -117,15 +79,11 @@ export class RunApiAuthenticator {
     return matched;
   }
 
-  assertCurrent(principal: AuthenticatedPrincipal): void {
+  assertCurrent(principal: RunPrincipal): void {
     const grant = this.issued.get(principal);
     if (!grant || grant.generation !== this.generation
         || (grant.expiresAt !== undefined && grant.expiresAt <= Date.now())) {
       throw new RunControlError("UNAUTHORIZED", 401, "The bearer credential is no longer valid");
     }
   }
-}
-
-function isRepositoryAdminPrincipal(principal: AuthenticatedPrincipal): principal is RepositoryAdminPrincipal {
-  return "principalType" in principal && principal.principalType === "repository_admin";
 }

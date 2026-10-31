@@ -64,9 +64,37 @@ if (!testUrl || !container) {
          ORDER BY routine_name`,
       );
       assert.deepEqual(directGrants.rows.map((row) => row.routine_name), [
+        "github_deferred_pull_request_admit", "github_deferred_pull_request_claim",
+        "github_deferred_pull_request_complete", "github_installation_restrict_and_request",
+        "github_installation_snapshot_absence_candidates", "github_installation_snapshot_apply_absent",
+        "github_installation_snapshot_apply_present", "github_installation_snapshot_begin",
+        "github_installation_snapshot_complete", "github_installation_snapshot_complete_restricted",
+        "github_installation_sync_claim", "github_installation_sync_cleanup",
+        "github_installation_sync_fail", "github_installation_sync_known",
+        "github_installation_sync_renew", "github_installation_sync_request",
+        "github_installation_sync_status",
         "github_onboarding_enroll", "github_onboarding_invalidate",
         "github_onboarding_list", "github_onboarding_revalidate",
       ]);
+      const claimSignatures = await owner.query<{
+        sync_claim: boolean; deferred_claim: boolean; old_sync_claim: string | null;
+        old_deferred_claim: string | null;
+      }>(`SELECT
+        has_function_privilege('pr_agent_onboarding',
+          'pr_agent_harness.github_installation_sync_claim(bigint,text,integer)','EXECUTE') AS sync_claim,
+        has_function_privilege('pr_agent_onboarding',
+          'pr_agent_harness.github_deferred_pull_request_claim(bigint,text,integer)','EXECUTE') AS deferred_claim,
+        to_regprocedure('pr_agent_harness.github_installation_sync_claim(text,integer)')::text AS old_sync_claim,
+        to_regprocedure('pr_agent_harness.github_deferred_pull_request_claim(text,integer)')::text AS old_deferred_claim`);
+      assert.deepEqual(claimSignatures.rows[0], {
+        sync_claim: true, deferred_claim: true, old_sync_claim: null, old_deferred_claim: null,
+      });
+      const relationGrants = await owner.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM information_schema.role_table_grants
+         WHERE grantee='pr_agent_onboarding' AND table_schema='pr_agent_harness'`,
+      );
+      assert.equal(relationGrants.rows[0]?.count, "0", "onboarding role must not receive table DML");
       const scopedTenantId = randomUUID();
       const scoped = await onboarding.connect();
       try {

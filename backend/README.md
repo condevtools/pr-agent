@@ -4,7 +4,7 @@
 
 ## 文档
 
-- [GitHub 仓库接入](docs/github-onboarding.md)：管理页面、已有 App 安装发现、管理员凭据与 Coolify 配置。
+- [GitHub App 安装即用](docs/github-onboarding.md)：自动同步已有/新安装、受限角色、冲突与回滚。
 - [Agent Runtime](docs/agent-runtime.md)：运行时、PostgreSQL、权威边界和恢复机制。
 - [Run API](docs/run-api.md)：HTTP 接口、鉴权、命令和事件流。
 - [运维手册](docs/operations.md)：启停、迁移、备份、容量和故障处理。

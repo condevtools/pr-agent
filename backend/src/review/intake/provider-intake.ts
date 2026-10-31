@@ -2,7 +2,8 @@ import type { GitHubReviewRunParams } from "../platforms/github/contracts.js";
 import type { GitLabReviewRunParams } from "../platforms/gitlab/workflow.js";
 import { gitLabApiRequest } from "../../integrations/gitlab/api/http-client.js";
 import type { PublicationBinding } from "../../agent-runtime/authority/publication-authority.js";
-import { enqueueReviewRun } from "./run-intake.js";
+import { enqueueReviewRun, type GitHubDeferredRunHandoff } from "./run-intake.js";
+import type { GitHubPullSummary } from "../../integrations/github/api/types.js";
 import type { ReviewRunInput } from "./run-input.js";
 import { bindingAllowsCapability, type ReviewWorkflow } from "../../agent-runtime/runtime/capabilities.js";
 
@@ -14,10 +15,12 @@ function options(input: GitHubReviewRunParams | GitLabReviewRunParams): ReviewRu
   };
 }
 
-export async function enqueueGitHubReviewForBinding(params: GitHubReviewRunParams, binding: PublicationBinding): Promise<string> {
+export async function enqueueGitHubReviewForBinding(params: GitHubReviewRunParams, binding: PublicationBinding,
+  deferred?: { handoff: GitHubDeferredRunHandoff; pull: GitHubPullSummary }): Promise<string> {
   if (!params.sourceKey || !params.sourceHash) throw new Error("Durable review intake requires authenticated source identity");
   const { owner, repo } = params.context.repo();
-  const { data: pull } = await params.context.octokit.pulls.get({ owner, repo, pull_number: params.pullNumber });
+  const pull = deferred?.pull
+    ?? (await params.context.octokit.pulls.get({ owner, repo, pull_number: params.pullNumber })).data;
   const run = await enqueueReviewRun(binding, {
     schemaVersion: 1, workflow: providerReviewWorkflow(binding), platform: "github",
     target: { origin: binding.origin, repository: binding.repository, number: params.pullNumber, providerRepositoryId: binding.providerRepositoryId },
@@ -26,7 +29,7 @@ export async function enqueueGitHubReviewForBinding(params: GitHubReviewRunParam
     mode: params.mode, trigger: params.trigger, options: options(params),
     presentation: { title: pull.title, body: pull.body ?? "", author: pull.user?.login ?? "unknown",
       baseBranch: pull.base.ref, headBranch: pull.head.ref, webUrl: pull.html_url, draft: Boolean(pull.draft) },
-  }, params.runActor);
+  }, params.runActor, deferred?.handoff);
   return run.id;
 }
 

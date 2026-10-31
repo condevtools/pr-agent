@@ -6,11 +6,11 @@
   "scripts": {
     "dev:backend": "pnpm --filter backend dev",
     "test:backend": "pnpm --filter backend test",
+    "test:github:onboarding:rollback": "node scripts/github-onboarding-rollback-smoke.mjs",
     "dev:frontend": "pnpm --filter frontend dev",
     "dev:all": "turbo dev",
     "build:all": "turbo build",
     "lint:all": "turbo lint",
-    "github:admin:create": "node scripts/github-onboarding-admin.mjs",
     "docker:build": "docker compose build",
     "docker:login": "docker login ghcr.io -u Lemonadeccc",
     "docker:image:build": "node scripts/docker-image.mjs build",

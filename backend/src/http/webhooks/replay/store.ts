@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 
 import { BadWebhookRequestError } from "#core";
 import { getAgentRuntimeServices } from "../../../agent-runtime/runtime/services.js";
-import { resolvePublicationRuntime } from "../../../agent-runtime/runtime/publication.js";
-import { PublicationBindingNotFoundError } from "../../../agent-runtime/authority/publication-authority.js";
+import { PublicationBindingNotFoundError, PublicationBindingBlockedError } from "../../../agent-runtime/authority/publication-authority.js";
 import type { RunPrincipal } from "../../../agent-runtime/runs/control-contracts.js";
 import { readHeaderValue, safeJsonStringify } from "../../common/webhook-utils.js";
 
@@ -24,10 +23,11 @@ export async function resolveWebhookReplayScope(platform: ReplayPlatform, payloa
   const target = replayTarget(platform, payload);
   if (!target) return undefined;
   try {
-    const runtime = await resolvePublicationRuntime(target);
-    return { tenantId: runtime.binding.tenantId, integrationId: runtime.binding.id, platform };
+    const binding = await (await getAgentRuntimeServices()).authority
+      .resolve(target.platform, target.origin, target.repository);
+    return { tenantId: binding.tenantId, integrationId: binding.id, platform };
   } catch (error) {
-    if (error instanceof PublicationBindingNotFoundError) return undefined;
+    if (error instanceof PublicationBindingNotFoundError || error instanceof PublicationBindingBlockedError) return undefined;
     throw error;
   }
 }
