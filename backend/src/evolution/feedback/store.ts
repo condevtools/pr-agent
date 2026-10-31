@@ -149,63 +149,67 @@ export class PgEvolutionFeedbackStore {
 
   async createAnnotation(principal: RunPrincipal, sourceRunId: string, commandKey: string,
     raw: unknown): Promise<AnnotationReceipt> {
+    return this.db.transaction(principal.tenantId,
+      (client) => this.createAnnotationInTransaction(client, principal, sourceRunId, commandKey, raw));
+  }
+
+  async createAnnotationInTransaction(client: PoolClient, principal: RunPrincipal, sourceRunId: string,
+    commandKey: string, raw: unknown): Promise<AnnotationReceipt> {
     const parsed = annotationRequestSchema.parse(raw);
     const request: AnnotationRequest = { ...parsed, provenance: { ...parsed.provenance,
       notes: parsed.provenance.notes === undefined ? undefined : redactRepositoryText(parsed.provenance.notes) } };
     const labels = canonicalizeLabelSet(request.labelSet);
     const labelsHash = labelSetHash(labels);
     const requestHash = fingerprint({ ...request, labelSet: labels });
-    return this.db.transaction(principal.tenantId, async (client) => {
-      const duplicate = await existingAnnotation(client, principal.tenantId, principal.integrationId,
-        sourceRunId, commandKey);
-      if (duplicate) {
-        if (duplicate.request_hash !== requestHash) throw runConflict("Annotation idempotency key was reused with different content");
-        return annotationReceipt(client, duplicate, sourceRunId, duplicate.artifact_hash, principal);
-      }
-      await lockTenantEvolution(client, principal.tenantId);
-      await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
-        integrationId: principal.integrationId, capability: "evolution" });
-      const source = await eligibleSource(client, this.artifacts, principal,
-        sourceRunId, request.artifactHash, true, true, true);
-      validateChangedLocations(labels, source.changedLines!);
-      const active = await client.query<{ id: string }>(
-        `SELECT id FROM pr_agent_harness.review_annotations
-         WHERE tenant_id=$1 AND source_run_id=$2 AND rubric_version='review-quality.v1'
-           AND actor_type=$3 AND actor_id=$4 AND superseded_by_annotation_id IS NULL FOR UPDATE`,
-        [principal.tenantId, sourceRunId, principal.actorType, principal.subjectId]);
-      const current = active.rows[0];
-      if ((current?.id ?? undefined) !== request.supersedesAnnotationId) {
-        throw runConflict("Annotation revision must supersede the actor's exact active annotation");
-      }
-      const id = randomUUID();
-      if (current) await client.query(
-        `UPDATE pr_agent_harness.review_annotations SET superseded_by_annotation_id=$4
-         WHERE tenant_id=$1 AND source_run_id=$2 AND id=$3 AND superseded_by_annotation_id IS NULL`,
-        [principal.tenantId, sourceRunId, current.id, id]);
-      if (current) await client.query(
-        `UPDATE pr_agent_harness.trusted_review_label_sets SET active=false
-         WHERE tenant_id=$1 AND source_run_id=$2 AND rubric_version='review-quality.v1' AND active`,
-        [principal.tenantId, sourceRunId]);
-      const inserted = await client.query<{ created_at: Date }>(
-        `INSERT INTO pr_agent_harness.review_annotations
-           (id,tenant_id,integration_id,source_run_id,artifact_hash,rubric_version,label_set_hash,label_set_json,
-            provenance_json,actor_type,actor_id,command_key,request_hash,supersedes_annotation_id)
-         VALUES ($1,$2,$3,$4,$5,'review-quality.v1',$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13)
-         RETURNING created_at`,
-        [id, principal.tenantId, principal.integrationId, sourceRunId, source.artifactHash, labelsHash,
-          JSON.stringify(labels), JSON.stringify({ ...request.provenance, actor: actor(principal) }),
-          principal.actorType, principal.subjectId, commandKey, requestHash, request.supersedesAnnotationId ?? null]);
-      const trustedLabelSetId = await createConsensusIfExact(client, principal, sourceRunId, source.artifactHash,
-        labelsHash, current !== undefined);
-      if (trustedLabelSetId && source.collectionResultRef) {
-        await this.artifacts.holdInTransaction(client, {
-          tenantId: principal.tenantId, integrationId: principal.integrationId, runId: sourceRunId,
-        }, source.collectionResultRef, `trusted-label:${trustedLabelSetId}`, "qualification");
-      }
-      return { id, sourceRunId, artifactHash: source.artifactHash, rubricVersion: "review-quality.v1", labelSetHash: labelsHash,
-        actor: actor(principal), supersedesAnnotationId: request.supersedesAnnotationId, trustedLabelSetId,
-        createdAt: inserted.rows[0]!.created_at.toISOString() };
-    });
+    const duplicate = await existingAnnotation(client, principal.tenantId, principal.integrationId,
+      sourceRunId, commandKey);
+    if (duplicate) {
+      if (duplicate.request_hash !== requestHash) throw runConflict("Annotation idempotency key was reused with different content");
+      return annotationReceipt(client, duplicate, sourceRunId, duplicate.artifact_hash, principal);
+    }
+    await lockTenantEvolution(client, principal.tenantId);
+    await lockCurrentBindingCapability(client, { tenantId: principal.tenantId,
+      integrationId: principal.integrationId, capability: "evolution" });
+    const source = await eligibleSource(client, this.artifacts, principal,
+      sourceRunId, request.artifactHash, true, true, true);
+    validateChangedLocations(labels, source.changedLines!);
+    const active = await client.query<{ id: string }>(
+      `SELECT id FROM pr_agent_harness.review_annotations
+       WHERE tenant_id=$1 AND source_run_id=$2 AND rubric_version='review-quality.v1'
+         AND actor_type=$3 AND actor_id=$4 AND superseded_by_annotation_id IS NULL FOR UPDATE`,
+      [principal.tenantId, sourceRunId, principal.actorType, principal.subjectId]);
+    const current = active.rows[0];
+    if ((current?.id ?? undefined) !== request.supersedesAnnotationId) {
+      throw runConflict("Annotation revision must supersede the actor's exact active annotation");
+    }
+    const id = randomUUID();
+    if (current) await client.query(
+      `UPDATE pr_agent_harness.review_annotations SET superseded_by_annotation_id=$4
+       WHERE tenant_id=$1 AND source_run_id=$2 AND id=$3 AND superseded_by_annotation_id IS NULL`,
+      [principal.tenantId, sourceRunId, current.id, id]);
+    if (current) await client.query(
+      `UPDATE pr_agent_harness.trusted_review_label_sets SET active=false
+       WHERE tenant_id=$1 AND source_run_id=$2 AND rubric_version='review-quality.v1' AND active`,
+      [principal.tenantId, sourceRunId]);
+    const inserted = await client.query<{ created_at: Date }>(
+      `INSERT INTO pr_agent_harness.review_annotations
+         (id,tenant_id,integration_id,source_run_id,artifact_hash,rubric_version,label_set_hash,label_set_json,
+          provenance_json,actor_type,actor_id,command_key,request_hash,supersedes_annotation_id)
+       VALUES ($1,$2,$3,$4,$5,'review-quality.v1',$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13)
+       RETURNING created_at`,
+      [id, principal.tenantId, principal.integrationId, sourceRunId, source.artifactHash, labelsHash,
+        JSON.stringify(labels), JSON.stringify({ ...request.provenance, actor: actor(principal) }),
+        principal.actorType, principal.subjectId, commandKey, requestHash, request.supersedesAnnotationId ?? null]);
+    const trustedLabelSetId = await createConsensusIfExact(client, principal, sourceRunId, source.artifactHash,
+      labelsHash, current !== undefined);
+    if (trustedLabelSetId && source.collectionResultRef) {
+      await this.artifacts.holdInTransaction(client, {
+        tenantId: principal.tenantId, integrationId: principal.integrationId, runId: sourceRunId,
+      }, source.collectionResultRef, `trusted-label:${trustedLabelSetId}`, "qualification");
+    }
+    return { id, sourceRunId, artifactHash: source.artifactHash, rubricVersion: "review-quality.v1", labelSetHash: labelsHash,
+      actor: actor(principal), supersedesAnnotationId: request.supersedesAnnotationId, trustedLabelSetId,
+      createdAt: inserted.rows[0]!.created_at.toISOString() };
   }
 
   async arbitrate(principal: RunPrincipal, sourceRunId: string, commandKey: string,

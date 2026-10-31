@@ -3,6 +3,9 @@ import type { PoolClient } from "pg";
 import { RuntimeDatabase } from "./database.js";
 import { workflowCapability } from "../runtime/capabilities.js";
 import { lockCurrentBindingCapability } from "../authority/capability-guard.js";
+import { resolveQualityConfiguration } from "../../quality/config.js";
+import { freezePromptBundleInTransaction } from "../../quality/storage/prompt-store.js";
+import { fingerprint } from "../versions.js";
 
 export type IntegrationPlatform = "github" | "gitlab";
 export type RunStatus =
@@ -132,6 +135,9 @@ export class RunStore {
     input: CreateRunInput,
   ): Promise<CreatedRun> {
     validateCreateRunInput(input);
+    const quality = resolveQualityConfiguration();
+    // Replays retain their explicit baseline/candidate prompts; never read today's active catalog.
+    const freezePrompts = quality.enabled && input.runType !== "eval.replay.v1";
     let execution = normalizeRunExecutionConfig(input);
       const activeBinding = await client.query(
         `SELECT 1 FROM pr_agent_harness.integration_bindings
@@ -139,11 +145,11 @@ export class RunStore {
         [input.tenantId, input.integrationId],
       );
       if (activeBinding.rowCount !== 1) throw new Error("active integration binding not found for tenant");
-      if (input.prepareNewRun) {
+      if (input.prepareNewRun || freezePrompts) {
         await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,2002))",
           [JSON.stringify([input.tenantId, input.createScope, input.createKey])]);
       }
-      const duplicate = input.executionModeGeneration !== undefined || input.prepareNewRun
+      const duplicate = input.executionModeGeneration !== undefined || input.prepareNewRun || freezePrompts
         ? (await client.query<{ integration_id: string; request_hash: string }>(
           `SELECT integration_id,request_hash
            FROM pr_agent_harness.agent_runs
@@ -195,6 +201,16 @@ export class RunStore {
             await prepared.admission?.(transaction, runId);
           } };
         validateCreateRunInput(input);
+        execution = normalizeRunExecutionConfig(input);
+      }
+
+      if (freezePrompts && !duplicate) {
+        const promptBundle = await freezePromptBundleInTransaction(client, input.tenantId,
+          input.integrationId, quality.targetFingerprint);
+        input = { ...input, runtimeConfig: { ...input.runtimeConfig, promptBundle },
+          promptVersionHash: Object.keys(promptBundle.prompts).length
+            ? fingerprint({ base: input.promptVersionHash, promptBundleHash: promptBundle.hash })
+            : input.promptVersionHash };
         execution = normalizeRunExecutionConfig(input);
       }
 

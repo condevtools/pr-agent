@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { readFileSync, statSync } from "node:fs";
 
 import { RUN_PERMISSIONS, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 
@@ -86,4 +87,25 @@ export class RunApiAuthenticator {
       throw new RunControlError("UNAUTHORIZED", 401, "The bearer credential is no longer valid");
     }
   }
+
+  /** Revalidates a persisted job's actor grant; never accepts a bearer token from the job. */
+  assertDelegated(principal: RunPrincipal): void {
+    const now = Date.now();
+    const current = this.principals.some((grant) => !grant.disabled
+      && (!grant.expiresAt || Date.parse(grant.expiresAt) > now)
+      && (!grant.notBefore || Date.parse(grant.notBefore) <= now)
+      && grant.subjectId === principal.subjectId && grant.actorType === principal.actorType
+      && grant.tenantId === principal.tenantId && grant.integrationId === principal.integrationId
+      && principal.permissions.every((permission) => grant.permissions.includes(permission)));
+    if (!current) throw new RunControlError("UNAUTHORIZED", 401, "The delegated actor grant is no longer valid");
+  }
+}
+
+export function readPrincipalConfiguration(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const path = env.HARNESS_API_PRINCIPALS_FILE?.trim();
+  if (!path) return env.HARNESS_API_PRINCIPALS_JSON;
+  if (env.HARNESS_API_PRINCIPALS_JSON?.trim()) throw new Error("Configure one Run API credential source");
+  const stat = statSync(path);
+  if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("Invalid Run API credential file");
+  return readFileSync(path, "utf8");
 }

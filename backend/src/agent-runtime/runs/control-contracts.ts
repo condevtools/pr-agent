@@ -5,7 +5,9 @@ export const RUN_PERMISSIONS = ["runs:create", "runs:read", "runs:trace", "runs:
   "feedback:create", "annotations:create", "annotations:arbitrate",
   "evaluations:create", "evaluations:read", "evaluations:holdout", "evolution:propose",
   "evolution:release:qualify", "evolution:release:request", "evolution:release:approve",
-  "evolution:release:revoke", "evolution:release:rollback", "evolution:release:read"] as const;
+  "evolution:release:revoke", "evolution:release:rollback", "evolution:release:read",
+  "quality:prompts:read", "quality:prompts:approve", "quality:sync:read", "quality:sync:execute",
+  "quality:annotations:review", "quality:evaluators:run"] as const;
 export type RunPermission = typeof RUN_PERMISSIONS[number];
 export interface RunPrincipal {
   subjectId: string;

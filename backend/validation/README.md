@@ -10,6 +10,8 @@
 - [P3B](engineering/p3b-verification.json)：候选评测和研究草案验证。
 - [P3C](engineering/p3c-verification.json)：发布控制与综合工程验证。合成 fixture 不能证明真实模型质量。
 
+- [Langfuse 质量链路](engineering/langfuse-quality-verification.json)：Prompt、Dataset/Experiment、Score、应用内 Evaluator 与人工标注接入的工程回归及合成联通验收；不代表真实模型质量或生产已部署。
+
 ## 容量测量
 
 - [首轮反例](capacity/p0d-capacity-first-counterexample.json)：保留当时的原始结果。文件中的 `passed: true` 来自遗漏延迟门槛的旧验证器，已经作废，不能作为容量通过证明。

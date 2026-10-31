@@ -13,4 +13,5 @@ export {
   type AgentObservationType,
   type CreateAgentObservabilityOptions,
 } from "./adapter.js";
+export { parseAgentPromptReference, type AgentPromptReference } from "./contracts.js";
 export { sanitizeObservationMaskValue, sanitizeObservationValue } from "./privacy.js";

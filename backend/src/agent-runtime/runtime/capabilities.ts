@@ -87,7 +87,7 @@ export function workflowCapability(workflow: string): ProductCapability | undefi
   if (workflow === "review.deep.v1") return "review.deep";
   if (workflow === "issue.triage.v1") return "issue.triage";
   if (workflow === "fix.propose.v1" || workflow === "fix.publish.v1") return "fix";
-  if (workflow === "evolution.propose.v1" || workflow === "eval.replay.v1") return "evolution";
+  if (workflow === "evolution.propose.v1" || workflow === "eval.replay.v1" || workflow === "eval.judge.v1") return "evolution";
   return undefined;
 }
 
@@ -97,7 +97,7 @@ export function supportedWorkflowIds(capabilities: RuntimeCapabilityConfiguratio
     ...(capabilities.issueTriage !== false ? ["issue.triage.v1"] : []),
     ...(capabilities.reviewDeep ? ["review.deep.v1"] : []),
     ...(capabilities.fix ? ["fix.propose.v1", "fix.publish.v1"] : []),
-    ...(capabilities.evolution ? ["evolution.propose.v1", "eval.replay.v1"] : []),
+    ...(capabilities.evolution ? ["evolution.propose.v1", "eval.replay.v1", "eval.judge.v1"] : []),
   ];
 }
 
@@ -112,7 +112,7 @@ export function supportedWorkflowIdsForBinding(
     ...(bindingAllowsCapability(binding, "review.deep", capabilities) ? ["review.deep.v1"] : []),
     ...(bindingAllowsCapability(binding, "fix", capabilities) ? ["fix.propose.v1", "fix.publish.v1"] : []),
     ...(bindingAllowsCapability(binding, "evolution", capabilities)
-      ? ["evolution.propose.v1", "eval.replay.v1"] : []),
+      ? ["evolution.propose.v1", "eval.replay.v1", "eval.judge.v1"] : []),
   ];
 }
 

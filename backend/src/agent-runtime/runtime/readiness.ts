@@ -70,7 +70,7 @@ export async function checkRuntimeReadiness(input: {
       const schema = await input.pool.query<{ schema_ready: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM pr_agent_harness.schema_migrations
-           WHERE migration_name='033_issue_triage.sql'
+           WHERE migration_name='036_quality_retention.sql'
          ) AS schema_ready`,
       );
       checks.schema = schema.rows[0]?.schema_ready === true;

@@ -1,5 +1,6 @@
 import type { OpenAIClientCache } from "./client-cache.js";
 import type { ModelConfiguration } from "./configuration.js";
+import type { ModelPromptReference } from "./contracts.js";
 import { callAnthropicJson } from "./providers/anthropic.js";
 import { callGeminiJson } from "./providers/gemini.js";
 import {
@@ -19,6 +20,7 @@ export interface JsonModelGatewayRequest {
   maxOutputTokens?: number;
   signal?: AbortSignal;
   metadata?: Record<string, unknown>;
+  promptReferences?: readonly ModelPromptReference[];
   fallbackPolicy: "strict-structured" | "permissive-json";
   nonJsonFallback?: (text: string) => unknown;
   jsonOnlyHint?: string;
@@ -82,5 +84,11 @@ export async function requestJsonModel(request: JsonModelGatewayRequest): Promis
 }
 
 function gatewayMetadata(request: JsonModelGatewayRequest): Record<string, unknown> {
-  return { schemaName: request.schemaName, ...request.metadata };
+  return {
+    schemaName: request.schemaName,
+    ...request.metadata,
+    ...(request.promptReferences && request.promptReferences.length > 0
+      ? { promptReferences: request.promptReferences }
+      : {}),
+  };
 }

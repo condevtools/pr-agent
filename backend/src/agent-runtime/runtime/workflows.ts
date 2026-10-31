@@ -4,6 +4,7 @@ import { executeFixProposalRun } from "../../fix/proposal/run.js";
 import { executeFixPublicationRun } from "../../fix/publication/workflow.js";
 import { executeReviewRun } from "../../review/run.js";
 import { executeIssueTriageRun } from "../../issues/triage/run.js";
+import { executeJudgeRun } from "../../quality/evaluators/run.js";
 import type { PublicationBinding } from "../authority/publication-authority.js";
 import { RunExecutionContractError, type RunLease } from "../runs/contracts.js";
 
@@ -11,7 +12,7 @@ export type WorkflowExecutor = (lease: RunLease, binding: PublicationBinding) =>
 export interface WorkflowRegistration { id: string; execute: WorkflowExecutor }
 
 export const REQUIRED_WORKFLOW_IDS = ["review.single.v1", "review.deep.v1", "issue.triage.v1", "fix.propose.v1",
-  "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1"] as const;
+  "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1", "eval.judge.v1"] as const;
 
 const defaultRegistrations: WorkflowRegistration[] = [
   { id: "review.single.v1", execute: executeReviewRun },
@@ -21,6 +22,7 @@ const defaultRegistrations: WorkflowRegistration[] = [
   { id: "fix.publish.v1", execute: executeFixPublicationRun },
   { id: "evolution.propose.v1", execute: (lease) => executeEvolutionProposalRun(lease) },
   { id: "eval.replay.v1", execute: executeReplayRun },
+  { id: "eval.judge.v1", execute: executeJudgeRun },
 ];
 
 export function createWorkflowRegistry(

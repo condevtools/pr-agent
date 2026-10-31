@@ -115,7 +115,7 @@ export class RunExecutionStore {
     this.initialRetryMs = positiveInteger(options.initialRetryMs ?? 1_000, "initial retry delay");
     this.maxRetryMs = positiveInteger(options.maxRetryMs ?? 60_000, "maximum retry delay");
     this.supportedWorkflows = options.supportedWorkflows ?? ["review", "review.single.v1", "review.deep.v1", "issue.triage.v1",
-      "fix.propose.v1", "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1"];
+      "fix.propose.v1", "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1", "eval.judge.v1"];
     this.perBindingConcurrency = positiveInteger(
       options.perBindingConcurrency ?? 2,
       "per-binding worker concurrency",
@@ -163,7 +163,7 @@ export class RunExecutionStore {
              OR (r.run_type='issue.triage.v1' AND b.platform='github' AND b.issue_triage_enabled)
              OR (r.run_type='review.deep.v1' AND b.review_deep_enabled)
              OR (r.run_type IN ('fix.propose.v1','fix.publish.v1') AND b.fix_enabled)
-             OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1') AND b.evolution_enabled))
+             OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1','eval.judge.v1') AND b.evolution_enabled))
            AND j.job_kind IN ('start','retry','recover')
            AND r.status IN ('queued','retry_wait')
            AND r.cancel_requested_at IS NULL AND r.deadline_at > now()
@@ -360,7 +360,7 @@ export class RunExecutionStore {
                  OR (r.run_type='issue.triage.v1' AND b.platform='github' AND b.issue_triage_enabled)
                  OR (r.run_type='review.deep.v1' AND b.review_deep_enabled)
                  OR (r.run_type IN ('fix.propose.v1','fix.publish.v1') AND b.fix_enabled)
-                 OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1') AND b.evolution_enabled))))
+                 OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1','eval.judge.v1') AND b.evolution_enabled))))
            AND j.attempt_count<j.max_attempts
            AND j.expected_run_version=r.version AND ${predicate}
          ORDER BY j.priority DESC,j.available_at,j.id

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { canonicalJson, fingerprint } from "../../agent-runtime/versions.js";
 import { observeAgentOperation } from "../../observability/index.js";
 import { composeReviewSystemPrompt, frozenReviewText } from "../strategy/text-components.js";
+import { managedPromptReferences, renderManagedPrompt } from "../../quality/prompts/index.js";
 import type {
   CriticDecision,
   DeepWorkflowContext,
@@ -79,15 +80,20 @@ async function executeDeepReviewCritic(input: {
   const signal = input.context.signal
     ? AbortSignal.any([input.context.signal, AbortSignal.timeout(input.policy.criticLimits.maxWallTimeMs)])
     : AbortSignal.timeout(input.policy.criticLimits.maxWallTimeMs);
+  const instruction = renderManagedPrompt("review.deep.critic.instruction");
+  const reviewGuidance = composeReviewSystemPrompt("",
+    frozenReviewText(input.context.lease.runtimeConfig));
+  const criticSystem = renderManagedPrompt("review.deep.critic.system", {
+    review_guidance: reviewGuidance,
+  });
   const prompt = canonicalJson({ candidates, coverage: input.coverage,
-    instruction: "Return one decision per candidate ID. You may not add, rewrite, or relocate candidates." });
-  const systemPrompt = composeReviewSystemPrompt("You are a restricted review critic. Decide only on supplied candidate IDs. " +
-    "Reject duplicates and request more evidence when support is insufficient. Return strict JSON only.",
-  frozenReviewText(input.context.lease.runtimeConfig));
+    instruction: instruction.text });
+  const systemPrompt = criticSystem.text;
   const result = await input.context.step(
     "deep.critic",
     "model",
-    fingerprint({ candidates, coverage: input.coverage, systemPrompt, limits: input.policy.criticLimits }),
+    fingerprint({ candidates, coverage: input.coverage, systemPrompt, prompt,
+      limits: input.policy.criticLimits }),
     () => input.context.model.generate({
       schemaName: "deep_review_critic",
       jsonSchema: deepCriticJsonSchema as unknown as Record<string, unknown>,
@@ -98,6 +104,7 @@ async function executeDeepReviewCritic(input: {
       turn: 1,
       maxInputBytes: input.policy.criticLimits.maxInputBytes,
       maxOutputTokens: input.policy.criticLimits.maxOutputTokens,
+      promptReferences: managedPromptReferences(criticSystem, instruction),
       signal,
     }),
   );

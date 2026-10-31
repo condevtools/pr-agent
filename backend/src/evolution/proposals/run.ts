@@ -8,6 +8,7 @@ import {
 import { reviewStrategyTextJsonSchema, reviewStrategyTextSchema } from "../../review/strategy/contracts.js";
 import { PgEvolutionCandidateStore } from "./candidate-store.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
+import { managedPromptReferences, renderManagedPrompt } from "../../quality/prompts/index.js";
 
 const MODEL_STEP_KEY = "evolution.proposal.model";
 
@@ -27,12 +28,16 @@ export async function executeEvolutionProposalRun(lease: RunLease): Promise<void
     tool_description_text: source.baselineToolDescriptionText }, developmentCases: source.developmentCases };
   const prompt = canonicalJson(modelInput);
   if (Buffer.byteLength(prompt, "utf8") > policy.maxInputBytes) throw new EvolutionProposalFailedError("source_input_limit");
-  const candidate = await context.step(MODEL_STEP_KEY, "model", fingerprint({ modelInput, modelConfigHash, policy }),
+  const systemPrompt = renderManagedPrompt("evolution.proposal.system");
+  const instruction = renderManagedPrompt("evolution.proposal.instruction", { input: prompt });
+  const candidate = await context.step(MODEL_STEP_KEY, "model", fingerprint({ modelInput, modelConfigHash, policy,
+    systemPrompt: systemPrompt.text, prompt: instruction.text }),
     () => createStructuredModel().generate({ schemaName: "evolution_candidate_v1",
       jsonSchema: reviewStrategyTextJsonSchema as unknown as Record<string, unknown>, schema: reviewStrategyTextSchema,
       role: "evolution", turn: 1, maxInputBytes: policy.maxInputBytes, maxOutputTokens: policy.maxOutputTokens,
-      systemPrompt: "Propose one bounded review prompt/tool-description candidate. Do not change permissions, tools, topology, schemas, budgets, or execution behavior.",
-      prompt: `Using only these frozen development examples, return improved text components. Never infer or request holdout data.\n${prompt}`,
+      systemPrompt: systemPrompt.text,
+      prompt: instruction.text,
+      promptReferences: managedPromptReferences(systemPrompt, instruction),
       signal: context.signal }));
   await store.saveCandidate(lease, MODEL_STEP_KEY, candidate, modelConfigHash);
 }

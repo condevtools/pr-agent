@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-31",
+  "scope": "Langfuse quality integration; synthetic acceptance only",
+  "baseCommit": "0daa63d5af3219a1f8744f972de17e348fbb2f92",
+  "runtime": "Node 22.23.4; Docker PostgreSQL 17",
+  "verification": {
+    "backendTypecheck": "passed",
+    "backendBuildAndBuiltManifest": "passed",
+    "unit": {
+      "passed": 535,
+      "skippedExternalConditions": 53,
+      "failed": 0
+    },
+    "postgres": {
+      "files": 51,
+      "passed": 330,
+      "failed": 0
+    },
+    "composeSmoke": "fresh schema, restricted roles, GitHub/GitLab mock budgeted publication, idempotency, shutdown/restart passed",
+    "review": "No outstanding critical/high/medium findings in bounded independent re-review"
+  },
+  "liveLangfuse": {
+    "serverVersion": "3.225.5",
+    "managedPrompts": 13,
+    "syntheticDataset": "pr-agent-integration-smoke-20261031-v1",
+    "datasetItems": 2,
+    "experimentItems": 2,
+    "apiScores": 2,
+    "annotationQueueItems": 2,
+    "nativePromptLink": {
+      "name": "pr-agent.review.deep.role.system",
+      "version": 1,
+      "readbackVerified": true
+    },
+    "paidModelCalls": 0,
+    "humanAnnotationsCreated": 0
+  },
+  "limitations": [
+    "Synthetic fixtures are not real-model quality evidence or human ground truth.",
+    "Live human annotation completion and paid Judge quality were not tested.",
+    "Production Coolify deployment was not performed."
+  ],
+  "postgresFiles": {
+    "agent-runtime/artifacts.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "agent-runtime/authority.pg.test.ts": {
+      "passed": 7,
+      "failed": 0
+    },
+    "agent-runtime/batches.pg.test.ts": {
+      "passed": 20,
+      "failed": 0
+    },
+    "agent-runtime/business-state.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "agent-runtime/capabilities.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "agent-runtime/control.pg.test.ts": {
+      "passed": 10,
+      "failed": 0
+    },
+    "agent-runtime/crash-recovery.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "agent-runtime/github-installation-sync-role.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "agent-runtime/github-installation-sync.pg.test.ts": {
+      "passed": 22,
+      "failed": 0
+    },
+    "agent-runtime/github-installation-upgrade.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "agent-runtime/github-onboarding-role.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "agent-runtime/github-onboarding-runtime-role.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "agent-runtime/github-onboarding.pg.test.ts": {
+      "passed": 10,
+      "failed": 0
+    },
+    "agent-runtime/gitlab-ingress.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "agent-runtime/issue-triage-upgrade.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "agent-runtime/migration-baseline.pg.test.ts": {
+      "passed": 5,
+      "failed": 0
+    },
+    "agent-runtime/model-budget.pg.test.ts": {
+      "passed": 13,
+      "failed": 0
+    },
+    "agent-runtime/periodic-maintenance.pg.test.ts": {
+      "passed": 8,
+      "failed": 0
+    },
+    "agent-runtime/provider-access.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "agent-runtime/publication-outcome.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "agent-runtime/publication.pg.test.ts": {
+      "passed": 11,
+      "failed": 0
+    },
+    "agent-runtime/recovery.pg.test.ts": {
+      "passed": 7,
+      "failed": 0
+    },
+    "agent-runtime/review-worker.pg.test.ts": {
+      "passed": 9,
+      "failed": 0
+    },
+    "agent-runtime/role-upgrade.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "agent-runtime/run-commands.pg.test.ts": {
+      "passed": 10,
+      "failed": 0
+    },
+    "agent-runtime/run-execution.pg.test.ts": {
+      "passed": 13,
+      "failed": 0
+    },
+    "agent-runtime/run-query.pg.test.ts": {
+      "passed": 7,
+      "failed": 0
+    },
+    "agent-runtime/run-store.pg.test.ts": {
+      "passed": 4,
+      "failed": 0
+    },
+    "agent-runtime/scheduling.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "agent-runtime/schema-owner.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "evolution/evolution-data.pg.test.ts": {
+      "passed": 17,
+      "failed": 0
+    },
+    "evolution/evolution-proposal.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "evolution/evolution-release.pg.test.ts": {
+      "passed": 30,
+      "failed": 0
+    },
+    "evolution/evolution-replay.pg.test.ts": {
+      "passed": 8,
+      "failed": 0
+    },
+    "evolution/feedback.pg.test.ts": {
+      "passed": 4,
+      "failed": 0
+    },
+    "evolution/provider-feedback.pg.test.ts": {
+      "passed": 5,
+      "failed": 0
+    },
+    "fix/fix-dispatch.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "fix/fix-publish.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "fix/fix-store.pg.test.ts": {
+      "passed": 5,
+      "failed": 0
+    },
+    "http/api.pg.test.ts": {
+      "passed": 11,
+      "failed": 0
+    },
+    "http/webhook-replay.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "integrations/github/github-install-and-use.pg.test.ts": {
+      "passed": 1,
+      "failed": 0
+    },
+    "issues/issue-triage.pg.test.ts": {
+      "passed": 9,
+      "failed": 0
+    },
+    "quality/http-runtime.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "quality/retention.pg.test.ts": {
+      "passed": 2,
+      "failed": 0
+    },
+    "quality/runtime-integration.pg.test.ts": {
+      "passed": 3,
+      "failed": 0
+    },
+    "quality/storage.pg.test.ts": {
+      "passed": 5,
+      "failed": 0
+    },
+    "review/deep-dispatch.pg.test.ts": {
+      "passed": 3,
+      "failed": 0
+    },
+    "review/deep-review.pg.test.ts": {
+      "passed": 4,
+      "failed": 0
+    },
+    "review/deep-workflow.pg.test.ts": {
+      "passed": 6,
+      "failed": 0
+    },
+    "review/github-delivery-handoff.pg.test.ts": {
+      "passed": 4,
+      "failed": 0
+    }
+  }
+}

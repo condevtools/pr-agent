@@ -16,7 +16,7 @@ import {
 import { assertRunLease } from "../execution/store.js";
 import type { RunLease } from "../runs/contracts.js";
 import { deepBudgetSchema, deepRolePrefix } from "../../review/deep/budget.js";
-import { observeAgentOperation } from "../../observability/index.js";
+import { observeAgentOperation, parseAgentPromptReference } from "../../observability/index.js";
 import { modelObservationUsage } from "../../model/observability.js";
 
 export interface ModelPriceRates {
@@ -747,6 +747,9 @@ export function createBudgetedModelExecutionContext(input: {
     policy: input.policy,
     async execute<T>(intent: ModelRequestIntent, transport: () => Promise<ModelTransportResult<T>>,
       observation?: ModelObservationPayload): Promise<T> {
+      const promptReferences = validatedPromptReferences(intent.metadata?.promptReferences);
+      const primaryPromptReference = promptReferences[0]
+        ? parseAgentPromptReference(promptReferences[0]) : undefined;
       const bounded = {
         ...intent,
         requestKind: `${workflow}:${input.stepKey ?? input.stepId}:${intent.provider}:${intent.requestKind}`,
@@ -763,6 +766,7 @@ export function createBudgetedModelExecutionContext(input: {
       await input.store.markDispatched(call, input.lease);
       return observeAgentOperation("model.generate", "generation", {
         model: intent.model,
+        promptReference: primaryPromptReference,
         input: observation?.input,
         modelParameters: observation?.parameters,
         metadata: {
@@ -772,6 +776,7 @@ export function createBudgetedModelExecutionContext(input: {
           requestKind: intent.requestKind, requestHash: intent.requestHash,
           role: intent.metadata?.role, turn: intent.metadata?.turn,
           schemaName: intent.metadata?.schemaName,
+          ...(promptReferences.length > 0 ? { promptReferences } : {}),
           maxOutputTokens: bounded.maxOutputTokens, pricingHash: input.policy.hash,
           currency: input.policy.currency, usageStatus: "unavailable", settlementStatus: "pending",
         },
@@ -822,6 +827,23 @@ export function createBudgetedModelExecutionContext(input: {
       });
     },
   };
+}
+
+function validatedPromptReferences(value: unknown): Array<{
+  name: string;
+  version: number;
+  contentHash: string;
+}> {
+  if (!Array.isArray(value)) return [];
+  const references: Array<{ name: string; version: number; contentHash: string }> = [];
+  for (const item of value.slice(0, 16)) {
+    const reference = parseAgentPromptReference(item);
+    const contentHash = item && typeof item === "object" && !Array.isArray(item)
+      ? (item as Record<string, unknown>).contentHash : undefined;
+    if (!reference || typeof contentHash !== "string" || !/^[a-f0-9]{64}$/u.test(contentHash)) continue;
+    references.push({ ...reference, contentHash });
+  }
+  return references;
 }
 
 export function getModelExecutionPolicy(

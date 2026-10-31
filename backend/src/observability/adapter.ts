@@ -14,6 +14,7 @@ import { resourceFromAttributes } from "@opentelemetry/resources";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
 import { logCore, sanitizeLogMetadata } from "#core";
+import { parseAgentPromptReference, type AgentPromptReference } from "./contracts.js";
 import { sanitizeObservationMaskValue, sanitizeObservationValue } from "./privacy.js";
 
 export type AgentObservationType = "agent" | "span" | "tool" | "generation" | "chain" | "evaluator";
@@ -29,6 +30,8 @@ export interface AgentObservationAttributes {
   costDetails?: Record<string, number>;
   level?: AgentObservationLevel;
   statusMessage?: string;
+  /** Validated managed Prompt identity. Absent for local fallback prompts. */
+  promptReference?: AgentPromptReference;
 }
 
 export interface AgentObservationHandle {
@@ -208,15 +211,26 @@ function createLangfuseDriver(config: ResolvedConfig): AgentObservationDriver {
   setLangfuseTracerProvider(provider);
   return {
     start(name, type, attributes, options) {
+      const { promptReference, ...observationAttributes } = attributes;
       const start = startObservation as unknown as (
         observationName: string,
         observationAttributes: AgentObservationAttributes,
         observationOptions: { asType: AgentObservationType; parentSpanContext?: SpanContext },
       ) => LangfuseObservation;
-      const observation = start(name, attributes, {
+      const observation = start(name, observationAttributes, {
         asType: type,
         parentSpanContext: options.parentSpanContext ?? INVALID_SPAN_CONTEXT,
       }) as LangfuseObservation;
+      if (promptReference) {
+        observation.otelSpan.setAttribute(
+          LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_NAME,
+          promptReference.name,
+        );
+        observation.otelSpan.setAttribute(
+          LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_VERSION,
+          promptReference.version,
+        );
+      }
       if (options.sessionId) {
         observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, options.sessionId);
       }
@@ -292,6 +306,9 @@ function sanitizeAttributes(
   config: ResolvedConfig,
   env: NodeJS.ProcessEnv,
 ): AgentObservationAttributes {
+  const promptReference = parseAgentPromptReference(
+    sanitizeObservationValue(attributes.promptReference, env),
+  );
   return {
     ...(config.captureContent && "input" in attributes
       ? { input: sanitizeObservationValue(attributes.input, env) } : {}),
@@ -310,6 +327,7 @@ function sanitizeAttributes(
     ...(attributes.statusMessage ? {
       statusMessage: String(sanitizeObservationValue(attributes.statusMessage, env)).slice(0, 512),
     } : {}),
+    ...(promptReference ? { promptReference } : {}),
   };
 }
 

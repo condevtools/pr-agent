@@ -145,6 +145,23 @@ test("content capture is opt-in and metadata updates merge", async () => {
   });
 });
 
+test("managed Prompt identity is validated without inventing local fallback linkage", async () => {
+  const driver = new RecordingDriver();
+  const adapter = createAgentObservability({ env: enabledEnv(), driver });
+  await adapter.observe("managed", "generation", {
+    promptReference: { name: "pr-agent.review.deep.role.system", version: 7 },
+  }, async () => undefined);
+  await adapter.observe("local-fallback", "generation", {}, async () => undefined);
+  await adapter.observe("invalid", "generation", {
+    promptReference: { name: "unsafe prompt name", version: 0 },
+  }, async () => undefined);
+
+  assert.deepEqual(driver.records[0]?.initial.promptReference,
+    { name: "pr-agent.review.deep.role.system", version: 7 });
+  assert.equal(driver.records[1]?.initial.promptReference, undefined);
+  assert.equal(driver.records[2]?.initial.promptReference, undefined);
+});
+
 test("privacy sanitizer handles secrets, credential URLs, cycles and bounds", () => {
   const cyclic: Record<string, unknown> = {
     key: "configured-secret-value", url: "https://alice:password@example.com/path",
@@ -255,6 +272,7 @@ test("official SDK exports a redacted nested trace to a local OTLP endpoint", as
       prompt: `Bearer should-not-leave-process ${"x".repeat(40_000)}`,
     } }, async () => adapter.observe("fixture-model", "generation", {
       model: "fixture-model", modelParameters: { temperature: 0.2, schema: { secret: "nested" } },
+      promptReference: { name: "pr-agent.review.single.system.en", version: 3 },
       usageDetails: { input: 2, output: 1 }, output: "safe-output",
     }, async () => undefined), { root: true, sessionId: "fixture-session" });
     await adapter.shutdown();
@@ -263,6 +281,9 @@ test("official SDK exports a redacted nested trace to a local OTLP endpoint", as
     assert.ok(!exported.includes("should-not-leave-process"));
     assert.ok(exported.includes("fixture-run"));
     assert.ok(exported.includes("fixture-model"));
+    assert.ok(exported.includes("langfuse.observation.prompt.name"));
+    assert.ok(exported.includes("langfuse.observation.prompt.version"));
+    assert.ok(exported.includes("pr-agent.review.single.system.en"));
     assert.ok(exported.includes("pr-agent"));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

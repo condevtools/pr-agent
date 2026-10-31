@@ -10,7 +10,7 @@ import {
   readOptionalStringEnv,
   resolveUiLocale,
 } from "#core";
-import { buildUserPrompt, resolveReviewSystemPrompt } from "./prompts.js";
+import { buildManagedUserPrompt, resolveManagedReviewSystemPrompt } from "./prompts.js";
 import {
   buildReviewFallbackFromNonJsonText,
   normalizeReviewResultForSchema,
@@ -104,7 +104,8 @@ export async function analyzePullRequest(
   const runtime = options?.runtime ?? getSharedModelRuntime();
   const provider = resolveModelProvider();
   const model = resolveModelName(provider);
-  const prompt = buildUserPrompt(pullRequest);
+  const prompt = buildManagedUserPrompt(pullRequest);
+  const systemPrompt = resolveManagedReviewSystemPrompt();
 
   const parsed = await runtime.concurrencyLimiter.withLimit(async () => {
     return requestJsonModel({
@@ -112,8 +113,12 @@ export async function analyzePullRequest(
       requestKind: "single-review",
       schemaName: "pr_review",
       schema: reviewResultJsonSchema,
-      prompt,
-      systemPrompt: resolveReviewSystemPrompt(),
+      prompt: prompt.text,
+      systemPrompt: systemPrompt.text,
+      promptReferences: [
+        ...(systemPrompt.reference ? [systemPrompt.reference] : []),
+        ...(prompt.promptReferences ?? []),
+      ],
       timeoutMs: readNumberEnv("AI_HTTP_TIMEOUT_MS", DEFAULT_AI_HTTP_TIMEOUT_MS),
       fallbackPolicy: "permissive-json",
       nonJsonFallback: buildReviewFallbackFromNonJsonText,

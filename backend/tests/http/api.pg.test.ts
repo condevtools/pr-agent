@@ -298,8 +298,9 @@ if (!databaseUrl) {
   test("creation idempotency survives content retention using the immutable request hash", async () => {
     const original = await adminPool.query<{ id: string }>(
       `UPDATE pr_agent_harness.agent_runs SET input_json='{}',content_purged_at=clock_timestamp()
-       WHERE tenant_id=$1 AND create_key=$2 RETURNING id`,
-      [tenantId, `api:${integrationId}:offline-replay`]);
+       WHERE tenant_id=$1 AND integration_id=$2 AND create_scope=$3 AND create_key=$4 RETURNING id`,
+      [tenantId, integrationId, `review.single.v1:${integrationId}`, `api:${integrationId}:offline-replay`]);
+    assert.equal(original.rowCount, 1, "retention fixture must target the standard review idempotency identity");
     const before = providerLookups;
     providerOnline = false;
     try {

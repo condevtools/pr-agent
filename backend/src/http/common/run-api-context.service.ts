@@ -1,11 +1,10 @@
 import { Injectable, type OnModuleDestroy } from "@nestjs/common";
-import { readFileSync, statSync } from "node:fs";
 import type { Request } from "express";
 import { z } from "zod";
 
 import { runNotFound, RunControlError, type RunPrincipal } from "../../agent-runtime/runs/control-contracts.js";
 import { getAgentRuntimeServices } from "../../agent-runtime/runtime/services.js";
-import { RunApiAuthenticator } from "./run-auth.js";
+import { RunApiAuthenticator, readPrincipalConfiguration } from "./run-auth.js";
 import { logCore } from "#core";
 
 @Injectable()
@@ -52,15 +51,6 @@ export class RunApiContextService implements OnModuleDestroy {
     if (!authorized.rowCount) throw runNotFound();
     return services.authority.get(principal.tenantId, principal.integrationId);
   }
-}
-
-function readPrincipalConfiguration(): string | undefined {
-  const path = process.env.HARNESS_API_PRINCIPALS_FILE?.trim();
-  if (!path) return process.env.HARNESS_API_PRINCIPALS_JSON;
-  if (process.env.HARNESS_API_PRINCIPALS_JSON?.trim()) throw new Error("Configure one Run API credential source");
-  const stat = statSync(path);
-  if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("Invalid Run API credential file");
-  return readFileSync(path, "utf8");
 }
 
 export function validRunId(value: string): string { return z.string().uuid().parse(value); }

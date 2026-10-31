@@ -19,6 +19,7 @@ import type { RuntimeQueueClass } from "./scheduler.js";
 import { prepareRunArtifact, RunArtifactCorruptError, RunArtifactLimitError,
   RunArtifactUnavailableError } from "../artifacts/index.js";
 import { observeAgentOperation, type AgentObservationHandle } from "../../observability/index.js";
+import { logCore, sanitizeLogMetadata } from "#core";
 
 interface WorkerDependencies {
   store: RunExecutionStore;
@@ -30,6 +31,7 @@ interface WorkerDependencies {
   execute(lease: RunLease, binding: PublicationBinding): Promise<void>;
   outcomeHandler?: PublicationOutcomeHandler;
   coordinateOutcomes?(binding: PublicationBinding): Promise<unknown>;
+  onTraceStarted?(lease: RunLease, traceId: string): Promise<void> | void;
   onError(error: unknown, runId?: string): void;
 }
 
@@ -210,7 +212,19 @@ export class RunWorker {
           repository: binding.repository, runtimeVersionHash: lease.runtimeVersionHash,
         },
       },
-      (observation) => this.executeAttempt(lease, binding, controller, observation),
+      async (observation) => {
+        if (observation.traceId && this.dependencies.onTraceStarted) {
+          try {
+            await this.dependencies.onTraceStarted(lease, observation.traceId);
+          } catch (error) {
+            logCore("warn", "quality.trace_record_failed", {
+              runId: lease.runId,
+              failure: sanitizeLogMetadata({ failure: error }).failure,
+            });
+          }
+        }
+        await this.executeAttempt(lease, binding, controller, observation);
+      },
       { root: true, sessionId: lease.runId },
     );
   }
@@ -247,6 +261,7 @@ export class RunWorker {
       if (!active || controller.signal.aborted) throw new RunLeaseLostError(lease.runId);
       await store.withLease(lease, async (client) => {
         if (lease.input.workflow === "review.deep.v1" || lease.input.workflow === "issue.triage.v1" || lease.input.workflow === "eval.replay.v1"
+            || lease.input.workflow === "eval.judge.v1"
             || lease.input.workflow === "evolution.propose.v1" || String(lease.input.workflow).startsWith("fix.")) {
           const authority = await client.query<{ allowed: boolean }>(
             "SELECT pr_agent_harness.lock_resumable_review_execution_authority($1,$2,$3,$4) AS allowed",
@@ -366,6 +381,7 @@ export class RunWorker {
           ? "fix_proposal_completed" : lease.input.workflow === "fix.publish.v1" ? "fix_publication_completed"
             : lease.input.workflow === "evolution.propose.v1" ? "evolution_proposal_completed"
               : lease.input.workflow === "eval.replay.v1" ? "evaluation_replay_completed"
+                : lease.input.workflow === "eval.judge.v1" ? "evaluation_judge_completed"
                 : lease.input.workflow === "issue.triage.v1" ? "issue_triage_completed" : "review_completed" },
       lease.input.workflow === "fix.publish.v1" ? undefined
         : (client) => this.dependencies.budget.closeRunBudgetInTransaction(client, lease));

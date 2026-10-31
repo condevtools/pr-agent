@@ -131,7 +131,9 @@ test("one dispatched model transport creates one Generation under its durable mo
       executeModelRequest({
         provider: "openai-compatible", model: "fixture-model", requestKind: "structured",
         requestHash: "request-hash", inputTokenUpperBound: 20, maxOutputTokens: 100,
-        metadata: { role: "reviewer", turn: 1 },
+        metadata: { role: "reviewer", turn: 1, promptReferences: [{
+          name: "pr-agent.review.single.system.en", version: 4, contentHash: "a".repeat(64),
+        }] },
       }, async () => {
         transportCalls += 1;
         return {
@@ -154,9 +156,45 @@ test("one dispatched model transport creates one Generation under its durable mo
   assert.equal(generations.length, 1);
   const step = records.find(({ name }) => name === "execute-model-step")!;
   assert.equal(generations[0]!.options.parentSpanContext?.spanId, step.spanContext.spanId);
+  assert.deepEqual(generations[0]!.attributes.promptReference,
+    { name: "pr-agent.review.single.system.en", version: 4 });
+  assert.deepEqual(generations[0]!.attributes.metadata?.promptReferences, [{
+    name: "pr-agent.review.single.system.en", version: 4, contentHash: "a".repeat(64),
+  }]);
   assert.deepEqual(generations[0]!.updates.at(-1)?.usageDetails, {
     input: 10, input_cached: 0, output: 4, output_reasoning: 0,
   });
+});
+
+test("trace persistence callback failure never changes Run success", async () => {
+  const records: ObservationRecord[] = [];
+  const observability = createAgentObservability({
+    env: telemetryEnvironment(), driver: recordingDriver(records),
+  });
+  const lease = workerLease("trace-callback-run");
+  let claimed = false;
+  let callbackCalls = 0;
+  const store = workerStore({ claim: async () => claimed ? undefined : (claimed = true, lease) });
+  const dependencies = {
+    ...workerDependencies(store, async () => undefined),
+    onTraceStarted: async (callbackLease: RunLease, traceId: string) => {
+      callbackCalls += 1;
+      assert.equal(callbackLease.runId, lease.runId);
+      assert.equal(traceId, "1".repeat(32));
+      throw new Error("database-password=must-not-affect-run");
+    },
+  };
+  const worker = new RunWorker(dependencies);
+
+  await withAgentObservability(observability, async () => {
+    await worker.tick();
+    await worker.drain();
+  });
+  await worker.stop();
+
+  assert.equal(callbackCalls, 1);
+  const root = records.find(({ type }) => type === "agent")!;
+  assert.deepEqual(root.updates.at(-1)?.output, { outcome: "succeeded" });
 });
 
 test("Deep Review role and critic executions are distinct nested Agent observations", async () => {

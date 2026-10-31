@@ -235,7 +235,7 @@ function fakeReadinessPool(
     if (sql.includes("migration_ledger_ready")) {
       return { rows: [{ safe_role: true, migration_ledger_ready: true }] };
     }
-    if (sql.includes("migration_name='033_issue_triage.sql'")) return { rows: [{ schema_ready: true }] };
+    if (sql.includes("migration_name='036_quality_retention.sql'")) return { rows: [{ schema_ready: true }] };
     return { rows: (Object.entries(freshness) as Array<[keyof typeof freshness, boolean]>).map(
       ([process_role, fresh]) => ({ process_role, fresh,
         capability_reports: process_role === "worker" && fresh

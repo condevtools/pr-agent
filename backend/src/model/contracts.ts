@@ -1,4 +1,10 @@
-export type StructuredModelRole = "security" | "correctness" | "critic" | "fix" | "evolution" | "issue-triage";
+export type StructuredModelRole = "security" | "correctness" | "critic" | "fix" | "evolution" | "issue-triage" | "judge";
+
+export interface ModelPromptReference {
+  name: string;
+  version: number;
+  contentHash: string;
+}
 
 export interface StructuredModelRequest<T> {
   schemaName: string;
@@ -10,6 +16,7 @@ export interface StructuredModelRequest<T> {
   turn: number;
   maxInputBytes: number;
   maxOutputTokens: number;
+  promptReferences?: readonly ModelPromptReference[];
   signal?: AbortSignal;
 }
 

@@ -9,6 +9,7 @@ import type {
   FixWorkflowPolicy,
 } from "../contracts.js";
 import { FixPatchValidationError, validateFixPatchPair } from "./patch-validator.js";
+import { renderManagedPrompt } from "../../quality/prompts/index.js";
 
 const draftSchema = z.object({
   codePatch: z.string().min(1).max(128_000),
@@ -41,15 +42,18 @@ export async function executeFixProposal(
   let previousFailure: string | undefined;
   let proposal: FixProposal | undefined;
   for (let revision = 1; revision <= policy.maxProposalRevisions; revision += 1) {
+    const systemPrompt = renderManagedPrompt("fix.proposal.system");
     const draft = await context.step(`fix.proposal.${revision}.model`, "model",
-      fingerprint({ source: promptSource(source), sourceFiles, policyHash: policy.verification.hash, revision, previousFailure }),
+      fingerprint({ source: promptSource(source), sourceFiles, policyHash: policy.verification.hash,
+        revision, previousFailure, systemPrompt: systemPrompt.text }),
       () => context.model.generate({
         schemaName: "fix_patch_draft", jsonSchema: fixDraftJsonSchema, schema: draftSchema,
-        systemPrompt: "Produce a minimal unified diff fix and an independent regression test. Do not modify dependencies, scripts, configuration, generated files, existing tests, or files outside the supplied allow-list. Return JSON only.",
+        systemPrompt: systemPrompt.text,
         prompt: canonicalJson({ source: promptSource(source), sourceFiles, allowedPaths: source.allowedPaths,
           allowedTestPrefixes: policy.verification.allowedTestPrefixes, revision, previousFailure }),
         role: "fix", turn: revision, maxInputBytes: policy.maxInputBytes,
         maxOutputTokens: policy.maxOutputTokensPerRevision, signal: context.signal,
+        promptReferences: systemPrompt.reference ? [systemPrompt.reference] : undefined,
       }));
     try {
       proposal = await context.step(`fix.proposal.${revision}.validate`, "verification",

@@ -31,9 +31,11 @@
     "test:harness:backup": "node scripts/harness-backup-drill.mjs",
     "test:harness:capacity": "node scripts/test-harness-capacity.mjs",
     "harness:migrate": "node --import tsx src/agent-runtime/cli.ts migrate",
-    "harness:bind": "node --import tsx src/agent-runtime/cli.ts bind"
+    "harness:bind": "node --import tsx src/agent-runtime/cli.ts bind",
+    "quality:langfuse": "node --import tsx scripts/quality-langfuse.ts"
   },
   "dependencies": {
+    "@langfuse/client": "5.14.0",
     "@langfuse/otel": "5.14.0",
     "@langfuse/tracing": "5.14.0",
     "@nestjs/common": "^11.0.1",

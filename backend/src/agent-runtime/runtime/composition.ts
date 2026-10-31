@@ -21,6 +21,11 @@ import { closeApplicationRuntimeServices, createAgentRuntimeServices, withAgentR
 import { createWorkflowRegistry, workflowExecutor, type WorkflowExecutor } from "./workflows.js";
 import { resolveWorkerCompatibility, type WorkerCompatibility } from "./worker-compatibility.js";
 import { logCore } from "#core";
+import { withFrozenPromptBundle } from "../../quality/prompts/runtime.js";
+import { resolveQualityConfiguration } from "../../quality/config.js";
+import { PgQualityTraceStore } from "../../quality/storage/trace-store.js";
+import { createQualitySyncLoop, type QualitySyncLoop } from "../../quality/sync/loop.js";
+import { RunApiAuthenticator, readPrincipalConfiguration } from "../../http/common/run-auth.js";
 
 export { supportedWorkflowIds } from "./capabilities.js";
 
@@ -35,7 +40,7 @@ export interface RuntimeRoleStatus {
 }
 
 export class AgentRuntimeComposition {
-  private worker?: { services: AgentRuntimeServices; loop: RunWorker; heartbeat: ProcessHeartbeatLoop };
+  private worker?: { services: AgentRuntimeServices; loop: RunWorker; heartbeat: ProcessHeartbeatLoop; quality: QualitySyncLoop };
   private recovery?: { services: AgentRuntimeServices; loop: PublicationRecoveryLoop; heartbeat: ProcessHeartbeatLoop };
   private readonly statuses = new Map<"worker" | "recovery", RuntimeRoleStatus>([
     ["worker", { role: "worker", state: "stopped" }],
@@ -122,6 +127,12 @@ export class AgentRuntimeComposition {
       const budget = new ModelBudgetStore(services.db);
       const outcomes = new PublicationOutcomeCoordinator({ db: services.db, batchStore: services.batchStore });
       const evaluations = new EvaluationCoordinator(new PgEvolutionEvaluationStore(services.db));
+      const qualityConfig = resolveQualityConfiguration();
+      const traceStore = new PgQualityTraceStore(services.db);
+      const quality = createQualitySyncLoop({ db: services.db,
+        assertPrincipalCurrent: (principal) => new RunApiAuthenticator(readPrincipalConfiguration()).assertDelegated(principal),
+        onError: (error) => logCore("warn", "quality.sync_failed", { error }),
+      });
       const outcomeHandler = new PublicationOutcomeHandler({
         store, budget, batchStore: services.batchStore, batchCoordinator: services.batchCoordinator,
         control: new PublicationControlStore(services.db),
@@ -156,14 +167,27 @@ export class AgentRuntimeComposition {
         supportedWorkflows: (binding) => supportedWorkflowIdsForBinding(
           capabilities, binding,
         ),
-        execute: (lease, binding) => withAgentRuntimeServices(services, () => this.execute(lease, binding)),
+        execute: (lease, binding) => withAgentRuntimeServices(services, () => {
+          const action = () => this.execute(lease, binding);
+          return lease.runtimeConfig.promptBundle
+            ? withFrozenPromptBundle(lease.runtimeConfig.promptBundle, action) : action();
+        }),
+        onTraceStarted: async (lease, traceId) => {
+          if (!qualityConfig.enabled) return;
+          await traceStore.record({ tenantId: lease.tenantId, integrationId: lease.integrationId }, {
+            runId: lease.runId, runAttempt: lease.epoch, traceId,
+            externalId: `run:${lease.runId}:${lease.epoch}`,
+            targetFingerprint: qualityConfig.targetFingerprint,
+          });
+        },
         onError: (error, runId) => {
           this.recordError("worker", error);
           logCore("error", "run_worker.failed", { runId, error });
         },
       }, scheduling.concurrency, scheduling.specialConcurrency);
-      this.worker = { services, loop, heartbeat: activeHeartbeat };
+      this.worker = { services, loop, heartbeat: activeHeartbeat, quality };
       loop.start();
+      void quality.start().catch((error) => logCore("warn", "quality.sync_start_failed", { error }));
       this.setStatus("worker", "running");
     } catch (error) {
       this.recordError("worker", error, "failed");
@@ -178,7 +202,7 @@ export class AgentRuntimeComposition {
     if (!current) return;
     this.worker = undefined;
     this.setStatus("worker", "stopping");
-    try { await current.loop.stop(); }
+    try { await Promise.all([current.loop.stop(), current.quality.stop()]); }
     finally {
       await current.heartbeat.stop().catch((error) => this.recordError("worker", error));
       await current.services.close(); this.setStatus("worker", "stopped");

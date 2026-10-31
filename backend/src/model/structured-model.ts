@@ -56,6 +56,7 @@ async function generateStructured<T>(
     maxOutputTokens: request.maxOutputTokens,
     signal: request.signal,
     metadata: { role: request.role, turn: request.turn },
+    promptReferences: request.promptReferences,
     fallbackPolicy: "strict-structured",
     clientCache,
   });

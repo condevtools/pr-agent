@@ -1,8 +1,13 @@
 import { resolveUiLocale, type UiLocale } from "#core";
 import type { PullRequestReviewInput } from "../contracts.js";
 import { buildPromptSharedSections } from "../context/prompt-context.js";
+import {
+  managedPromptReferences,
+  renderManagedPrompt,
+  type ManagedPromptReference,
+} from "../../quality/prompts/index.js";
 
-const REVIEW_SYSTEM_PROMPT_ZH = [
+export const REVIEW_SYSTEM_PROMPT_ZH = [
   "你是资深代码评审工程师。",
   "你需要对 PR/MR 进行严格代码评审，输出可执行问题列表。",
   "重点关注：逻辑错误、异常处理、安全风险、并发与幂等、性能、可维护性、测试缺失。",
@@ -17,7 +22,7 @@ const REVIEW_SYSTEM_PROMPT_ZH = [
   "输出必须是 JSON 对象，不要 markdown 代码块。",
 ].join("\n");
 
-const REVIEW_SYSTEM_PROMPT_EN = [
+export const REVIEW_SYSTEM_PROMPT_EN = [
   "You are a senior code review engineer.",
   "You must perform strict PR/MR review and output actionable findings.",
   "Focus on: logic defects, error handling, security, concurrency/idempotency, performance, maintainability, and missing tests.",
@@ -35,13 +40,27 @@ const REVIEW_SYSTEM_PROMPT_EN = [
 export function resolveReviewSystemPrompt(
   locale: UiLocale = resolveUiLocale(),
 ): string {
-  return locale === "en" ? REVIEW_SYSTEM_PROMPT_EN : REVIEW_SYSTEM_PROMPT_ZH;
+  return resolveManagedReviewSystemPrompt(locale).text;
+}
+
+export function resolveManagedReviewSystemPrompt(
+  locale: UiLocale = resolveUiLocale(),
+): { text: string; reference?: ManagedPromptReference } {
+  return locale === "en"
+    ? renderManagedPrompt("review.single.system.en", {}, REVIEW_SYSTEM_PROMPT_EN)
+    : renderManagedPrompt("review.single.system.zh", {}, REVIEW_SYSTEM_PROMPT_ZH);
 }
 
 export function buildUserPrompt(pullRequest: PullRequestReviewInput): string {
+  return buildManagedUserPrompt(pullRequest).text;
+}
+
+export function buildManagedUserPrompt(pullRequest: PullRequestReviewInput): {
+  text: string;
+  promptReferences?: ManagedPromptReference[];
+} {
   const locale = resolveUiLocale();
-  const outputRequirements =
-    locale === "en"
+  const outputRequirementsFallback = locale === "en"
       ? [
           "Output requirements:",
           "1) Output JSON object only;",
@@ -53,7 +72,7 @@ export function buildUserPrompt(pullRequest: PullRequestReviewInput): string {
           "7) If Team custom review rules are non-empty, results must explicitly cover those rules.",
           "8) If CI checks contain failures, actionItems must include at least one fix suggestion directly tied to those failures.",
           "9) If Feedback signals are non-empty, avoid recommendation patterns previously marked as low-value.",
-        ]
+        ].join("\n")
       : [
           "输出要求:",
           "1) 仅输出 JSON 对象；",
@@ -65,14 +84,19 @@ export function buildUserPrompt(pullRequest: PullRequestReviewInput): string {
           "7) 若 Team custom review rules 非空，必须覆盖这些规则的检查结果。",
           "8) 若存在失败 CI checks，actionItems 至少包含 1 条与失败检查直接相关的修复建议。",
           "9) 若 Feedback signals 非空，尽量避免重复历史上被判定为低价值的建议形态。",
-        ];
+        ].join("\n");
+  const outputRequirements = renderManagedPrompt(
+    locale === "en" ? "review.single.requirements.en" : "review.single.requirements.zh",
+    {},
+    outputRequirementsFallback,
+  );
 
-  return [
+  return { text: [
     ...buildPromptSharedSections({
       pullRequest,
       maxDiffFiles: undefined,
       includeProcessFiles: true,
     }),
-    ...outputRequirements,
-  ].join("\n");
+    outputRequirements.text,
+  ].join("\n"), promptReferences: managedPromptReferences(outputRequirements) };
 }

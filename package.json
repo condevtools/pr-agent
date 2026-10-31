@@ -22,7 +22,8 @@
     "docker:down": "docker compose down",
     "docker:restart": "docker compose restart pr-agent worker recovery maintenance",
     "docker:logs": "docker compose logs -f pr-agent worker recovery maintenance",
-    "docker:ps": "docker compose ps"
+    "docker:ps": "docker compose ps",
+    "quality:langfuse": "pnpm --filter backend quality:langfuse"
   },
   "devDependencies": {
     "turbo": "latest"

@@ -137,6 +137,26 @@ test("a reused artifact-backed step is rehydrated without another provider actio
   await worker.stop();
 });
 
+test("a Judge workflow completes without entering the publication path", async () => {
+  let claimed = false;
+  let transition: { to: string; outcomeCode?: string } | undefined;
+  const lease = { ...workerLease("judge-run"), input: { workflow: "eval.judge.v1" } };
+  const store = workerStore({
+    claim: async () => claimed ? undefined : (claimed = true, lease),
+    withLease: async (_lease, action) => action({
+      query: async () => ({ rows: [{ allowed: true }] }),
+    } as never),
+    transition: async (_lease, input) => { transition = input; },
+  });
+  const worker = new RunWorker(workerDependencies(store, async () => undefined));
+
+  await worker.tick();
+  await worker.drain();
+
+  assert.deepEqual(transition, { to: "succeeded", outcomeCode: "evaluation_judge_completed" });
+  await worker.stop();
+});
+
 test("shutdown waits for abort cleanup before returning the settled lease", async () => {
   const cleanup = deferred();
   const started = deferred();
