@@ -19,7 +19,7 @@ test("authenticated readback verifies the complete synthetic Agent tree", async 
       baseUrl: ` ${fixture.origin} `, publicKey: " fixture-public ", secretKey: " fixture-secret ",
       traceId, serverVersion: "3.225.5", deadlineMs: 3_000, pollMs: 5,
     });
-    assert.deepEqual(result, { verified: true, observations: 16 });
+    assert.deepEqual(result, { verified: true, observations: 26, checkpointObservations: 10 });
     assert.equal(authenticated, true);
     assert.match(requestedPath, /^\/api\/public\/observations\?/u);
     assert.match(requestedPath, new RegExp(`traceId=${traceId}`, "u"));
@@ -98,6 +98,24 @@ test("readback requires the exported fixture cost rather than an inferred price"
   } finally { await fixture.close(); }
 });
 
+test("readback rejects checkpoint observations that expose recovery state", async () => {
+  const traceId = "f".repeat(32);
+  const fixture = await fixtureServer((_request, response) => {
+    const rows = validRows(traceId).map((row) => row.name === "save-checkpoint"
+      ? { ...row, metadata: { ...(row.metadata as Record<string, unknown>),
+        checkpointState: { fixtureMarker: "synthetic-checkpoint-state-must-not-export" } } }
+      : row);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: rows }));
+  });
+  try {
+    await assert.rejects(verifyLangfuseTrace({
+      baseUrl: fixture.origin, publicKey: "fixture-public", secretKey: "fixture-secret",
+      traceId, serverVersion: "3.225.5", deadlineMs: 500, pollMs: 5,
+    }), { name: "LangfuseReadbackTimeoutError" });
+  } finally { await fixture.close(); }
+});
+
 function validRows(traceId: string): Record<string, unknown>[] {
   const row = (id: string, type: string, parentObservationId?: string) => ({
     id, traceId, type, parentObservationId,
@@ -106,6 +124,22 @@ function validRows(traceId: string): Record<string, unknown>[] {
     ...row(id, "GENERATION", parent), model: "langfuse-smoke-model",
     usageDetails: { input: 12, output: 4 }, costDetails: { total: 0.000028 },
   });
+  const checkpoint = (id: string, name: "save-checkpoint" | "reuse-checkpoint" | "validate-checkpoint",
+    checkpointId: string, sequence: number, kind: "step_completed" | "publication_frozen",
+    outcome: "saved" | "reused" | "validated") => ({
+    ...row(id, "SPAN", "root"), name,
+    metadata: {
+      checkpointId, checkpointSequence: sequence, checkpointKind: kind,
+      checkpointSchemaVersion: 1, checkpointRuntimeVersionHash: "a".repeat(64),
+      checkpointStateHash: sequence.toString(16).padStart(64, "0"),
+      checkpointCreatedAt: "2026-10-31T00:00:00.000Z", checkpointOutcome: outcome,
+      ...(kind === "step_completed"
+        ? { stepId: `step-${sequence}`, stepAttemptId: `attempt-${sequence}`,
+          outputHash: "b".repeat(64), artifactHash: "c".repeat(64) }
+        : { publicationBatchId: "publication-batch" }),
+    },
+  });
+  const cachedCheckpointId = "checkpoint-cached";
   return [
     row("root", "AGENT"),
     row("security", "AGENT", "root"), row("correctness", "AGENT", "root"),
@@ -117,6 +151,12 @@ function validRows(traceId: string): Record<string, unknown>[] {
     generation("security-generation", "security-model"),
     generation("correctness-generation", "correctness-model"),
     generation("critic-generation", "critic-model"),
+    checkpoint("checkpoint-validate", "validate-checkpoint", cachedCheckpointId, 1, "step_completed", "validated"),
+    checkpoint("checkpoint-reuse", "reuse-checkpoint", cachedCheckpointId, 1, "step_completed", "reused"),
+    ...Array.from({ length: 7 }, (_, index) => checkpoint(`checkpoint-save-${index + 2}`,
+      "save-checkpoint", `checkpoint-${index + 2}`, index + 2, "step_completed", "saved")),
+    checkpoint("checkpoint-publication", "save-checkpoint", "checkpoint-9", 9,
+      "publication_frozen", "saved"),
   ];
 }
 

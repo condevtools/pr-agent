@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import type { PublicationBinding } from "../src/agent-runtime/authority/publication-authority.js";
 import type { ModelBudgetStore, ModelExecutionPolicy } from "../src/agent-runtime/budget/model-budget-store.js";
+import { observeCheckpoint } from "../src/agent-runtime/execution/checkpoint-observability.js";
 import { currentRunExecutionContext } from "../src/agent-runtime/execution/run-context.js";
 import { RunWorker } from "../src/agent-runtime/execution/run-worker.js";
 import type { RunExecutionStore } from "../src/agent-runtime/execution/store.js";
-import type { RunLease, RunStepKind } from "../src/agent-runtime/runs/contracts.js";
+import type { RunCheckpoint, RunLease, RunStepKind } from "../src/agent-runtime/runs/contracts.js";
 import { executeModelRequest, modelRequestHash } from "../src/model/execution-context.js";
 import { createAgentObservability, observeAgentOperation, withAgentObservability } from "../src/observability/index.js";
 import { runDeepReviewCritic } from "../src/review/deep/critic.js";
@@ -14,6 +15,12 @@ import type { DeepReviewSource, DeepWorkflowContext, RoleLimits } from "../src/r
 import { runDeepReviewRole } from "../src/review/deep/roles/role-loop.js";
 import { verifyLangfuseTrace } from "./langfuse-readback.js";
 const runId = randomUUID();
+const CHECKPOINT_STATE_MARKER = "synthetic-checkpoint-state-must-not-export";
+const cachedStepId = randomUUID();
+const cachedStepAttemptId = randomUUID();
+const cachedOutputHash = "b".repeat(64);
+const cachedArtifactHash = "c".repeat(64);
+let checkpointSequence = 1;
 let traceId: string | undefined;
 let physicalCalls = 0;
 let outcome = "not_started";
@@ -77,6 +84,13 @@ async function executeSyntheticDeepReview(): Promise<void> {
       criticLimits: { maxWallTimeMs: 5_000, maxInputBytes: 64_000, maxOutputTokens: 256 },
     },
   });
+  const publicationBatchId = randomUUID();
+  await observeCheckpoint("save", { ...runtime.lease, checkpointKind: "publication_frozen",
+    publicationBatchId }, async (record) => {
+    record(fixtureCheckpoint({ kind: "publication_frozen", publicationBatchId,
+      state: { stage: "publication_frozen", publicationBatchId,
+        operationSetHash: "e".repeat(64), fixtureMarker: CHECKPOINT_STATE_MARKER } }), "saved");
+  });
 }
 function fixtureDeepContext(runtime: NonNullable<ReturnType<typeof currentRunExecutionContext>>): DeepWorkflowContext {
   return {
@@ -126,25 +140,70 @@ function fixtureDeepContext(runtime: NonNullable<ReturnType<typeof currentRunExe
 }
 function fixtureStore(lease: RunLease, setOutcome: (value: string) => void): RunExecutionStore {
   let claimed = false;
+  const cachedCheckpoint = fixtureCheckpoint({ sequence: 1, kind: "step_completed",
+    stepId: cachedStepId, stepAttemptId: cachedStepAttemptId,
+    state: { stage: "smoke.cached", stepId: cachedStepId,
+      outputHash: cachedOutputHash, fixtureMarker: CHECKPOINT_STATE_MARKER } });
   return {
     claimPublicationOutcome: async () => undefined,
     claimManualResume: async () => undefined,
     claim: async () => claimed ? undefined : (claimed = true, lease),
-    latestCheckpoint: async () => undefined,
+    latestCheckpoint: async () => observeCheckpoint("validate", lease, async (record) => {
+      record(cachedCheckpoint, "validated");
+      return cachedCheckpoint;
+    }),
     withLease: async (_lease, action) => action({ query: async () =>
       ({ rows: [{ allowed: true }], rowCount: 1 }) } as unknown as PoolClient),
     heartbeat: async () => lease,
     beginStep: async (_lease, input) => ({
-      id: randomUUID(), runId, stepKey: input.stepKey, kind: input.kind as RunStepKind,
+      id: input.stepKey === "smoke.cached" ? cachedStepId : randomUUID(),
+      runId, stepKey: input.stepKey, kind: input.kind as RunStepKind,
       inputHash: input.inputHash, status: input.stepKey === "smoke.cached" ? "succeeded" : "running",
-      attemptId: randomUUID(), attemptNumber: 1, reused: input.stepKey === "smoke.cached",
+      attemptId: input.stepKey === "smoke.cached" ? cachedStepAttemptId : randomUUID(),
+      attemptNumber: 1, reused: input.stepKey === "smoke.cached",
+      ...(input.stepKey === "smoke.cached"
+        ? { outputHash: cachedOutputHash, resultRef: cachedArtifactHash } : {}),
     }),
-    loadStepOutput: async () => ({ fixture: "cached" }),
-    completeStep: async () => undefined,
+    loadStepOutput: async (_lease, step) => observeCheckpoint("reuse", {
+      ...lease, checkpointKind: "step_completed", stepId: step.id,
+      stepAttemptId: step.attemptId, outputHash: step.outputHash, artifactHash: step.resultRef,
+    }, async (record) => {
+      record(cachedCheckpoint, "reused");
+      return { fixture: "cached" };
+    }),
+    completeStep: async (_lease, input) => observeCheckpoint("save", {
+      ...lease, checkpointKind: "step_completed", stepId: input.stepId,
+      stepAttemptId: input.attemptId, outputHash: input.outputHash,
+      artifactHash: input.preparedArtifact?.artifactHash ?? input.resultRef,
+    }, async (record) => {
+      const checkpoint = fixtureCheckpoint({ kind: "step_completed", stepId: input.stepId,
+        stepAttemptId: input.attemptId, state: { ...input.checkpoint.state,
+          fixtureMarker: CHECKPOINT_STATE_MARKER } });
+      record(checkpoint, "saved");
+      return checkpoint;
+    }),
     failStep: async () => undefined,
     transition: async (_lease, input) => { setOutcome(input.to); },
     relinquishSettledLease: async () => undefined,
   } as unknown as RunExecutionStore;
+}
+function fixtureCheckpoint(input: {
+  sequence?: number;
+  kind: RunCheckpoint["kind"];
+  stepId?: string;
+  stepAttemptId?: string;
+  publicationBatchId?: string;
+  state: Record<string, unknown>;
+}): RunCheckpoint {
+  const sequence = input.sequence ?? ++checkpointSequence;
+  return {
+    id: randomUUID(), runId, sequence, kind: input.kind,
+    publicationBatchId: input.publicationBatchId,
+    stepId: input.stepId, stepAttemptId: input.stepAttemptId,
+    schemaVersion: 1, runtimeVersionHash: "a".repeat(64),
+    stateHash: sequence.toString(16).padStart(64, "0"), state: input.state,
+    createdAt: new Date().toISOString(),
+  };
 }
 function fixtureBudget(lease: RunLease): ModelBudgetStore {
   return {

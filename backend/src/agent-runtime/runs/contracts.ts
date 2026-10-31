@@ -69,6 +69,8 @@ export interface RunCheckpoint {
   id: string;
   runId: string;
   sequence: number;
+  kind: "step_completed" | "publication_frozen";
+  publicationBatchId?: string;
   stepId?: string;
   stepAttemptId?: string;
   schemaVersion: number;

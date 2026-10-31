@@ -18,6 +18,23 @@ Langfuse 是可选的可观测与质量协作层。PostgreSQL 仍然是 Run、�
 
 模型用量缺失时记录为 `unavailable`，不会伪造为零。Langfuse 的价格推断不能替代 PostgreSQL 预算账本。Publication、Recovery、普通数据库查询和框架 HTTP span 不会被伪造成 Agent 或 Tool。
 
+### Checkpoint 摘要
+
+启用 Tracing 后，每次新执行中的 checkpoint 保存、复用和恢复兼容性检查都会产生一个嵌套 `span`：
+
+| Observation | `checkpointOutcome` | 含义 |
+|---|---|---|
+| `save-checkpoint` | `saved` / `reused` | 数据库事务已提交新 checkpoint，或确认已存在的同一 checkpoint |
+| `reuse-checkpoint` | `reused` | 已成功读取并校验保存的步骤输出，跳过实际步骤执行 |
+| `validate-checkpoint` | `validated` / `missing` | 最新 checkpoint 通过兼容性检查，或该 Run 尚无 checkpoint |
+| 上述任意操作 | `rejected` / `failed` | checkpoint 不兼容，或操作失败；错误只记录安全类型 |
+
+覆盖 `step_completed` 与 `publication_frozen` 两种 checkpoint。Metadata 包含 Run/步骤关联、checkpoint ID、序号、类型、schema/runtime 版本、状态哈希与创建时间；可用时附带输出/产物哈希和发布批次 ID。保存和复用的成功状态只在整个 PostgreSQL 事务（包括 COMMIT）成功后写入 observation；事务失败不会记录 `saved`。
+
+这些摘要在 `LANGFUSE_CAPTURE_CONTENT=off` 时仍可查看。即使开启 `redacted`，checkpoint span 也不上传 `state_json`、完整步骤输出、diff、模型上下文或发布载荷。完整恢复数据仍由 PostgreSQL 保存；已有步骤 observation 的内容采集策略不变。
+
+这是尽力而为的执行观测，不是可靠消息投递或数据库备份：网络故障、进程突然退出可能丢失遥测，不会阻止 checkpoint 提交。历史 checkpoint 不会自动回填；查看权威记录使用带 `runs:trace` 权限的 `GET /runs/:id/trace`。
+
 ### 五类质量工作流
 
 1. **Managed Prompts**：13 个固定 `text` Prompt key 可以从 Langfuse 拉取、校验并由管理员激活。新 Run 在创建时冻结已激活版本；模型执行期间不访问 Langfuse。动态仓库上下文、JSON Schema 和工具定义仍由代码生成。

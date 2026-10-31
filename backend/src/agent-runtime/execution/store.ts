@@ -9,6 +9,7 @@ import { workflowCapability, type ProductCapability } from "../runtime/capabilit
 import { RunControlError } from "../runs/control-contracts.js";
 import { PgRunArtifactStore, type PreparedRunArtifact } from "../artifacts/index.js";
 import { measureDatabaseOperation } from "../database-timing.js";
+import { observeCheckpoint } from "./checkpoint-observability.js";
 import {
   RunCheckpointCompatibilityError,
   RunLeaseLostError,
@@ -83,6 +84,8 @@ interface CheckpointRow {
   id: string;
   run_id: string;
   sequence: string;
+  checkpoint_kind: RunCheckpoint["kind"];
+  publication_batch_id: string | null;
   step_id: string | null;
   step_attempt_id: string | null;
   schema_version: number;
@@ -633,7 +636,10 @@ export class RunExecutionStore {
     requiredHash(input.outputHash, "step output hash");
     requiredHash(input.checkpoint.stateHash, "checkpoint state hash");
     positiveInteger(input.checkpoint.schemaVersion, "checkpoint schema version");
-    return measureDatabaseOperation("step_transaction", () => this.withLease(lease, async (client) => {
+    return observeCheckpoint("save", { ...lease, checkpointKind: "step_completed",
+      stepId: input.stepId, stepAttemptId: input.attemptId, outputHash: input.outputHash,
+      artifactHash: input.preparedArtifact?.artifactHash ?? input.resultRef }, (record) =>
+      measureDatabaseOperation("step_transaction", () => this.withLease(lease, async (client) => {
       const selected = await client.query<StepRow>(
         `SELECT * FROM pr_agent_harness.agent_steps
          WHERE tenant_id=$1 AND run_id=$2 AND id=$3 FOR UPDATE`,
@@ -647,6 +653,7 @@ export class RunExecutionStore {
           throw new RunStepConflictError(step.step_key);
         }
         const existing = await checkpointForStep(client, lease, step.id);
+        if (existing) record(mapCheckpoint(existing), "reused");
         if (!existing || existing.state_hash !== input.checkpoint.stateHash) {
           throw new RunCheckpointCompatibilityError(lease.runId);
         }
@@ -701,18 +708,26 @@ export class RunExecutionStore {
       await appendRunEvent(client, lease.tenantId, lease.runId, "step.completed", lease.owner, {
         stepId: input.stepId, attemptId: input.attemptId, checkpointSequence: sequence,
       });
-      return mapCheckpoint(checkpoint.rows[0]!);
-    }));
+      const saved = mapCheckpoint(checkpoint.rows[0]!);
+      record(saved, "saved");
+      return saved;
+    })));
   }
 
   async loadStepOutput<T>(lease: RunLease, step: RunStep): Promise<T> {
-    if (!step.outputHash) throw new RunCheckpointCompatibilityError(lease.runId);
-    const outputHash = step.outputHash;
-    return this.withLease(lease, (client) => this.artifacts.readStepOutputValueInTransaction<T>(
-      client,
-      { tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId },
-      { resultRef: step.resultRef, output: step.output, outputHash },
-    ));
+    return observeCheckpoint("reuse", { ...lease, checkpointKind: "step_completed",
+      stepId: step.id, stepAttemptId: step.attemptId, outputHash: step.outputHash,
+      artifactHash: step.resultRef }, (record) => this.withLease(lease, async (client) => {
+      if (!step.outputHash) throw new RunCheckpointCompatibilityError(lease.runId);
+      const checkpoint = await checkpointForStep(client, lease, step.id);
+      if (!checkpoint) throw new RunCheckpointCompatibilityError(lease.runId);
+      record(mapCheckpoint(checkpoint), "reused");
+      return this.artifacts.readStepOutputValueInTransaction<T>(
+        client,
+        { tenantId: lease.tenantId, integrationId: lease.integrationId, runId: lease.runId },
+        { resultRef: step.resultRef, output: step.output, outputHash: step.outputHash },
+      );
+    }));
   }
 
   /** Settle a caught role/tool failure without leaving an in-flight attempt behind. */
@@ -747,7 +762,7 @@ export class RunExecutionStore {
     lease: RunLease,
     expected: { schemaVersion: number; runtimeVersionHash: string },
   ): Promise<RunCheckpoint | undefined> {
-    return this.withLease(lease, async (client) => {
+    return observeCheckpoint("validate", lease, (record) => this.withLease(lease, async (client) => {
       const result = await client.query<CheckpointRow>(
         `SELECT * FROM pr_agent_harness.checkpoints
          WHERE tenant_id=$1 AND run_id=$2 ORDER BY sequence DESC LIMIT 1`,
@@ -755,12 +770,13 @@ export class RunExecutionStore {
       );
       const row = result.rows[0];
       if (!row) return undefined;
+      record(mapCheckpoint(row), "validated");
       if (row.schema_version !== expected.schemaVersion
           || row.runtime_version_hash !== expected.runtimeVersionHash) {
         throw new RunCheckpointCompatibilityError(lease.runId);
       }
       return mapCheckpoint(row);
-    });
+    }));
   }
 
   async transition(
@@ -1256,7 +1272,7 @@ export async function linkBatchAndCheckpoint(
     stateHash: string;
     state: JsonObject;
   },
-): Promise<RunCheckpoint> {
+): Promise<{ checkpoint: RunCheckpoint; reused: boolean }> {
   requiredHash(input.operationSetHash, "operation set hash");
   requiredHash(input.stateHash, "checkpoint state hash");
   positiveInteger(input.schemaVersion, "checkpoint schema version");
@@ -1288,7 +1304,7 @@ export async function linkBatchAndCheckpoint(
       throw new RunCheckpointCompatibilityError(lease.runId);
     }
     await markRunForOutcomeScan(client, lease);
-    return mapCheckpoint(row);
+    return { checkpoint: mapCheckpoint(row), reused: true };
   }
   const link = await client.query<{ run_id: string; operation_set_hash: string }>(
     `INSERT INTO pr_agent_harness.run_publication_batches
@@ -1325,7 +1341,7 @@ export async function linkBatchAndCheckpoint(
     batchId: input.batchId, operationSetHash: input.operationSetHash,
     checkpointSequence: sequence,
   });
-  return mapCheckpoint(checkpoint.rows[0]!);
+  return { checkpoint: mapCheckpoint(checkpoint.rows[0]!), reused: false };
 }
 
 async function markRunForOutcomeScan(client: PoolClient, lease: RunLease): Promise<void> {
@@ -1432,6 +1448,7 @@ function mapStep(
 function mapCheckpoint(row: CheckpointRow): RunCheckpoint {
   return {
     id: row.id, runId: row.run_id, sequence: Number(row.sequence),
+    kind: row.checkpoint_kind, publicationBatchId: row.publication_batch_id ?? undefined,
     stepId: row.step_id ?? undefined, stepAttemptId: row.step_attempt_id ?? undefined,
     schemaVersion: row.schema_version,
     runtimeVersionHash: row.runtime_version_hash, stateHash: row.state_hash,

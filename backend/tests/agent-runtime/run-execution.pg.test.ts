@@ -14,6 +14,13 @@ import {
   type ClaimableBinding,
 } from "../../src/agent-runtime/runs/contracts.js";
 import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
+import { fingerprint } from "../../src/agent-runtime/versions.js";
+import { withAgentObservability } from "../../src/observability/index.js";
+import {
+  observationMetadata,
+  recordingObservability,
+  type ObservationRecord,
+} from "../helpers/recording-observability.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 
@@ -209,23 +216,191 @@ if (!databaseUrl) {
     const step = await storeA.beginStep(lease, {
       stepKey: "review", kind: "model", inputHash: hash("model-input"),
     });
-    const checkpoint = await storeA.completeStep(lease, completion(step.id, step.attemptId, "answer"));
-    const reusedStep = await storeA.beginStep(lease, {
+    const records: ObservationRecord[] = [];
+    const observability = recordingObservability(records);
+    assert.equal(await withAgentObservability(observability, () => storeA.latestCheckpoint(lease, {
+      schemaVersion: 1, runtimeVersionHash: fixture.runtimeHash,
+    })), undefined);
+    const missing = records.find((record) => record.name === "validate-checkpoint"
+      && observationMetadata(record).checkpointOutcome === "missing");
+    assert.ok(missing);
+    assert.equal(observationMetadata(missing!).runId, lease.runId);
+    const checkpoint = await withAgentObservability(observability, () =>
+      storeA.completeStep(lease, completion(step.id, step.attemptId, "answer")));
+    const saved = records.find(({ name }) => name === "save-checkpoint")!;
+    assert.ok(saved);
+    const savedMetadata = observationMetadata(saved);
+    assert.equal(savedMetadata.checkpointAction, "save");
+    assert.equal(savedMetadata.checkpointOutcome, "saved");
+    assert.equal(savedMetadata.checkpointKind, "step_completed");
+    assert.equal(savedMetadata.checkpointId, checkpoint.id);
+    assert.equal(savedMetadata.checkpointSequence, checkpoint.sequence);
+    assert.equal(savedMetadata.checkpointSchemaVersion, checkpoint.schemaVersion);
+    assert.equal(savedMetadata.checkpointRuntimeVersionHash, checkpoint.runtimeVersionHash);
+    assert.equal(savedMetadata.checkpointStateHash, checkpoint.stateHash);
+    assert.equal(savedMetadata.checkpointCreatedAt, checkpoint.createdAt);
+    assert.equal(savedMetadata.tenantId, lease.tenantId);
+    assert.equal(savedMetadata.integrationId, lease.integrationId);
+    assert.equal(savedMetadata.runId, lease.runId);
+    assert.equal(savedMetadata.stepId, step.id);
+    assert.equal(savedMetadata.stepAttemptId, step.attemptId);
+    assert.equal(savedMetadata.outputHash, fingerprint({ value: "answer" }));
+    assert.equal(saved.attributes.input, undefined);
+    assert.equal(saved.updates.at(-1)?.output, undefined);
+    assert.equal(JSON.stringify(saved).includes('"value":"answer"'), false);
+
+    const reusedStep = await withAgentObservability(observability, () => storeA.beginStep(lease, {
       stepKey: "review", kind: "model", inputHash: hash("model-input"),
-    });
+    }));
     assert.equal(reusedStep.reused, true);
+    assert.deepEqual(await withAgentObservability(observability, () =>
+      storeA.loadStepOutput(lease, reusedStep)), "answer");
+    const reused = records.find(({ name }) => name === "reuse-checkpoint")!;
+    assert.ok(reused);
+    const reusedMetadata = observationMetadata(reused);
+    assert.equal(reusedMetadata.checkpointAction, "reuse");
+    assert.equal(reusedMetadata.checkpointOutcome, "reused");
+    assert.equal(reusedMetadata.checkpointKind, "step_completed");
+    assert.equal(reusedMetadata.checkpointId, checkpoint.id);
+    assert.equal(reusedMetadata.checkpointSequence, checkpoint.sequence);
+    assert.equal(reusedMetadata.checkpointSchemaVersion, checkpoint.schemaVersion);
+    assert.equal(reusedMetadata.checkpointRuntimeVersionHash, checkpoint.runtimeVersionHash);
+    assert.equal(reusedMetadata.checkpointStateHash, checkpoint.stateHash);
+    assert.equal(reusedMetadata.checkpointCreatedAt, checkpoint.createdAt);
+    assert.equal(reusedMetadata.tenantId, lease.tenantId);
+    assert.equal(reusedMetadata.integrationId, lease.integrationId);
+    assert.equal(reusedMetadata.runId, lease.runId);
+    assert.equal(reusedMetadata.stepId, step.id);
+    assert.equal(reusedMetadata.stepAttemptId, step.attemptId);
+    assert.equal(reusedMetadata.outputHash, fingerprint({ value: "answer" }));
     assert.equal(
       (await storeA.completeStep(lease, completion(step.id, step.attemptId, "answer"))).id,
       checkpoint.id,
     );
+    const validatedCheckpoint = await withAgentObservability(observability, () => storeA.latestCheckpoint(lease, {
+      schemaVersion: 1, runtimeVersionHash: fixture.runtimeHash,
+    }));
+    assert.equal(validatedCheckpoint?.id, checkpoint.id);
+    const validated = records.find((record) => record.name === "validate-checkpoint"
+      && observationMetadata(record).checkpointOutcome === "validated");
+    assert.ok(validated);
+    assert.equal(observationMetadata(validated!).checkpointId, checkpoint.id);
+    assert.equal(observationMetadata(validated!).checkpointStateHash, checkpoint.stateHash);
     await assert.rejects(
       storeA.beginStep(lease, { stepKey: "review", kind: "model", inputHash: hash("changed") }),
       RunStepConflictError,
     );
     await assert.rejects(
-      storeA.latestCheckpoint(lease, { schemaVersion: 2, runtimeVersionHash: fixture.runtimeHash }),
+      withAgentObservability(observability, () => storeA.latestCheckpoint(lease, {
+        schemaVersion: 2, runtimeVersionHash: fixture.runtimeHash,
+      })),
       RunCheckpointCompatibilityError,
     );
+    const rejected = records.find((record) => record.name === "validate-checkpoint"
+      && observationMetadata(record).checkpointOutcome === "rejected");
+    assert.ok(rejected);
+    assert.equal(observationMetadata(rejected!).checkpointId, checkpoint.id);
+    assert.equal(observationMetadata(rejected!).checkpointSchemaVersion, checkpoint.schemaVersion);
+    await observability.shutdown();
+  });
+
+  test("checkpoint telemetry reports a failed commit without claiming that it was saved", async () => {
+    const fixture = await createFixture("checkpoint-commit-failure");
+    const lease = (await storeA.claim(fixture.binding, "checkpoint-commit-worker", fixture.runtimeHash))!;
+    const step = await storeA.beginStep(lease, {
+      stepKey: "review", kind: "model", inputHash: hash("commit-failure-input"),
+    });
+    await adminPool.query(`
+      CREATE OR REPLACE FUNCTION pr_agent_harness.reject_checkpoint_commit_fixture()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'synthetic deferred checkpoint commit failure';
+      END
+      $$
+    `);
+    await adminPool.query(`
+      CREATE CONSTRAINT TRIGGER reject_checkpoint_commit_fixture
+      AFTER INSERT ON pr_agent_harness.checkpoints
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION pr_agent_harness.reject_checkpoint_commit_fixture()
+    `);
+    const records: ObservationRecord[] = [];
+    const observability = recordingObservability(records, { captureContent: "redacted" });
+    try {
+      await assert.rejects(
+        withAgentObservability(observability, () =>
+          storeA.completeStep(lease, completion(step.id, step.attemptId, "must-rollback"))),
+        /synthetic deferred checkpoint commit failure/,
+      );
+    } finally {
+      await adminPool.query("DROP TRIGGER reject_checkpoint_commit_fixture ON pr_agent_harness.checkpoints");
+      await adminPool.query("DROP FUNCTION pr_agent_harness.reject_checkpoint_commit_fixture()");
+      await observability.shutdown();
+    }
+    assert.equal(records.some((record) => observationMetadata(record).checkpointOutcome === "saved"), false);
+    const failed = records.find((record) => record.name === "save-checkpoint");
+    assert.ok(failed);
+    assert.equal(observationMetadata(failed!).checkpointOutcome, "failed");
+    assert.equal(JSON.stringify(failed).includes("must-rollback"), false);
+    const rows = await adminPool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2",
+      [lease.tenantId, lease.runId],
+    );
+    assert.equal(rows.rows[0]?.count, 0);
+  });
+
+  test("saved checkpoint telemetry is emitted only after the row is visible to another connection", async () => {
+    const fixture = await createFixture("checkpoint-commit-visible");
+    const lease = (await storeA.claim(fixture.binding, "checkpoint-visible-worker", fixture.runtimeHash))!;
+    const step = await storeA.beginStep(lease, {
+      stepKey: "review", kind: "model", inputHash: hash("commit-visible-input"),
+    });
+    const probe = await adminPool.connect();
+    const visibilityChecks: Array<Promise<boolean>> = [];
+    const records: ObservationRecord[] = [];
+    const observability = recordingObservability(records, {
+      onUpdate(record) {
+        const metadata = observationMetadata(record);
+        if (metadata.checkpointOutcome !== "saved" || metadata.runId !== lease.runId) return;
+        visibilityChecks.push(probe.query(
+          "SELECT EXISTS(SELECT 1 FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2 AND id=$3) AS visible",
+          [lease.tenantId, lease.runId, metadata.checkpointId],
+        ).then(({ rows }) => rows[0]?.visible === true));
+      },
+    });
+    try {
+      await probe.query("SET statement_timeout='250ms'");
+      await withAgentObservability(observability, () =>
+        storeA.completeStep(lease, completion(step.id, step.attemptId, "committed")));
+      assert.equal(visibilityChecks.length, 1);
+      assert.deepEqual(await Promise.all(visibilityChecks), [true]);
+    } finally {
+      await observability.shutdown();
+      await probe.query("RESET statement_timeout");
+      probe.release();
+    }
+  });
+
+  test("telemetry driver failures never roll back a committed checkpoint", async () => {
+    for (const mode of ["start", "update"] as const) {
+      const fixture = await createFixture(`checkpoint-telemetry-${mode}`);
+      const lease = (await storeA.claim(fixture.binding, `checkpoint-${mode}-worker`, fixture.runtimeHash))!;
+      const step = await storeA.beginStep(lease, {
+        stepKey: "review", kind: "model", inputHash: hash(`telemetry-${mode}-input`),
+      });
+      const records: ObservationRecord[] = [];
+      const observability = recordingObservability(records, {
+        throwOnStart: mode === "start", throwOnUpdate: mode === "update",
+      });
+      const checkpoint = await withAgentObservability(observability, () =>
+        storeA.completeStep(lease, completion(step.id, step.attemptId, `telemetry-${mode}`)));
+      await observability.shutdown();
+      const persisted = await adminPool.query<{ id: string; state_hash: string }>(
+        "SELECT id,state_hash FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2",
+        [lease.tenantId, lease.runId],
+      );
+      assert.deepEqual(persisted.rows, [{ id: checkpoint.id, state_hash: checkpoint.stateHash }]);
+    }
   });
 
   test("the persisted maxStepAttempts limit fences a new physical attempt", async () => {
@@ -437,7 +612,7 @@ if (!databaseUrl) {
 
 function completion(stepId: string, attemptId: string, value: string) {
   return {
-    stepId, attemptId, outputHash: hash(`output:${value}`), output: { value },
+    stepId, attemptId, outputHash: fingerprint({ value }), output: { value },
     checkpoint: { schemaVersion: 1, stateHash: hash(`state:${value}`), state: { next: "done", value } },
   };
 }

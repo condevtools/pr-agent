@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-31",
+  "baseCommit": "dbfca62a9878ebb5290ca494d4c4dd7606ec8f4f",
+  "scope": "Checkpoint lifecycle metadata; PostgreSQL remains the recovery authority",
+  "runtime": "Node 22.23.4; Docker PostgreSQL 17",
+  "verification": {
+    "backendTypecheck": "passed",
+    "backendBuildAndBuiltManifest": "passed",
+    "unit": { "passed": 536, "skippedExternalConditions": 53, "failed": 0 },
+    "postgres": { "files": 51, "passed": 335, "failed": 0 },
+    "codeReview": "APPROVE",
+    "architectureReview": "CLEAR"
+  },
+  "checkpointContracts": [
+    "step_completed and publication_frozen saves and idempotent reuse are observed",
+    "successful metadata is emitted only after PostgreSQL COMMIT",
+    "deferred COMMIT failures do not emit saved and roll back checkpoint rows",
+    "a separate database connection sees the row when saved is emitted",
+    "telemetry start/update failures do not roll back committed checkpoints",
+    "metadata excludes checkpoint state and output/publication payload contents"
+  ],
+  "liveLangfuse": {
+    "fixture": "synthetic-only; database and model transport mocked",
+    "runId": "3900fff5-787e-4ece-8803-92d79a02c55c",
+    "traceId": "d4b47da9871f28b477799e499bea2cd7",
+    "readbackVerified": true,
+    "observations": 26,
+    "checkpointObservations": 10,
+    "saved": 8,
+    "reused": 1,
+    "validated": 1,
+    "paidModelCalls": 0
+  },
+  "limitations": [
+    "Telemetry delivery is best effort, with no historical backfill or delivery outbox.",
+    "Live readback proves Langfuse export; real database semantics are verified separately by Docker PostgreSQL tests.",
+    "Production Coolify deployment and real-model quality were not tested by this change."
+  ]
+}

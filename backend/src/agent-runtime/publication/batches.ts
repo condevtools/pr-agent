@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { RuntimeDatabase } from "../postgres/database.js";
 import { assertRunLease, linkBatchAndCheckpoint } from "../execution/store.js";
+import { observeCheckpoint } from "../execution/checkpoint-observability.js";
 import type { RunLease } from "../runs/contracts.js";
 import { fingerprint } from "../versions.js";
 import {
@@ -112,7 +113,8 @@ export class PublicationBatchStore {
     );
     const scope = identities[0]!.scope;
 
-    return this.db.transaction(scope.tenantId, async (client) => {
+    return observeCheckpoint("save", { ...input.runLease, checkpointKind: "publication_frozen" },
+      (record) => this.db.transaction(scope.tenantId, async (client) => {
       if (scope.tenantId !== input.runLease.tenantId || scope.integrationId !== input.runLease.integrationId
           || scope.revision !== input.runLease.headSha || scope.authorityGeneration !== input.runLease.authorityGeneration) {
         throw new Error("publication batch does not belong to the executing Run");
@@ -157,7 +159,8 @@ export class PublicationBatchStore {
           input.runLease.executionModeGeneration,
         );
         await input.authorize?.(client, existing);
-        await checkpointFrozenBatch(client, input.runLease, existing.id);
+        const linked = await checkpointFrozenBatch(client, input.runLease, existing.id);
+        record(linked.checkpoint, linked.reused ? "reused" : "saved");
         return existing;
       }
 
@@ -188,16 +191,18 @@ export class PublicationBatchStore {
       const frozen = await selectBatch(client, scope.tenantId, batchId);
       if (!frozen) throw new Error("frozen publication batch disappeared");
       await input.authorize?.(client, frozen);
-      await checkpointFrozenBatch(client, input.runLease, batchId);
+      const linked = await checkpointFrozenBatch(client, input.runLease, batchId);
+      record(linked.checkpoint, linked.reused ? "reused" : "saved");
       return frozen;
-    });
+    }));
   }
 
   async attachExistingBatchToRun(
     lease: RunLease,
     batchId: string,
   ): Promise<FrozenPublicationBatch> {
-    return this.db.transaction(lease.tenantId, async (client) => {
+    return observeCheckpoint("save", { ...lease, checkpointKind: "publication_frozen",
+      publicationBatchId: batchId }, (record) => this.db.transaction(lease.tenantId, async (client) => {
       await assertRunLease(client, lease, { lock: "update" });
       await assertResumableExecutionAuthority(client, lease);
       // All paths that touch both resources lock operations before the batch.
@@ -226,11 +231,12 @@ export class PublicationBatchStore {
       if (!batch.rows[0]?.operation_set_hash) {
         throw new Error("sealed publication batch does not match the executing Run revision");
       }
-      await checkpointFrozenBatch(client, lease, batchId);
+      const linked = await checkpointFrozenBatch(client, lease, batchId);
+      record(linked.checkpoint, linked.reused ? "reused" : "saved");
       const attached = await selectBatch(client, lease.tenantId, batchId);
       if (!attached) throw new Error("attached publication batch disappeared");
       return attached;
-    });
+    }));
   }
 
   async load(tenantId: string, batchId: string): Promise<FrozenPublicationBatch | undefined> {
@@ -336,7 +342,7 @@ export class PublicationBatchStore {
   }
 }
 
-async function checkpointFrozenBatch(client: PoolClient, lease: RunLease, batchId: string): Promise<void> {
+async function checkpointFrozenBatch(client: PoolClient, lease: RunLease, batchId: string) {
   const row = await client.query<{ operation_set_hash: string }>(
     "SELECT operation_set_hash FROM pr_agent_harness.publication_batches WHERE tenant_id=$1 AND id=$2 AND seal_state='sealed'",
     [lease.tenantId, batchId],
@@ -344,7 +350,7 @@ async function checkpointFrozenBatch(client: PoolClient, lease: RunLease, batchI
   const operationSetHash = row.rows[0]?.operation_set_hash;
   if (!operationSetHash) throw new Error("frozen publication operation set is unavailable");
   const state = { stage: "publication_frozen", batchId, operationSetHash };
-  await linkBatchAndCheckpoint(client, lease, {
+  return linkBatchAndCheckpoint(client, lease, {
     batchId, operationSetHash, schemaVersion: 1, state, stateHash: fingerprint(state),
   });
 }

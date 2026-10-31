@@ -1,7 +1,10 @@
 export interface LangfuseTraceVerification {
   verified: true;
   observations: number;
+  checkpointObservations: number;
 }
+
+const CHECKPOINT_STATE_MARKER = "synthetic-checkpoint-state-must-not-export";
 
 export async function verifyLangfuseTrace(input: {
   baseUrl: string;
@@ -70,7 +73,7 @@ function verifyObservationTree(
   traceId: string,
 ): LangfuseTraceVerification | undefined {
   const rows = observations.filter((row) => row.traceId === traceId);
-  if (rows.length !== 16) return undefined;
+  if (rows.length !== 26) return undefined;
   const ids = new Set(rows.flatMap((row) => typeof row.id === "string" ? [row.id] : []));
   if (ids.size !== rows.length) return undefined;
   const roots = rows.filter((row) => !parentId(row));
@@ -80,8 +83,50 @@ function verifyObservationTree(
   const generations = rows.filter((row) => normalizedType(row) === "GENERATION");
   if (agents.length !== 4 || generations.length !== 3) return undefined;
   if (!generations.every(validGeneration)) return undefined;
-  return { verified: true, observations: rows.length };
+  const checkpoints = rows.filter((row) => ["save-checkpoint", "reuse-checkpoint", "validate-checkpoint"]
+    .includes(String(row.name)));
+  if (!validCheckpoints(checkpoints)) return undefined;
+  return { verified: true, observations: rows.length, checkpointObservations: checkpoints.length };
 }
+
+function validCheckpoints(rows: Record<string, unknown>[]): boolean {
+  if (rows.length !== 10) return false;
+  const saved = rows.filter((row) => row.name === "save-checkpoint");
+  const reused = rows.filter((row) => row.name === "reuse-checkpoint");
+  const validated = rows.filter((row) => row.name === "validate-checkpoint");
+  if (saved.length !== 8 || reused.length !== 1 || validated.length !== 1) return false;
+  if (rows.some((row) => JSON.stringify({ metadata: row.metadata, input: row.input, output: row.output })
+    .includes(CHECKPOINT_STATE_MARKER))) return false;
+  if (!rows.every((row) => validCheckpointMetadata(row.metadata))) return false;
+  const publication = saved.filter((row) => metadata(row).checkpointKind === "publication_frozen");
+  if (publication.length !== 1 || typeof metadata(publication[0]!).publicationBatchId !== "string") return false;
+  const stepSaves = saved.filter((row) => metadata(row).checkpointKind === "step_completed");
+  if (stepSaves.length !== 7 || !stepSaves.every((row) =>
+    hash(metadata(row).outputHash) && hash(metadata(row).artifactHash))) return false;
+  if (metadata(reused[0]!).checkpointOutcome !== "reused"
+      || metadata(validated[0]!).checkpointOutcome !== "validated"
+      || metadata(reused[0]!).checkpointId !== metadata(validated[0]!).checkpointId) return false;
+  return true;
+}
+
+function validCheckpointMetadata(value: unknown): boolean {
+  const item = metadata({ metadata: value });
+  return typeof item.checkpointId === "string" && positiveInteger(item.checkpointSequence)
+    && ["step_completed", "publication_frozen"].includes(String(item.checkpointKind))
+    && item.checkpointSchemaVersion === 1
+    && hash(item.checkpointRuntimeVersionHash) && hash(item.checkpointStateHash)
+    && typeof item.checkpointCreatedAt === "string"
+    && ["saved", "reused", "validated"].includes(String(item.checkpointOutcome))
+    && !("state" in item) && !("checkpointState" in item);
+}
+
+function metadata(row: Record<string, unknown>): Record<string, unknown> {
+  return row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+    ? row.metadata as Record<string, unknown> : {};
+}
+
+function hash(value: unknown): boolean { return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value); }
+function positiveInteger(value: unknown): boolean { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
 
 function validGeneration(row: Record<string, unknown>): boolean {
   if (row.model !== "langfuse-smoke-model") return false;

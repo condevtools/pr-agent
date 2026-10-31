@@ -28,6 +28,12 @@ import { migrateRuntime } from "../../src/agent-runtime/postgres/migrations.js";
 import { RunStore } from "../../src/agent-runtime/postgres/run-store.js";
 import { RunExecutionStore } from "../../src/agent-runtime/execution/store.js";
 import type { RunLease } from "../../src/agent-runtime/runs/contracts.js";
+import { withAgentObservability } from "../../src/observability/index.js";
+import {
+  observationMetadata,
+  recordingObservability,
+  type ObservationRecord,
+} from "../helpers/recording-observability.js";
 
 const databaseUrl = process.env.HARNESS_TEST_DATABASE_URL;
 if (databaseUrl) {
@@ -140,6 +146,104 @@ if (!databaseUrl) {
       batchStore.findBySource(first.scope, input.sourceKey, hash("different")),
       PublicationBatchSourceConflictError,
     );
+  });
+
+  test("publication checkpoint telemetry records one committed save and idempotent reuse", async () => {
+    const { scope, lease } = await createScope("checkpoint-telemetry");
+    const input = {
+      runLease: lease,
+      scope,
+      sourceKey: "webhook:checkpoint-telemetry",
+      sourceHash: hash("checkpoint-telemetry"),
+      operations: [{ slot: "summary", payload: { body: "must-not-leak" } }],
+    };
+    const records: ObservationRecord[] = [];
+    const observability = recordingObservability(records, { captureContent: "redacted" });
+    const batch = await withAgentObservability(observability, () => batchStore.freeze(input));
+    const saved = records.find((record) => record.name === "save-checkpoint");
+    assert.ok(saved);
+    const savedMetadata = observationMetadata(saved!);
+    assert.equal(savedMetadata.checkpointAction, "save");
+    assert.equal(savedMetadata.checkpointOutcome, "saved");
+    assert.equal(savedMetadata.checkpointKind, "publication_frozen");
+    assert.equal(savedMetadata.publicationBatchId, batch.id);
+    assert.equal(savedMetadata.runId, lease.runId);
+    assert.equal(savedMetadata.tenantId, lease.tenantId);
+    assert.equal(savedMetadata.integrationId, lease.integrationId);
+    assert.equal(savedMetadata.checkpointSchemaVersion, 1);
+    assert.equal(savedMetadata.checkpointRuntimeVersionHash, lease.runtimeVersionHash);
+    assert.match(String(savedMetadata.checkpointStateHash), /^[0-9a-f]{64}$/u);
+    assert.equal(JSON.stringify(saved).includes("must-not-leak"), false);
+
+    await withAgentObservability(observability, () => batchStore.freeze(input));
+    await withAgentObservability(observability, () => batchStore.attachExistingBatchToRun(lease, batch.id));
+    await observability.shutdown();
+    const reused = records.filter((record) => record.name === "save-checkpoint"
+      && observationMetadata(record).checkpointOutcome === "reused");
+    assert.equal(reused.length, 2);
+    assert.ok(reused.every((record) => {
+      const metadata = observationMetadata(record);
+      return metadata.checkpointAction === "save"
+        && metadata.checkpointOutcome === "reused"
+        && metadata.checkpointId === savedMetadata.checkpointId
+        && metadata.checkpointSequence === savedMetadata.checkpointSequence
+        && metadata.publicationBatchId === batch.id;
+    }));
+    const persisted = await adminPool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2",
+      [lease.tenantId, lease.runId],
+    );
+    assert.equal(persisted.rows[0]?.count, 1);
+  });
+
+  test("publication checkpoint telemetry never reports saved when the freeze commit fails", async () => {
+    const { scope, lease } = await createScope("checkpoint-commit-failure");
+    await adminPool.query(`
+      CREATE OR REPLACE FUNCTION pr_agent_harness.reject_publication_checkpoint_commit_fixture()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'synthetic deferred publication checkpoint commit failure';
+      END
+      $$
+    `);
+    await adminPool.query(`
+      CREATE CONSTRAINT TRIGGER reject_publication_checkpoint_commit_fixture
+      AFTER INSERT ON pr_agent_harness.checkpoints
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION pr_agent_harness.reject_publication_checkpoint_commit_fixture()
+    `);
+    const records: ObservationRecord[] = [];
+    const observability = recordingObservability(records, { captureContent: "redacted" });
+    try {
+      await assert.rejects(
+        withAgentObservability(observability, () => batchStore.freeze({
+          runLease: lease,
+          scope,
+          sourceKey: "webhook:checkpoint-commit-failure",
+          sourceHash: hash("checkpoint-commit-failure"),
+          operations: [{ slot: "summary", payload: { body: "rollback-secret-payload" } }],
+        })),
+        /synthetic deferred publication checkpoint commit failure/,
+      );
+    } finally {
+      await adminPool.query(
+        "DROP TRIGGER reject_publication_checkpoint_commit_fixture ON pr_agent_harness.checkpoints",
+      );
+      await adminPool.query("DROP FUNCTION pr_agent_harness.reject_publication_checkpoint_commit_fixture()");
+      await observability.shutdown();
+    }
+    assert.equal(records.some((record) => observationMetadata(record).checkpointOutcome === "saved"), false);
+    const failed = records.find((record) => record.name === "save-checkpoint");
+    assert.ok(failed);
+    assert.equal(observationMetadata(failed!).checkpointOutcome, "failed");
+    assert.equal(JSON.stringify(failed).includes("rollback-secret-payload"), false);
+    const persisted = await adminPool.query<{ checkpoints: number; batches: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM pr_agent_harness.checkpoints WHERE tenant_id=$1 AND run_id=$2) AS checkpoints,
+         (SELECT count(*)::int FROM pr_agent_harness.publication_batches WHERE tenant_id=$1) AS batches`,
+      [lease.tenantId, lease.runId],
+    );
+    assert.deepEqual(persisted.rows, [{ checkpoints: 0, batches: 0 }]);
   });
 
   test("domain authorization runs after sealing for new and reused batches and rolls back denied freezes", async () => {
