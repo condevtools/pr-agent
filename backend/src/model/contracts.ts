@@ -1,4 +1,4 @@
-export type StructuredModelRole = "security" | "correctness" | "critic" | "fix" | "evolution";
+export type StructuredModelRole = "security" | "correctness" | "critic" | "fix" | "evolution" | "issue-triage";
 
 export interface StructuredModelRequest<T> {
   schemaName: string;

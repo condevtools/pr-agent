@@ -35,6 +35,7 @@ export interface PublicationBindingRow {
   execution_mode_generation?: string;
   review_execution_state?: "active" | "draining";
   review_deep_enabled?: boolean;
+  issue_triage_enabled?: boolean;
   fix_enabled?: boolean;
   evolution_enabled?: boolean;
   default_review_workflow?: string;
@@ -77,7 +78,7 @@ export class PublicationAuthorityStore {
   async configure(input: {
     tenantId: string; integrationId: string; providerRepositoryId: number;
     providerActorId: number; credentialRef: string; expectedVersion: number;
-    reviewDeepEnabled?: boolean; fixEnabled?: boolean; evolutionEnabled?: boolean;
+    reviewDeepEnabled?: boolean; issueTriageEnabled?: boolean; fixEnabled?: boolean; evolutionEnabled?: boolean;
     defaultReviewWorkflow?: ReviewWorkflow;
   }): Promise<void> {
     positiveId(input.providerRepositoryId);
@@ -91,15 +92,16 @@ export class PublicationAuthorityStore {
         `UPDATE pr_agent_harness.integration_bindings
          SET provider_repository_id=$3, provider_actor_id=$4, credential_ref=$5,
              review_deep_enabled=COALESCE($7,review_deep_enabled),
-             fix_enabled=COALESCE($8,fix_enabled),
-             evolution_enabled=COALESCE($9,evolution_enabled),
-             default_review_workflow=COALESCE($10,default_review_workflow),
+             issue_triage_enabled=COALESCE($8,issue_triage_enabled),
+             fix_enabled=COALESCE($9,fix_enabled),
+             evolution_enabled=COALESCE($10,evolution_enabled),
+             default_review_workflow=COALESCE($11,default_review_workflow),
              authority_version=authority_version+1, updated_at=now()
          WHERE tenant_id=$1 AND id=$2 AND active AND publication_state='blocked'
            AND authority_version=$6 AND publication_generation=0 RETURNING id`,
         [input.tenantId, input.integrationId, String(input.providerRepositoryId), String(input.providerActorId),
-          input.credentialRef, input.expectedVersion, input.reviewDeepEnabled, input.fixEnabled,
-          input.evolutionEnabled, input.defaultReviewWorkflow],
+          input.credentialRef, input.expectedVersion, input.reviewDeepEnabled, input.issueTriageEnabled,
+          input.fixEnabled, input.evolutionEnabled, input.defaultReviewWorkflow],
       );
       if (result.rowCount !== 1) throw new Error("Binding configuration requires an unactivated, blocked binding and current version");
     });
@@ -171,6 +173,7 @@ export class PublicationAuthorityStore {
     integrationId: string;
     expectedVersion: number;
     reviewDeep: boolean;
+    issueTriage?: boolean;
     fix: boolean;
     evolution: boolean;
     defaultReviewWorkflow: ReviewWorkflow;
@@ -184,13 +187,13 @@ export class PublicationAuthorityStore {
     return this.db.transaction(input.tenantId, async (client) => {
       const updated = await client.query<PublicationBindingRow>(
         `UPDATE pr_agent_harness.integration_bindings
-         SET review_deep_enabled=$3,fix_enabled=$4,evolution_enabled=$5,
-             default_review_workflow=$6,authority_version=authority_version+1,
+         SET review_deep_enabled=$3,issue_triage_enabled=COALESCE($4,issue_triage_enabled),fix_enabled=$5,evolution_enabled=$6,
+             default_review_workflow=$7,authority_version=authority_version+1,
              updated_at=clock_timestamp()
-         WHERE tenant_id=$1 AND id=$2 AND active AND authority_version=$7
+         WHERE tenant_id=$1 AND id=$2 AND active AND authority_version=$8
          RETURNING *`,
-        [input.tenantId, input.integrationId, input.reviewDeep, input.fix, input.evolution,
-          input.defaultReviewWorkflow, input.expectedVersion],
+        [input.tenantId, input.integrationId, input.reviewDeep, input.issueTriage,
+          input.fix, input.evolution, input.defaultReviewWorkflow, input.expectedVersion],
       );
       if (!updated.rows[0]) throw new Error("Binding capability configuration version conflict");
       await client.query(
@@ -199,7 +202,8 @@ export class PublicationAuthorityStore {
          VALUES ($1,$2,$3,'binding.capabilities.configure','allowed',
            'integration_binding',$4,$5::jsonb)`,
         [input.tenantId, input.actorType ?? "user", input.actor, input.integrationId,
-          JSON.stringify({ reviewDeep: input.reviewDeep, fix: input.fix,
+          JSON.stringify({ reviewDeep: input.reviewDeep,
+            ...(input.issueTriage === undefined ? {} : { issueTriage: input.issueTriage }), fix: input.fix,
             evolution: input.evolution, defaultReviewWorkflow: input.defaultReviewWorkflow,
             priorVersion: input.expectedVersion })],
       );
@@ -356,6 +360,7 @@ export function mapPublicationBinding(row: PublicationBindingRow): PublicationBi
     capabilities: {
       reviewSingle: true,
       reviewDeep: row.review_deep_enabled ?? true,
+      issueTriage: row.platform === "github" && (row.issue_triage_enabled ?? true),
       fix: row.fix_enabled ?? false,
       evolution: row.evolution_enabled ?? false,
       defaultReviewWorkflow: requireReviewWorkflow(row.default_review_workflow),

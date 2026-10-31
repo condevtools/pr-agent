@@ -1,11 +1,13 @@
 import type { PublicationBinding } from "../authority/publication-authority.js";
 
 export type ReviewWorkflow = "review.single.v1" | "review.deep.v1";
-export type ProductCapability = "review.single" | "review.deep" | "fix" | "evolution";
+export type ProductCapability = "review.single" | "review.deep" | "issue.triage" | "fix" | "evolution";
 
 export interface RuntimeCapabilityConfiguration {
   reviewSingle: true;
   reviewDeep: boolean;
+  /** Optional only for rolling-upgrade compatibility with pre-033 heartbeat fixtures. */
+  issueTriage?: boolean;
   fix: boolean;
   evolution: boolean;
 }
@@ -13,6 +15,8 @@ export interface RuntimeCapabilityConfiguration {
 export interface BindingCapabilities {
   reviewSingle: true;
   reviewDeep: boolean;
+  /** Missing only on bindings read from a pre-033 schema during a rolling upgrade. */
+  issueTriage?: boolean;
   fix: boolean;
   evolution: boolean;
   defaultReviewWorkflow: ReviewWorkflow;
@@ -24,6 +28,7 @@ export function resolveRuntimeCapabilities(
   const capabilities = {
     reviewSingle: true as const,
     reviewDeep: strictFeatureFlag(env, "FEATURE_DEEP_REVIEW", true),
+    issueTriage: strictFeatureFlag(env, "FEATURE_ISSUE_TRIAGE", true),
     fix: strictFeatureFlag(env, "FEATURE_FIX", false),
     evolution: strictFeatureFlag(env, "FEATURE_EVOLUTION", false),
   };
@@ -40,6 +45,9 @@ export function bindingAllowsCapability(
 ): boolean {
   if (capability === "review.single") return true;
   if (capability === "review.deep") return runtime.reviewDeep && binding.capabilities.reviewDeep;
+  if (capability === "issue.triage") {
+    return runtime.issueTriage !== false && binding.capabilities.issueTriage !== false;
+  }
   if (capability === "fix") return runtime.fix && binding.capabilities.fix;
   return runtime.evolution && binding.capabilities.evolution;
 }
@@ -50,6 +58,7 @@ export function runtimeAllowsCapability(
 ): boolean {
   if (capability === "review.single") return true;
   if (capability === "review.deep") return runtime.reviewDeep;
+  if (capability === "issue.triage") return runtime.issueTriage !== false;
   if (capability === "fix") return runtime.fix;
   return runtime.evolution;
 }
@@ -76,6 +85,7 @@ export function assertBindingCapability(
 export function workflowCapability(workflow: string): ProductCapability | undefined {
   if (workflow === "review.single.v1") return "review.single";
   if (workflow === "review.deep.v1") return "review.deep";
+  if (workflow === "issue.triage.v1") return "issue.triage";
   if (workflow === "fix.propose.v1" || workflow === "fix.publish.v1") return "fix";
   if (workflow === "evolution.propose.v1" || workflow === "eval.replay.v1") return "evolution";
   return undefined;
@@ -84,6 +94,7 @@ export function workflowCapability(workflow: string): ProductCapability | undefi
 export function supportedWorkflowIds(capabilities: RuntimeCapabilityConfiguration): string[] {
   return [
     "review.single.v1",
+    ...(capabilities.issueTriage !== false ? ["issue.triage.v1"] : []),
     ...(capabilities.reviewDeep ? ["review.deep.v1"] : []),
     ...(capabilities.fix ? ["fix.propose.v1", "fix.publish.v1"] : []),
     ...(capabilities.evolution ? ["evolution.propose.v1", "eval.replay.v1"] : []),
@@ -92,10 +103,12 @@ export function supportedWorkflowIds(capabilities: RuntimeCapabilityConfiguratio
 
 export function supportedWorkflowIdsForBinding(
   capabilities: RuntimeCapabilityConfiguration,
-  binding: Pick<PublicationBinding, "capabilities">,
+  binding: Pick<PublicationBinding, "capabilities" | "platform">,
 ): string[] {
   return [
     "review.single.v1",
+    ...(binding.platform === "github" && bindingAllowsCapability(binding, "issue.triage", capabilities)
+      ? ["issue.triage.v1"] : []),
     ...(bindingAllowsCapability(binding, "review.deep", capabilities) ? ["review.deep.v1"] : []),
     ...(bindingAllowsCapability(binding, "fix", capabilities) ? ["fix.propose.v1", "fix.publish.v1"] : []),
     ...(bindingAllowsCapability(binding, "evolution", capabilities)

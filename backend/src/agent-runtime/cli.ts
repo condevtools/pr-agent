@@ -61,7 +61,7 @@ try {
       quiescenceEvidence: fields.get("--evidence") })));
   } else if (command === "capabilities") {
     const fields = parseFields(args, ["--tenant", "--id", "--version", "--deep", "--fix",
-      "--evolution", "--default-review"]);
+      "--evolution", "--default-review"], ["--issue-triage"]);
     const defaultReview = fields.get("--default-review");
     if (defaultReview !== "single" && defaultReview !== "deep") {
       throw new Error("--default-review must be single or deep");
@@ -70,6 +70,7 @@ try {
       tenantId: fields.get("--tenant")!, integrationId: fields.get("--id")!,
       expectedVersion: Number(fields.get("--version")),
       reviewDeep: onOff(fields.get("--deep")!, "--deep"),
+      ...(fields.has("--issue-triage") ? { issueTriage: onOff(fields.get("--issue-triage")!, "--issue-triage") } : {}),
       fix: onOff(fields.get("--fix")!, "--fix"),
       evolution: onOff(fields.get("--evolution")!, "--evolution"),
       defaultReviewWorkflow: defaultReview === "deep" ? "review.deep.v1" : "review.single.v1",

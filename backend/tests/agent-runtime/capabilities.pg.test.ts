@@ -100,10 +100,28 @@ if (!databaseUrl) {
         providerActorId: 20, credentialRef: "env:GITHUB_TOKEN", expectedVersion: 0 });
       const defaults = await authority.get(tenantId, integrationId);
       assert.deepEqual(defaults.capabilities, { reviewSingle: true, reviewDeep: true,
-        fix: false, evolution: false, defaultReviewWorkflow: "review.single.v1" });
-      const active = await authority.transition({ tenantId, integrationId, expectedVersion: defaults.version,
+        issueTriage: true, fix: false, evolution: false, defaultReviewWorkflow: "review.single.v1" });
+      let active = await authority.transition({ tenantId, integrationId, expectedVersion: defaults.version,
         action: "activate", actor: "capability-test", actorType: "service", quiescenceEvidence: "isolated test" });
       const versionHash = "a".repeat(64);
+      const issueTriageInput = { tenantId, integrationId,
+        actorType: "service", actorId: "capability-test", createScope: "issue.triage.v1:test",
+        createKey: "disabled-issue-triage", requestHash: "9".repeat(64), runType: "issue.triage.v1",
+        baseSha: "issue-content", headSha: "issue-content", workflowVersionHash: versionHash,
+        promptVersionHash: versionHash, modelVersionHash: versionHash, toolVersionHash: versionHash,
+        policyVersionHash: versionHash, runtimeVersionHash: versionHash,
+        authorityGeneration: active.generation, executionModeGeneration: active.executionModeGeneration,
+        bindingAuthorityVersion: active.version,
+        input: { schemaVersion: 1, workflow: "issue.triage.v1" } } as const;
+      const issueDisabled = await authority.configureCapabilities({ tenantId, integrationId,
+        expectedVersion: active.version, reviewDeep: true, issueTriage: false, fix: false, evolution: false,
+        defaultReviewWorkflow: "review.single.v1", actor: "capability-test", actorType: "service" });
+      await assert.rejects(new RunStore(db).createRun({ ...issueTriageInput,
+        bindingAuthorityVersion: issueDisabled.version }),
+        (error: unknown) => error instanceof RunControlError && error.code === "CAPABILITY_DISABLED");
+      active = await authority.configureCapabilities({ tenantId, integrationId,
+        expectedVersion: issueDisabled.version, reviewDeep: true, issueTriage: true, fix: false, evolution: false,
+        defaultReviewWorkflow: "review.single.v1", actor: "capability-test", actorType: "service" });
       const disabledFixInput = { tenantId, integrationId,
         actorType: "service", actorId: "capability-test", createScope: "fix.propose.v1:test",
         createKey: "disabled-fix", requestHash: "b".repeat(64), runType: "fix.propose.v1",
@@ -120,7 +138,7 @@ if (!databaseUrl) {
         expectedVersion: active.version, reviewDeep: true, fix: true, evolution: true,
         defaultReviewWorkflow: "review.deep.v1", actor: "capability-test", actorType: "service" });
       assert.deepEqual(configured.capabilities, { reviewSingle: true, reviewDeep: true,
-        fix: true, evolution: true, defaultReviewWorkflow: "review.deep.v1" });
+        issueTriage: true, fix: true, evolution: true, defaultReviewWorkflow: "review.deep.v1" });
       const enabledFix = await new RunStore(db).createRun({ ...disabledFixInput, createKey: "enabled-fix",
         requestHash: "d".repeat(64), bindingAuthorityVersion: configured.version });
       const disabled = await authority.configureCapabilities({ tenantId, integrationId,

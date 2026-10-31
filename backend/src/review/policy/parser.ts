@@ -23,9 +23,13 @@ const pullRequestPolicyOverridesSchema = policySectionOverridesSchema.extend({
   requireLinkedIssue: z.boolean().optional(),
 }).strict().partial();
 
+const issuePolicyOverridesSchema = policySectionOverridesSchema.extend({
+  triageEnabled: z.boolean().optional(), autoLabelEnabled: z.boolean().optional(),
+}).strict().partial();
+
 export const repositoryPolicyOverridesSchema = z.object({
   mode: z.enum(["remind", "enforce"]).optional(),
-  issue: policySectionOverridesSchema.optional(),
+  issue: issuePolicyOverridesSchema.optional(),
   pullRequest: pullRequestPolicyOverridesSchema.optional(),
   review: reviewPolicyOverridesSchema.optional(),
 }).strict().partial();
@@ -58,6 +62,18 @@ const pullRequestFields = {
   ...sectionFields,
   requirelinkedissue: ["requireLinkedIssue", coerceBoolean] as const,
 };
+const issueFields = {
+  ...sectionFields,
+  enabled: ["enabled", strictIssueBoolean] as const,
+  triageenabled: ["triageEnabled", strictIssueBoolean] as const,
+  autolabelenabled: ["autoLabelEnabled", strictIssueBoolean] as const,
+};
+
+function strictIssueBoolean(value: unknown): boolean {
+  const parsed = coerceBoolean(value);
+  if (parsed === undefined) throw new Error("Issue policy flags must be boolean values");
+  return parsed;
+}
 
 const retiredReviewFields = new Set([
   "describeenabled", "describeallowapply", "checkscommandenabled",
@@ -94,8 +110,10 @@ export function parseRepositoryPolicyOverridesFromConfigText(raw: string): Repos
   const normalized: Record<string, unknown> = {};
   const mode = coerceEnum(findAliasedValue(root, "mode"), ["remind", "enforce"]);
   if (mode !== undefined) normalized.mode = mode;
-  const issue = asRecord(findAliasedValue(root, "issue"));
-  if (issue) normalized.issue = normalizeFields(issue, sectionFields);
+  const issueValue = findAliasedValue(root, "issue");
+  const issue = asRecord(issueValue);
+  if (issueValue != null && !issue) throw new Error("Issue policy must be a mapping object");
+  if (issue) normalized.issue = normalizeFields(issue, issueFields);
   const pullRequest = asRecord(findAliasedValue(root, "pullrequest"));
   if (pullRequest) normalized.pullRequest = normalizeFields(pullRequest, pullRequestFields);
   const review = asRecord(findAliasedValue(root, "review"));

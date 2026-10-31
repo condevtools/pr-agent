@@ -5,6 +5,7 @@
 | 能力 | 进程开关默认值 | 仓库绑定要求 | 结果和边界 |
 | --- | --- | --- | --- |
 | Single Review | 始终启用 | 已激活绑定 | 经 PG 发布账本发布评审 |
+| [Issue Triage](issue-triage.md) | `FEATURE_ISSUE_TRIAGE=on` | GitHub 已激活绑定、允许 Issue Triage | 分析普通 Issue，发布可行性/风险/行动建议和相似 Issue，添加已有分类标签 |
 | Deep Review | `FEATURE_DEEP_REVIEW=on` | 允许 Deep | 多角色评审生成持久化 shadow artifact，不自动写代码 |
 | Fix | `FEATURE_FIX=off` | 显式允许 Fix | 基于成功 Deep 的 accepted finding、服务器策略和验证结果提出补丁 |
 | Evolution | `FEATURE_EVOLUTION=off` | 显式允许 Evolution | 保存反馈、整理数据集、离线评测和受控策略发布 |
@@ -20,7 +21,7 @@ Fix 的测试通过不等于可以自动发布。相关性不能证明时保持 
 ```sh
 docker compose run --rm database-init node dist/agent-runtime/cli.js capabilities \
   --tenant <tenant-uuid> --id <integration-uuid> --version <authority-version> \
-  --deep on --fix off --evolution off --default-review single
+  --deep on --issue-triage on --fix off --evolution off --default-review single
 ```
 
 该命令检查版本并记录审计，不允许普通应用账户直接修改绑定。将 `--default-review` 改为 `deep` 必须同时允许 Deep；修改全局开关还需要更新 `.env` 并重新创建对应服务。只修改 `.env` 不会自动改变数据库里的绑定授权。

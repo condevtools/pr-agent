@@ -135,6 +135,33 @@ if (!databaseUrl) {
     assert.equal(state.rows[0]?.due, false);
   });
 
+  test("Issue Triage scheduling requires an enabled GitHub binding capability", async () => {
+    const binding = await createBinding("issue-triage-scheduling");
+    await new RunStore(db).createRun({
+      tenantId: binding.tenantId, integrationId: binding.id,
+      actorType: "service", actorId: "scheduler-test",
+      createScope: `issue.triage.v1:${binding.id}`, createKey: "issue:42:content",
+      requestHash: hash("issue-triage-request"), runType: "issue.triage.v1",
+      baseSha: "content", headSha: "content",
+      workflowVersionHash: hash("workflow"), promptVersionHash: hash("prompt"),
+      modelVersionHash: hash("model"), toolVersionHash: hash("tool"),
+      policyVersionHash: hash("policy"), runtimeVersionHash: runtimeHash,
+      input: { schemaVersion: 1, workflow: "issue.triage.v1" },
+      authorityGeneration: binding.generation,
+      executionModeGeneration: binding.executionModeGeneration,
+      bindingAuthorityVersion: binding.version,
+      runtimeConfig: { maxRunMs: 60_000, maxJobAttempts: 3 },
+      limits: { maxStepAttempts: 3 },
+    });
+    const reserved = await scheduler.reserve({ queueClass: "normal", limit: 1,
+      runtimeVersionHash: runtimeHash, supportedWorkflows: ["issue.triage.v1"] });
+    assert.equal(reserved[0]?.id, binding.id);
+    await pool.query("UPDATE pr_agent_harness.integration_bindings SET issue_triage_enabled=false WHERE id=$1",
+      [binding.id]);
+    assert.deepEqual(await scheduler.reserve({ queueClass: "normal", limit: 1,
+      runtimeVersionHash: runtimeHash, supportedWorkflows: ["issue.triage.v1"] }), []);
+  });
+
   test("maintenance skips an idle page and reserves only bindings with due work", async () => {
     await pool.query("DELETE FROM pr_agent_harness.runtime_scheduler_cursors WHERE queue_class='maintenance'");
     for (let index = 0; index < 35; index += 1) {

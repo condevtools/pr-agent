@@ -32,7 +32,7 @@ const criticalEnvironmentSchema = z.object({
   ANTHROPIC_MODEL: value, GEMINI_MODEL: value, OPENAI_BASE_URL: value,
   OPENAI_API_KEY: value, OPENAI_COMPATIBLE_API_KEY: value, ANTHROPIC_API_KEY: value,
   GEMINI_API_KEY: value, HARNESS_MODEL_PRICING_JSON: value,
-  FEATURE_DEEP_REVIEW: value, FEATURE_FIX: value, FEATURE_EVOLUTION: value,
+  FEATURE_DEEP_REVIEW: value, FEATURE_ISSUE_TRIAGE: value, FEATURE_FIX: value, FEATURE_EVOLUTION: value,
   FIX_DEFAULT_POLICY_ID: value, FIX_POLICY_REGISTRY_JSON: value,
   APP_ID: value, PRIVATE_KEY: value, PRIVATE_KEY_PATH: value, WEBHOOK_SECRET: value,
   FEATURE_GITHUB_ONBOARDING: value, HARNESS_ONBOARDING_PG_PASSWORD: value,
@@ -212,6 +212,7 @@ function validatePublicationCredentialSources(env: Record<string, string>): void
 
 function validateCapabilities(env: Record<string, string>): void {
   feature(env, "FEATURE_DEEP_REVIEW", true);
+  feature(env, "FEATURE_ISSUE_TRIAGE", true);
   const fix = feature(env, "FEATURE_FIX", false);
   feature(env, "FEATURE_EVOLUTION", false);
   if (fix && (!optional(env, "FIX_DEFAULT_POLICY_ID") || !optional(env, "FIX_POLICY_REGISTRY_JSON"))) {

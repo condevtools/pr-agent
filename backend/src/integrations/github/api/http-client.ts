@@ -2,6 +2,7 @@ import { encodePath, fetchWithRetry } from "#core";
 import {
   type GitHubCheckRunSummary,
   type GitHubIssueSummary,
+  type GitHubIssueDetails,
   type GitHubIssueCommentSummary,
   type GitHubPullFile,
   type GitHubPullFilesListParams,
@@ -191,11 +192,23 @@ export function createRestBackedOctokit(
         }),
       }),
       get: async (params) => ({
-        data: await requestJsonRequired<{ labels?: Array<string | { name?: string }> }>(config, {
+        data: await requestJsonRequired<GitHubIssueDetails>(config, {
           method: "GET",
           path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/issues/${params.issue_number}`,
         }),
       }),
+      listLabelsForRepo: async (params) => {
+        const perPage = Math.max(1, Math.min(Number(params.per_page ?? 100), 100));
+        const page = Math.max(1, Number(params.page ?? 1));
+        const data = await requestJsonRequired<Array<{ name?: unknown }>>(config, {
+          method: "GET",
+          path: `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/labels?per_page=${perPage}&page=${page}`,
+        });
+        return { data: Array.isArray(data)
+          ? data.flatMap((label) => typeof label.name === "string" && label.name.trim()
+            ? [{ name: label.name }] : [])
+          : [] };
+      },
       listForRepo: async (params) => {
         const state = params.state ?? "all";
         const sort = params.sort ?? "updated";

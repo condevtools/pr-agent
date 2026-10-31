@@ -20,11 +20,25 @@ export interface GitHubIssueCommentSummary {
 }
 
 export interface GitHubIssueSummary {
+  id?: number;
   number: number;
   title?: string | null;
   body?: string | null;
   state?: string | null;
   html_url?: string | null;
+  user?: { id?: number; login?: string; type?: string } | null;
+  labels?: Array<string | { name?: string }>;
+  pull_request?: unknown;
+}
+
+export interface GitHubIssueDetails {
+  id?: number;
+  number?: number;
+  title?: string | null;
+  body?: string | null;
+  state?: string | null;
+  user?: { id?: number; login?: string; type?: string } | null;
+  labels?: Array<string | { name?: string }>;
   pull_request?: unknown;
 }
 
@@ -189,7 +203,13 @@ export interface MinimalGitHubOctokit {
   };
   issues: {
     getComment?(params: { owner: string; repo: string; comment_id: number }): Promise<{ data: GitHubIssueCommentSummary }>;
-    get?(params: { owner: string; repo: string; issue_number: number }): Promise<{ data: { labels?: Array<string | { name?: string }> } }>;
+    get?(params: { owner: string; repo: string; issue_number: number }): Promise<{ data: GitHubIssueDetails }>;
+    listLabelsForRepo?(params: {
+      owner: string;
+      repo: string;
+      per_page?: number;
+      page?: number;
+    }): Promise<{ data: Array<{ name: string }> }>;
     listForRepo?(params: {
       [key: string]: unknown;
       owner: string;

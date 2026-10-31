@@ -114,7 +114,7 @@ export class RunExecutionStore {
     this.leaseTtlMs = positiveInteger(options.leaseTtlMs ?? 60_000, "lease TTL");
     this.initialRetryMs = positiveInteger(options.initialRetryMs ?? 1_000, "initial retry delay");
     this.maxRetryMs = positiveInteger(options.maxRetryMs ?? 60_000, "maximum retry delay");
-    this.supportedWorkflows = options.supportedWorkflows ?? ["review", "review.single.v1", "review.deep.v1",
+    this.supportedWorkflows = options.supportedWorkflows ?? ["review", "review.single.v1", "review.deep.v1", "issue.triage.v1",
       "fix.propose.v1", "fix.publish.v1", "evolution.propose.v1", "eval.replay.v1"];
     this.perBindingConcurrency = positiveInteger(
       options.perBindingConcurrency ?? 2,
@@ -160,6 +160,7 @@ export class RunExecutionStore {
            AND r.runtime_version_hash=$5
            AND r.run_type=ANY($6::text[])
            AND (r.run_type IN ('review','review.single.v1')
+             OR (r.run_type='issue.triage.v1' AND b.platform='github' AND b.issue_triage_enabled)
              OR (r.run_type='review.deep.v1' AND b.review_deep_enabled)
              OR (r.run_type IN ('fix.propose.v1','fix.publish.v1') AND b.fix_enabled)
              OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1') AND b.evolution_enabled))
@@ -356,6 +357,7 @@ export class RunExecutionStore {
              OR COALESCE(j.job_payload_json->>'decision','')<>'authorize_retry'
              OR (r.run_type=ANY($8::text[])
                AND (r.run_type IN ('review','review.single.v1')
+                 OR (r.run_type='issue.triage.v1' AND b.platform='github' AND b.issue_triage_enabled)
                  OR (r.run_type='review.deep.v1' AND b.review_deep_enabled)
                  OR (r.run_type IN ('fix.propose.v1','fix.publish.v1') AND b.fix_enabled)
                  OR (r.run_type IN ('evolution.propose.v1','eval.replay.v1') AND b.evolution_enabled))))

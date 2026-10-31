@@ -15,12 +15,15 @@ import { resolveFrozenModelExecutionPolicy,
 const workerCompatibility = { runtimeVersionHash: "a".repeat(64),
   supportedWorkflowIds: ["review.single.v1", "review.deep.v1"] };
 
-test("capabilities default to Single plus explicit Deep while Fix and Evolution stay off", () => {
+test("capabilities default to Single, Deep and Issue Triage while Fix and Evolution stay off", () => {
   const capabilities = resolveRuntimeCapabilities({});
-  assert.deepEqual(capabilities, { reviewSingle: true, reviewDeep: true, fix: false, evolution: false });
-  assert.deepEqual(supportedWorkflowIds(capabilities), ["review.single.v1", "review.deep.v1"]);
+  assert.deepEqual(capabilities, { reviewSingle: true, reviewDeep: true, issueTriage: true,
+    fix: false, evolution: false });
+  assert.deepEqual(supportedWorkflowIds(capabilities),
+    ["review.single.v1", "issue.triage.v1", "review.deep.v1"]);
   assert.deepEqual(requiredHeartbeatRoles("web", capabilities), ["worker", "recovery"]);
   assert.throws(() => resolveRuntimeCapabilities({ FEATURE_FIX: "true" }), /exactly on or off/u);
+  assert.throws(() => resolveRuntimeCapabilities({ FEATURE_ISSUE_TRIAGE: "true" }), /exactly on or off/u);
   assert.throws(() => resolveRuntimeCapabilities({ FEATURE_FIX: "on" }), /FIX_DEFAULT_POLICY_ID/u);
   assert.throws(() => validateCapabilityDependencies({ FEATURE_FIX: "on", FIX_DEFAULT_POLICY_ID: "missing" }),
     /FIX_POLICY_REGISTRY_JSON/u);
@@ -32,6 +35,9 @@ test("capabilities default to Single plus explicit Deep while Fix and Evolution 
 
 test("trusted binding defaults select Single and can explicitly select Deep", () => {
   const binding = fixtureBinding();
+  assert.equal(bindingAllowsCapability(binding, "issue.triage", resolveRuntimeCapabilities({})), true);
+  assert.equal(bindingAllowsCapability(binding, "issue.triage",
+    resolveRuntimeCapabilities({ FEATURE_ISSUE_TRIAGE: "off" })), false);
   assert.equal(bindingAllowsCapability(binding, "review.deep", resolveRuntimeCapabilities({})), true);
   assert.equal(providerReviewWorkflow(binding), "review.single.v1");
   binding.capabilities.defaultReviewWorkflow = "review.deep.v1";
@@ -229,7 +235,7 @@ function fakeReadinessPool(
     if (sql.includes("migration_ledger_ready")) {
       return { rows: [{ safe_role: true, migration_ledger_ready: true }] };
     }
-    if (sql.includes("migration_name='032_github_installation_sync.sql'")) return { rows: [{ schema_ready: true }] };
+    if (sql.includes("migration_name='033_issue_triage.sql'")) return { rows: [{ schema_ready: true }] };
     return { rows: (Object.entries(freshness) as Array<[keyof typeof freshness, boolean]>).map(
       ([process_role, fresh]) => ({ process_role, fresh,
         capability_reports: process_role === "worker" && fresh
