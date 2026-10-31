@@ -246,7 +246,8 @@ if (!databaseUrl) {
     assert.equal(postedComments.length, 1);
   });
 
-  test("publication planning retry reuses the successful model checkpoint before freezing the batch", async () => {
+  test("publication planning retry reuses the successful model checkpoint before freezing the batch", async (t) => {
+    t.mock.method(Math, "random", () => 1);
     const issue = fixtureIssue(46, 1046, 7005, "Retry publication without repeating analysis");
     currentIssues.set(issue.number, issue);
     const queued = await enqueueIssueTriage(binding, issue, false);
@@ -256,7 +257,11 @@ if (!databaseUrl) {
     assert.equal(firstErrors.length, 1);
     assert.equal(countCalls("POST /v1/chat/completions") - modelBefore, 1);
     assert.equal((await executionStore.load(tenantId, queued.id))?.status, "retry_wait");
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    // Advance only this fixture's retry instead of guessing the randomized backoff duration.
+    const due = await adminPool.query(`UPDATE pr_agent_harness.job_queue
+      SET available_at=clock_timestamp()
+      WHERE tenant_id=$1 AND run_id=$2 AND status='retry_wait'`, [tenantId, queued.id]);
+    assert.equal(due.rowCount, 1);
     assert.deepEqual(await run(queued.id), []);
     assert.equal((await executionStore.load(tenantId, queued.id))?.status, "succeeded");
     assert.equal(countCalls("POST /v1/chat/completions") - modelBefore, 1);
